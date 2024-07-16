@@ -1,1 +1,1 @@
-# LinkML Models for BrainyPedia
+# Models for BrainKB
