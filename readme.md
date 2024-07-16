@@ -22,7 +22,3 @@ Please refer to the BrainKB documentation below for additional information regar
 - @Copyright 2024-now
 - [MIT](https://opensource.org/license/mit)
 
- 
-## Organization
-- [WebApp](WebApp): The web application that allows users to interact with the BrainKB 
-- [Ingest Service](ingest_service)
