@@ -9,8 +9,8 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq # Persist data
     environment:
-      RABBITMQ_DEFAULT_USER: "admin_decentralized_test"
-      RABBITMQ_DEFAULT_PASS: "R@admdoM81_1"
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
 
 volumes:
   rabbitmq_data:
