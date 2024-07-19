@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}
+    About
+{% endblock title %}
+{% block inpagecss %}
+    p{
+    style="text-align: justify"
+    }
+{% endblock inpagecss %}
+
+{% block bodycontent %}
+    <main class="container">
+
+        <h1>What is BrainKB?</h1>
+        <p>
+            BrainKB serves as a knowledge base platform that provides scientists worldwide with tools for searching,
+            exploring, and visualizing Neuroscience knowledge represented by knowledge graphs (KGs). Moreover, BrainKB
+            provides cutting-edge tools that enable scientists to contribute new information (or knowledge) to the
+            platform and is expected to be a go-to destination for all neuroscience-related research needs.
+        </p>
+        <h2>Objective(s)</h2>
+        <p>
+            The main objective of BrainKB is to represent neuroscience knowledge as a knowledge graph such that it can
+            be used for different downstream tasks, such as making predictions and new inferences in addition to
+            querying and viewing information.
+        </p>
+        <h2>Expected outcome</h2>
+        <p>The expected outcome of the BrainKB includes the following:</p>
+        <ul>
+            <li>(Semi-)Automated extraction of neuroscience knowledge from structured, semi-structured, and unstructured
+                sources, and representing the knowledge via KGs.
+            </li>
+            <li>Visualization of the KGs.</li>
+            <li>Platform to perform different analytics operations over the BrainKB KGs.</li>
+            <li>(Semi-)Automated validation of the BrainKGs to ensure the high quality of the content.</li>
+            <li>Provides the ability to ingest data in batch or streaming mode for the automated extraction of KGs.</li>
+        </ul>
+
+
+
+        <br/>
+        <div class="card">
+            <div class="card-header">
+              Acknowledgements
+            </div>
+            <div class="card-body">
+                <a href="https://www.portal.brain-bican.org/" target="_blank">
+                     <img src="https://static.wixstatic.com/media/c57c96_a9e46e43008349c8b65dcacc3ceaba35~mv2.png/v1/fill/w_201,h_75,al_c,q_85,usm_0.66_1.00_0.01,enc_auto/_BICAN-full-logo-final.png"
+             alt="BICAN logo">
+                </a>
+            </div>
+        </div>
+
+
+    </main>
+{% endblock bodycontent %}

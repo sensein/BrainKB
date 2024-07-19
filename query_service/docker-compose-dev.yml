@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  app-dev-query-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8010:8010"
+    environment:
+      - ENVIRONMENT=debug
+    restart: on-failure
+    networks:
+      - webnet
+
+networks:
+  webnet:
+    driver: bridge
+
+

@@ -1,31 +1,88 @@
 {% extends 'base.html' %}
 {% load static %}
+{% load data_filters %}
 {% block inpagecss %}
-.left-sidebar-menu{
-margin:5px;
-}
+    .left-sidebar-menu{
+    margin:5px;
+    }
 {% endblock inpagecss %}
+{% block title %}
+    Knowledge Base
+{% endblock title %}
 {% block bodycontent %}
-{% if knowledge_base %}
-<div class="row align-items-start">
-    <div class="col-md-5">
-        <div class="left-sidebar-menu">
-            {% for item in knowledge_base %}
-            <nav aria-label="breadcrumb">
-                <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="">{{item.left_side_menu_title}}</a></li>
-                </ol>
-            </nav>
-            {% endfor %}
+    {% if knowledge_base %}
+        <div class="row align-items-start">
+            <div class="col-md-2">
+                <div class="left-sidebar-menu">
+                    <nav aria-label="breadcrumb">
+                        <ol class="breadcrumb">
+                            <li class="breadcrumb-item"><a
+                                    href="{% url 'assertion' %}">Assertion</a>
+                            </li>
+                        </ol>
+                        <ol class="breadcrumb">
+                            <li class="breadcrumb-item"><a
+                                    href="{% url 'evidence' %}">Evidence</a>
+                            </li>
+                        </ol>
+                    </nav>
+                    {% for item in menu_items %}
+                        <nav aria-label="breadcrumb">
+                            <ol class="breadcrumb">
+                                <li class="breadcrumb-item"><a
+                                        href="{% url 'knowledge_base_slug' item.slug %}">{{ item.left_side_menu_title }}</a>
+                                </li>
+                            </ol>
+                        </nav>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="col-md-10">
+                <div class="table-responsive-md">
+                    <table class="table table-hover">
+                        <thead class="thead-dark">
+                        <tr>
+                            <th scope="col">#</th>
+                            {% for label in processed_label %}
+                                <th scope="col">{{ label | upper }}</th>
+                            {% endfor %}
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for data in fetched_data %}
+                            <tr>
+                                <th scope="row">{{ forloop.counter }}</th>
+                                {% for key, value in data.items %}
+                                    {% if key == pre_processed_label %}
+                                        <td class="{{ key }}"><a
+                                                href="{% url 'knowledge_base_single' value.value|extract_last_two_part %}?uri={{ value.value }}">
+                                            {{ value.value|extract_last_two_part }}
+                                            {{ data.next.value.key }}
+                                            {{ data.next.value.value }}
+
+
+                                        </a>
+                                        </td>
+                                    {% else %}
+
+                                        {% if key == "category" %}
+                                            <td class="{{ key }}">{{ value.value|extract_last_part  }}</td>
+                                        {% else %}
+                                            <td class="{{ key }}">{{ value.value }}</td>
+                                        {% endif %}
+                                    {% endif %}
+                                {% endfor %}
+                            </tr>
+                        {% endfor %}
+
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
-    </div>
-    <div class="col-md-7">
-        <h3>One of three columns</h3>
-    </div>
-</div>
-{% else %}
-<div class="alert alert-secondary" role="alert">
-    Please configure the application first.
-</div>
-{% endif %}
+    {% else %}
+        <div class="alert alert-secondary" role="alert">
+            Please configure the application first.
+        </div>
+    {% endif %}
 {% endblock bodycontent %}

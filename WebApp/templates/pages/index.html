@@ -1,15 +1,44 @@
 {% extends 'base.html' %}
 {% load static %}
 {% block title %}Home{% endblock title %}
-
+{% block inpagecss %}
+    .stats-count{
+    text-align:center !important;
+    }
+{% endblock inpagecss %}
 {% block bodycontent %}
-<main class="container">
-    <div class="bg-body-tertiary p-5 rounded">
-        <h1>BrainyPedia</h1>
-        <h4>A Large Scale Neuroscience Knowledge Graphs, Connecting the Dots...</h4>
-        <p class="lead">This example is a quick exercise to illustrate how fixed to top navbar works. As you scroll, it
-            will remain fixed to the top of your browser’s viewport.</p>
-        <a class="btn btn-lg btn-primary" href="{% url 'knowledge_base' %}" role="button">View knowledge base &raquo;</a>
-    </div>
-</main>
+    <main class="container">
+        <div class="bg-body-tertiary p-5 rounded">
+            <h1>BrainKB</h1>
+            <h4>A Large Scale Neuroscience Knowledge Graphs, Connecting the Dots...</h4>
+            <a class="btn btn-lg btn-primary" href="{% url 'knowledge_base' %}" role="button">View knowledge base
+                &raquo;</a>
+        </div>
+        <div class="row stats-count" style="margin: 50px;">
+            <div class="col-md-12">
+                <h2>Unique Samples</h2>
+                <p></p>
+            </div>
+        </div>
+        <div class="row stats-count">
+            <div class="col-md-3">
+                <h2>{{ species_count }}</h2>
+                <h5>Species</h5>
+            </div>
+
+
+        <div class="col-md-3">
+            <h2>{{ donor_count }}</h2>
+            <h5>Donor</h5>
+        </div>
+        <div class="col-md-3">
+            <h2>{{ structure_count }}</h2>
+            <h5>Structure</h5>
+        </div>
+        <div class="col-md-3">
+            <h2>{{ libraryaliquot_count }}</h2>
+            <h5>Library Aliquot</h5>
+        </div>
+        </div>
+    </main>
 {% endblock bodycontent %}
