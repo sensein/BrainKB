@@ -8,18 +8,14 @@ WORKDIR /app
 COPY . /app
 
 # Install dependencies
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+# Install dependencies
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt && \
+    pip install python-decouple
 
 # Copy the .env file to the container
 COPY .env /app/.env
 
-# Install python-decouple to read environment variables
-RUN pip install python-decouple
-
-# Run migrations
-RUN python manage.py makemigrations
-RUN python manage.py migrate
 
 # Environment variables for creating superuser
 ARG DJANGO_SUPERUSER_USERNAME
@@ -27,6 +23,7 @@ ARG DJANGO_SUPERUSER_EMAIL
 ARG DJANGO_SUPERUSER_PASSWORD
 
 # Read environment variables from .env file
-RUN export $(cat .env | xargs) && \
+RUN python manage.py makemigrations && \
+    python manage.py migrate && \
+    export $(cat .env | xargs) && \
     python manage.py createsuperuser --noinput --username $DJANGO_SUPERUSER_USERNAME --email $DJANGO_SUPERUSER_EMAIL
-
