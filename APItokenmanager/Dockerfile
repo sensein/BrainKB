@@ -1,5 +1,5 @@
 # Assuming you already have a Dockerfile setup for Django
-FROM python:3.8
+FROM python:3.10
 
 # Set the working directory
 WORKDIR /app
@@ -30,5 +30,3 @@ ARG DJANGO_SUPERUSER_PASSWORD
 RUN export $(cat .env | xargs) && \
     python manage.py createsuperuser --noinput --username $DJANGO_SUPERUSER_USERNAME --email $DJANGO_SUPERUSER_EMAIL
 
-# Command to run the app
-CMD ["gunicorn", "-b", "0.0.0.0:8000", "APIAuthManager.wsgi:application"]

@@ -18,7 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
-env_file = os.path.join(BASE_DIR, ".env.development")
+env_file = os.path.join(BASE_DIR, ".env")
 
 # Load environment variables from the .env.development.development file
 load_dotenv(dotenv_path=env_file)
