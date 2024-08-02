@@ -1,0 +1,9 @@
+I. INTRODUCTION 
+
+	What is ADHD? 
+
+	Attention Deficit Hyperactivity Disorder (ADHD) is among the most prevalent neurodevelopmental disorders, primarily characterized by hyperactivity, impulsivity, and inattention (Rubia, 2018). The manifestation of ADHD symptoms is remarkably heterogeneous, not only encompassing the well-documented executive function deficits but also extending to cognitive domains. Individuals with ADHD often exhibit significant variability in symptom expression across different settings, even within the same individual. This variability can be particularly pronounced in tasks that are long, repetitive, and demand sustained cognitive effort, highlighting the disorder's impact on the cognitive energetic modulation of one's degree of arousal and a marked aversion to delay (Posner et al., 2020). 
+
+	Further complicating the clinical picture of ADHD is an increased sensitivity to sensory stimuli, including touch, visual, and auditory inputs (Oscar Berman et al., 2008), alongside deficits in vigilant attention and motor inhibition (Baroni & Castellanos, 2015). These sensory and attentional challenges are accompanied by difficulties in emotional and motivational regulation, impaired fine motor coordination, and poor time management skills. Individuals with ADHD often exhibit more frequent disruptive behaviors, unstable sleep patterns, and academic achievements that fall short of their potential intellectual capabilities (Martella et al., 2020). Collectively, these symptoms contribute to a significantly impaired quality of life, underscoring the complex and multifaceted nature of ADHD.
+
+	Models of ADHD

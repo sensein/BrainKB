@@ -1,0 +1,8 @@
+hasAssertionStatement,The subject entity contains an assertion statement as specified by the object entity.
+hasEvidenceSummary,The subject entity has an evidence summary as specified by the object entity.
+hasCategory,The subject entity belongs to a category specified by the object entity.
+isSupportedBy,The subject entity is supported by the evidence specified by the object entity.
+hasAssertionSummary,The subject entity contains an assertion summary as specified by the object entity.
+isAssociatedWith,The subject entity is associated with the object entity.
+subclassOf,A category or class specified by the subject entity is a subclass of the category or class specified by the object entity.
+hasEvidenceStatement,The subject entity contains an evidence statement as specified by the object entity.

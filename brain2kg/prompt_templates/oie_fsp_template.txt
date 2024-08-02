@@ -1,0 +1,17 @@
+Your task is to transform the given text into a semantic graph in the form of a list of triples. Each triple must be a list of ONLY strings in the form of [Entity1, Relationship, Entity2]. In your answer, DO NOT include any other comments, explanations or apologies. Enclose each triplet string in single quotes, ensuring NO internal single or double quotes.
+
+When extracting triplets, keep in mind to extract Assertions and Evidence from Text and to Link each assertion node to its supporting evidence where:
+
+Assertion Extraction:
+- Identify statements that present facts, claims, or hypotheses. These assertions should be clear and verifiable.
+- Use semantic analysis to ensure that the identified assertions are contextually accurate.
+
+Evidence Extraction:
+- Locate sentences or phrases that support or refute the identified assertions.
+- Ensure that the evidence is directly relevant and clearly linked to the assertion.
+
+Here are some general examples (pay attention to answer structure and format):
+{few_shot_examples}
+
+Now please extract triplets from the following neuroscience-domain text.
+Text: {input_text}
