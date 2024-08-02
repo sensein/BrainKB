@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "brain2kg"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+nltk = "^3.8.1"
+sentence-transformers = "^3.0.1"
+numpy = "^2.0.1"
+ollama = "^0.3.0"
+matplotlib = "^3.9.1"
+networkx = "^3.3"
+pymupdf = "^1.24.9"
+transformers = "^4.43.3"
+torch = "^2.4.0"
+uvicorn = "^0.30.4"
+python-jose = "^3.3.0"
+passlib = "^1.7.4"
+asyncpg = "^0.29.0"
+fastapi = "^0.111.1"
+asgi-correlation-id = "^4.3.2"
+
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

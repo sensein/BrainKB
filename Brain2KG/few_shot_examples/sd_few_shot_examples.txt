@@ -1,0 +1,29 @@
+Example 1:
+Text: Romany Love is a 1931 British musical film directed by Fred Paul and starring Esmond Knight, Florence McHugh and Roy Travers.
+Triples: [['Romany_Love', 'publicationDate', '1931'], ['Romany_Love', 'genre', 'musical_film'], ['Romany_Love', 'director', 'Fred_Paul'], ['Romany_Love', 'castMember', 'Esmond_Knight']]
+Relations: ['publicationDate', 'genre', 'director', 'castMember']
+Answer: 
+publicationDate: The subject entity was published or released on the date specified by the object entity.
+genre: The subject entity belongs to the genre specified by the object entity.
+director: The subject entity was directed by the person or entity specified by the object entity.
+castMember: The subject entity includes the person specified by the object entity as a member of its cast.
+
+Example 2:
+Text: Monopoly Star Wars is the 1997 Monopoly franchise Star Wars video game based on the board game and set in the Star Wars fictional universe.
+Triples: [['Monopoly_Star_Wars', 'publicationDate', '1997'], ['Monopoly_Star_Wars', 'genre', 'Monopoly'], ['Monopoly_Star_Wars', 'mediaFranchise', 'Star_Wars'], ['Monopoly_Star_Wars', 'instanceOf', 'video_game']]
+Relations: ['publicationDate', 'genre', 'mediaFranchise', 'instanceOf']
+Answer:
+publicationDate: The subject entity was published or released on the date specified by the object entity.
+genre: The subject entity belongs to the genre specified by the object entity.
+mediaFranchise: The subject entity is a part of the media franchise specified by the object entity.
+instanceOf: The subject entity is an instance or example of the type specified by the object entity.
+
+Example 3:
+Text: Josef Schäffer (born July 2, 1891 in Moravia) was an Austrian track and field athlete who competed in the 1912 Summer Olympics.
+Triples: [['Josef_Schäffer', 'dateOfBirth', 'July_2_1891'], ['Josef_Schäffer', 'placeOfBirth', 'Moravia'], ['Josef_Schäffer', 'participantIn', '1912_Summer_Olympics'], ['1912_Summer_Olympics', 'pointInTime', '1912']]
+Relations: ['dateOfBirth', 'placeOfBirth', 'participantIn', 'pointInTime']
+Answer:
+dateOfBirth: The subject entity was born on the date specified by the object entity.
+placeOfBirth: The subject entity was born in the location specified by the object entity.
+participantIn: The subject entity took part in the event specified by the object entity.
+pointInTime: The object entity specifies a specific point in time the subject entity took place in.
