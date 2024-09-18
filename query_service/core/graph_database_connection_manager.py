@@ -54,6 +54,15 @@ def _connectionmanager(request_type="get"):
             endpoint = f"{graphdatabase_hostname}:{graphdatabase_port}/repositories/{graphdatabase_repository}/statements"
         else:
             raise ValueError("Invalid request type. Use 'get' or 'post'.")
+
+    elif graphdatabase_type == "OXIGRAPH":
+        if request_type == "get":
+            endpoint = f"{graphdatabase_hostname}:{graphdatabase_port}/query"
+        elif request_type == "post":
+            endpoint = f"{graphdatabase_hostname}:{graphdatabase_port}/update"
+        else:
+            raise ValueError("Invalid request type. Use 'get' or 'post'.")
+
     elif graphdatabase_type == "BLAZEGRAPH":
         if "bigdata/sparql" in graphdatabase_hostname:
             endpoint = graphdatabase_hostname

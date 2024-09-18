@@ -61,8 +61,8 @@ def load_environment(env_name="development"):
         "GRAPHDATABASE_USERNAME": os.getenv("GRAPHDATABASE_USERNAME"),
         "GRAPHDATABASE_PASSWORD": os.getenv("GRAPHDATABASE_PASSWORD"),
         "GRAPHDATABASE_HOSTNAME": os.getenv("GRAPHDATABASE_HOSTNAME", "http://localhost"),
-        "GRAPHDATABASE_PORT": os.getenv("GRAPHDATABASE_PORT", 7200),
-        "GRAPHDATABASE_TYPE": os.getenv("GRAPHDATABASE_TYPE", "GRAPHDB"),
+        "GRAPHDATABASE_PORT": os.getenv("GRAPHDATABASE_PORT", 7878),
+        "GRAPHDATABASE_TYPE": os.getenv("GRAPHDATABASE_TYPE", "OXIGRAPH"),
         "GRAPHDATABASE_REPOSITORY": os.getenv("GRAPHDATABASE_REPOSITORY")
     }
 
