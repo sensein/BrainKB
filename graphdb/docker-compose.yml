@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  graphdb:
+    image: khaller/graphdb-free:10.5.1
+    container_name: graphdb-free
+    ports:
+      - "7200:7200"
+    environment:
+      - JVM_OPTS=-Xmx4g 
+    volumes:
+      - ./:/opt/graphdb/home/data
+    networks:
+      - webnet
+
+networks:
+  webnet:
+    driver: bridge

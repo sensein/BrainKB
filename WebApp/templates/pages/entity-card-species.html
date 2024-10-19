@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load data_filters %}
+{% block inpagecss %}
+    .left-sidebar-menu{
+    margin:5px;
+    }
+{% endblock inpagecss %}
+{% block title %}
+    Species
+{% endblock title %}
+{% block bodycontent %}
+    {% if all_species_gene_data %}
+
+        <div class="card">
+            <h5 class="card-header">Genome Annotation</h5>
+            <div class="card-body">
+                <h5 class="card-title">Description</h5>
+                <p class="card-text"></p>
+
+                <div class="card card-body">
+                    {% for ind_items in all_species_gene_data %}
+                        {% for key, ind_value in ind_items.items %}
+                            <table class="table table-hover">
+                                <tbody>
+                                <tr>
+                                    <th>
+                                        {{ key|extract_last_two_part }}
+                                    </th>
+                                    <td>
+                                        <table class="table">
+                                            <tbody>
+
+                                            {% for prop, obj in ind_value.property|zip_lists:ind_value.object %}
+
+                                                <tr>
+                                                    <th>
+                                                        {% if prop|extract_last_part == "Label" %}
+                                                            Local Name
+                                                        {% else %}
+                                                            {{ prop|extract_last_part }}
+                                                        {% endif %}
+
+                                                    </th>
+                                                    <td>
+                                                        {% if prop == "http://schema.org/url" %}
+                                                            <a href="{{ obj }}" target="_blank">{{ obj }}</a>
+                                                        {% elif prop == "http://schema.org/identifier" or prop == "https://identifiers.org/brain-bican/vocab/molecular_type" %}
+                                                            {{ obj }}
+                                                        {% else %}
+                                                            {{ obj|extract_last_part_only }}
+                                                        {% endif %}
+
+                                                    </td>
+                                                </tr>
+
+
+
+                                            {% endfor %}
+                                            </tbody>
+                                        </table>
+
+
+                                    </td>
+                                </tr>
+                                </tbody>
+                            </table>
+
+                        {% endfor %}
+
+                    {% endfor %}
+                </div>
+
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-md-12">
+                    {% for data in paginated_data %}
+                        <a href="{% url 'species_entity_card' slug %}?offset={{ data }}" class="btn btn-primary">{{ forloop.counter }}</a>
+                    {% endfor %}
+
+            </div>
+        </div>
+    {% else %}
+        <div class="alert alert-secondary" role="alert">
+            No data to display.
+        </div>
+    {% endif %}
+{% endblock bodycontent %}

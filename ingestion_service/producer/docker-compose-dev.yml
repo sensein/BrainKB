@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  app-dev-producer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8006:8006"
+    environment:
+      - ENVIRONMENT=debug
+    restart: on-failure
+    networks:
+      - webnet
+
+networks:
+  webnet:
+    driver: bridge
+
+

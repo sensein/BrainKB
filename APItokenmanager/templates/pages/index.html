@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Home{% endblock title %}
+
+{% block bodycontent %}
+<main class="container">
+    <div class="bg-body-tertiary p-5 rounded">
+        <h1>JWT User & Scope Manager</h1>
+        <h4>A tool to easily manage JWT users and scopes, i.e., permissions.</h4> 
+        <a class="btn btn-lg btn-primary" href="{% url 'admin:index' %}" role="button">Get Started &raquo;</a>
+    </div>
+</main>
+{% endblock bodycontent %}

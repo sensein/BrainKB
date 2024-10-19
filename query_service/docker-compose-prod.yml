@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  app-prod-query-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8010:8010"
+    environment:
+      - ENVIRONMENT=production
+    restart: unless-stopped
+    networks:
+      - webnet
+
+networks:
+  webnet:
+    driver: bridge
+

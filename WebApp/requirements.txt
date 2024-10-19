@@ -4,3 +4,5 @@ django-summernote==0.8.20.0
 django_autoslug==1.9.8
 gunicorn==22.0.0
 whitenoise==6.6.0
+validators==0.28.1
+requests==2.32.2

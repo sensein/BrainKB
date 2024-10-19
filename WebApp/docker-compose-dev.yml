@@ -10,3 +10,11 @@ services:
     environment:
       - ENVIRONMENT=debug
     restart: on-failure
+    volumes:
+      - ./:/app
+    networks:
+      - webnet
+
+networks:
+  webnet:
+    driver: bridge

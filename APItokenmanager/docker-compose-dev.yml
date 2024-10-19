@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  app-brainypedia-tokenmanager-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      - DJANGO_SUPERUSER_USERNAME=${DJANGO_SUPERUSER_USERNAME}
+      - DJANGO_SUPERUSER_EMAIL=${DJANGO_SUPERUSER_EMAIL}
+      - DJANGO_SUPERUSER_PASSWORD=${DJANGO_SUPERUSER_PASSWORD}
+    restart: on-failure
+    networks:
+      - webnet
+    command: ["gunicorn", "-b", "0.0.0.0:8000", "APIAuthManager.wsgi:application"]
+
+networks:
+  webnet:
+    driver: bridge
