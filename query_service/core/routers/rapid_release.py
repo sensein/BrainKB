@@ -21,14 +21,25 @@ from core.graph_database_connection_manager import (fetch_data_gdb, concurrent_q
 import json
 import logging
 from core.configuration import load_environment
-from core.shared import read_yaml_config, yaml_config_to_query_dict
+from core.shared import (read_yaml_config, yaml_config_list_to_query_dict, yaml_config_single_dict_to_query)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.get("/statistics")
-async def donor_count():
+@router.get("/statistics", summary="Statistics",
+            description="This endpoint gets the statistics, i.e., counts, about the rapid release data, e.g., donors sample count.")
+async def get_statistics():
     file = load_environment()["RAPID_RELEASE_FILE"]
     data = read_yaml_config(file)
-    response = concurrent_query(yaml_config_to_query_dict(data, "rapid_releasestatistics", "slug", "sparql_query"))
+    response = concurrent_query(yaml_config_list_to_query_dict(data, "rapid_releasestatistics", "slug", "sparql_query"))
+    return response
+
+@router.get("/donors", summary="Donors",
+            description="This endpoint gets the list of donors. The donors are grouped by rapid donor ID and the values (predicate or property or relationships and objects) are concatenated, separated by comma")
+async def get_donors():
+    file = load_environment()["RAPID_RELEASE_FILE"]
+    data = read_yaml_config(file)
+    response = fetch_data_gdb(
+        yaml_config_single_dict_to_query(data, "all_donor")
+    )
     return response
