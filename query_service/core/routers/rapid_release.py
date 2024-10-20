@@ -35,11 +35,21 @@ async def get_statistics():
     return response
 
 @router.get("/donors", summary="Donors",
-            description="This endpoint gets the list of donors. The donors are grouped by rapid donor ID and the values (predicate or property or relationships and objects) are concatenated, separated by comma")
+            description="This endpoint gets the all list of donors. The donors are grouped by rapid donor ID and the values (predicate or property or relationships and objects) are concatenated, separated by comma")
 async def get_donors():
     file = load_environment()["RAPID_RELEASE_FILE"]
     data = read_yaml_config(file)
     response = fetch_data_gdb(
         yaml_config_single_dict_to_query(data, "all_donor")
+    )
+    return response
+
+@router.get("/digital-assets", summary="Digital Assets",
+            description="This endpoint gets the all list of digital assets. The digital assets are grouped by rapid digital asset ID and the values (predicate or property or relationships and objects) are concatenated, separated by comma")
+async def get_digitalassets():
+    file = load_environment()["RAPID_RELEASE_FILE"]
+    data = read_yaml_config(file)
+    response = fetch_data_gdb(
+        yaml_config_single_dict_to_query(data, "all_digitalassets")
     )
     return response
