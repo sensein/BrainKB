@@ -49,3 +49,20 @@ rapid_releasestatistics:
           ?s biolink:category bican:TissueSample .
         }
       }
+all_donor:
+  name: "Donor"
+  slug: "alldonordata"
+  short_description: ""
+  sparql_query: |-
+     PREFIX bican: <https://identifiers.org/brain-bican/vocab/> 
+      PREFIX biolink: <https://w3id.org/biolink/vocab/> 
+      
+      SELECT ?s (GROUP_CONCAT(DISTINCT STR(?p); SEPARATOR=", ") AS ?predicates) 
+                  (GROUP_CONCAT(DISTINCT STR(?o); SEPARATOR=", ") AS ?objects)
+      WHERE {
+        GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
+          ?s ?p ?o .
+          ?s biolink:category bican:Donor .
+        }
+      }
+      GROUP BY ?s
