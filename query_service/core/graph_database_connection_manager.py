@@ -141,6 +141,7 @@ def fetch_data_gdb(sparql_query):
 
 def concurrent_query(querylist: List[Dict[str, Any]], max_workers: int = None) -> List[Dict[str, Any]]:
     """
+    
     Executes a list of SPARQL queries concurrently and returns the results with the corresponding query_key.
 
     :param querylist: List of dictionaries, each containing one key-value pair representing the query.
