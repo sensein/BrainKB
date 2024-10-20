@@ -21,12 +21,16 @@ from core.graph_database_connection_manager import (fetch_data_gdb, convert_to_t
 import json
 import logging
 from core.pydantic_schema import InputJSONSLdchema
+from typing import Annotated
+from core.models.user import LoginUserIn
+from core.security import get_current_user, require_scopes
+from fastapi import Depends
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.post("/query/insert-jsonld")
-async def insert_jsonld(request: InputJSONSLdchema):
+@router.post("/query/insert-jsonld", include_in_schema=False)
+async def insert_jsonld(user: Annotated[LoginUserIn, Depends(get_current_user)], request: InputJSONSLdchema):
     try:
         data = json.loads(request.json())
         logger.info(f"Received data: {data}")
@@ -45,8 +49,7 @@ async def insert_jsonld(request: InputJSONSLdchema):
                             detail="An error occurred processing the request")
 
 
-@router.get("/query/sparql/")
-async def sparql_query(sparql_query: str):
-    print(sparql_query)
+@router.get("/query/sparql/", include_in_schema=False)
+async def sparql_query(user: Annotated[LoginUserIn, Depends(get_current_user)], sparql_query: str):
     response = fetch_data_gdb(sparql_query)
     return response
