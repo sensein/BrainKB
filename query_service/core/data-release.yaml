@@ -49,9 +49,10 @@ rapid_releasestatistics:
           ?s biolink:category bican:TissueSample .
         }
       }
-all_donor:
-  name: "Donor"
-  slug: "alldonordata"
+
+all_data_by_category:
+  name: "All Data By Category"
+  slug: "all_data_by_category"
   short_description: ""
   sparql_query: |-
      PREFIX bican: <https://identifiers.org/brain-bican/vocab/> 
@@ -62,25 +63,23 @@ all_donor:
       WHERE {
         GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
           ?s ?p ?o .
-          ?s biolink:category bican:Donor .
+          ?s biolink:category bican:REPLACE_ID .
         }
       }
       GROUP BY ?s
-all_digitalassets:
-  name: "DigitalAsset"
-  slug: "alldigitalassets"
-  short_description: ""
+
+all_categories_list:
+  name: "All Categories List"
+  slug: "all_categories_list"
+  short_description: "Get all bican:cateogry classes"
   sparql_query: |-
      PREFIX bican: <https://identifiers.org/brain-bican/vocab/> 
       PREFIX biolink: <https://w3id.org/biolink/vocab/> 
       
-      SELECT ?s (GROUP_CONCAT(DISTINCT STR(?p); SEPARATOR=", ") AS ?predicates) 
-                  (GROUP_CONCAT(DISTINCT STR(?o); SEPARATOR=", ") AS ?objects)
+      SELECT distinct (?o as ?categories)
       WHERE {
         GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
-          ?s ?p ?o .
-          ?s biolink:category bican:DigitalAsset .
+         ?s biolink:category ?o . 
         }
-      }
-      GROUP BY ?s
+      } 
 

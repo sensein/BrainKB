@@ -34,22 +34,27 @@ async def get_statistics():
     response = concurrent_query(yaml_config_list_to_query_dict(data, "rapid_releasestatistics", "slug", "sparql_query"))
     return response
 
-@router.get("/donors", summary="Donors",
-            description="This endpoint gets the all list of donors. The donors are grouped by rapid donor ID and the values (predicate or property or relationships and objects) are concatenated, separated by comma")
-async def get_donors():
+@router.get("/categories", summary="Categories List",
+            description="This endpoint gets all the unique rapid release categories, e.g., Donor")
+async def get_categories():
     file = load_environment()["RAPID_RELEASE_FILE"]
     data = read_yaml_config(file)
     response = fetch_data_gdb(
-        yaml_config_single_dict_to_query(data, "all_donor")
+        yaml_config_single_dict_to_query(data, "all_categories_list")
     )
     return response
 
-@router.get("/digital-assets", summary="Digital Assets",
-            description="This endpoint gets the all list of digital assets. The digital assets are grouped by rapid digital asset ID and the values (predicate or property or relationships and objects) are concatenated, separated by comma")
-async def get_digitalassets():
+
+
+@router.get("/category", summary="Data By Category",
+            description="This endpoint gets the all list of data by category, e.g., TissueSample. The fetched data are grouped by rapid ID (or subject) and the values (predicate or property or relationships and objects) are concatenated, separated by comma")
+async def get_data_by_category(category_name):
     file = load_environment()["RAPID_RELEASE_FILE"]
     data = read_yaml_config(file)
+    fetched_sparql_query = yaml_config_single_dict_to_query(data, "all_data_by_category")
+    corrected_query = fetched_sparql_query.replace("REPLACE_ID", str(category_name))
+    print(corrected_query)
     response = fetch_data_gdb(
-        yaml_config_single_dict_to_query(data, "all_digitalassets")
+        corrected_query
     )
     return response
