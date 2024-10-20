@@ -49,7 +49,7 @@ def read_yaml_config(source_path: str) -> Dict[str, Any]:
         return {}
 
 
-def yaml_config_to_query_dict(yaml_data: Dict[str, Any], yaml_list_key: str, dict_key_item: str,
+def yaml_config_list_to_query_dict(yaml_data: Dict[str, Any], yaml_list_key: str, dict_key_item: str,
                               dict_value_item: str) -> List[Dict[str, Any]]:
     """Converts a YAML list into a list of dictionaries for key-value pairs."""
     if yaml_list_key not in yaml_data:
@@ -63,6 +63,49 @@ def yaml_config_to_query_dict(yaml_data: Dict[str, Any], yaml_list_key: str, dic
         print(f"Error: Missing key {e} in one of the items.")
         return []
 
+
+def yaml_config_single_dict_to_query(yaml_data, superkey, sparql_query_key='sparql_query'):
+    """
+    Extracts the SPARQL query from a YAML structure given a superkey and sparql_query_key.
+
+    Args:
+        yaml_data (dict): The loaded YAML data as a dictionary.
+        superkey (str): The top-level key under which to look for the SPARQL query.
+        sparql_query_key (str): The key containing the SPARQL query inside the superkey's dictionary. Defaults to 'sparql_query'.
+
+    Returns:
+        str: The SPARQL query string if found, or None if the key is not found.
+
+    Example: for the following content in yaml file,  superkey is 'all_donor' and  sparql_query_key is 'sparql_query'
+        all_donor:
+          name: "Donor"
+          slug: "alldonordata"
+          short_description: ""
+          sparql_query: |-
+             PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
+              PREFIX biolink: <https://w3id.org/biolink/vocab/>
+
+              SELECT ?s (GROUP_CONCAT(DISTINCT STR(?p); SEPARATOR=", ") AS ?predicates)
+                          (GROUP_CONCAT(DISTINCT STR(?o); SEPARATOR=", ") AS ?objects)
+              WHERE {
+                GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
+                  ?s ?p ?o .
+                  ?s biolink:category bican:Donor .
+                }
+              }
+              GROUP BY ?s
+    """
+    if superkey not in yaml_data:
+        print(f"Error: '{superkey}' not found in YAML data.")
+        return None
+
+    # Extract the SPARQL query using the provided key
+    sparql_query = yaml_data.get(superkey, {}).get(sparql_query_key)
+
+    if sparql_query is None:
+        print(f"Error: '{sparql_query_key}' not found under '{superkey}'.")
+
+    return sparql_query
 
 def contains_ip(string):
     # Regex pattern for matching IPv4
