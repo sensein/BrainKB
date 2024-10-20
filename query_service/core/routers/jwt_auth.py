@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/register", status_code=201)
+@router.post("/register", status_code=201, include_in_schema=False)
 async def register(user: UserIn, conn=Depends(connect_postgres)):
 
     if await get_user(conn=conn, email=user.email):
@@ -26,7 +26,7 @@ async def register(user: UserIn, conn=Depends(connect_postgres)):
     )
 
 
-@router.post("/token")
+@router.post("/token", include_in_schema=False)
 async def login(user: LoginUserIn, conn=Depends(connect_postgres)):
     user = await authenticate_user(user.email, user.password, conn)
     scopes = await get_scopes_by_user(user_id=user["id"])
