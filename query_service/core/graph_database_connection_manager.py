@@ -21,6 +21,9 @@ from rdflib import Graph
 from core.shared import ValueNotSetException
 import logging
 from core.configuration import load_environment
+import concurrent.futures
+from typing import List, Dict, Any
+from core.shared import contains_ip
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +59,16 @@ def _connectionmanager(request_type="get"):
             raise ValueError("Invalid request type. Use 'get' or 'post'.")
 
     elif graphdatabase_type == "OXIGRAPH":
+        print("Connecting to OXIGRAPH")
+        if contains_ip(graphdatabase_hostname):
+            endpoint_set = f"{graphdatabase_hostname}:{graphdatabase_port}"
+        else:
+            endpoint_set = f"{graphdatabase_hostname}"
         if request_type == "get":
-            endpoint = f"{graphdatabase_hostname}:{graphdatabase_port}/query"
+            endpoint = f"{endpoint_set}/query"
+            print(f"Connecting to OXIGRAPH endpoing: {endpoint}")
         elif request_type == "post":
-            endpoint = f"{graphdatabase_hostname}:{graphdatabase_port}/update"
+            endpoint = f"{endpoint_set}/update"
         else:
             raise ValueError("Invalid request type. Use 'get' or 'post'.")
 
@@ -109,6 +118,7 @@ def insert_data_gdb(turtle_data):
                     """ % turtle_data
             sparql.setQuery(sparql_query)
             response = sparql.query()
+            print(response)
             return {"status": "success", "message": "Data inserted to graph database successfully"}
         except Exception as e:
             return {"status": "fail", "message": {str(e)}}
@@ -127,3 +137,38 @@ def fetch_data_gdb(sparql_query):
         return {"status": "success", "message": result}
     except Exception as e:
         return {"status": "fail","message": str(e)}
+
+
+def concurrent_query(querylist: List[Dict[str, Any]], max_workers: int = None) -> List[Dict[str, Any]]:
+    """
+    Executes a list of SPARQL queries concurrently and returns the results with the corresponding query_key.
+
+    :param querylist: List of dictionaries, each containing one key-value pair representing the query.
+        Example: [
+        {'query_one': 'SELECT ?subject ?predicate ?object\nWHERE {\n  ?subject ?predicate ?object .\n}\nLIMIT 1'},
+        {'donor': 'SELECT ?subject ?predicate ?object\n  WHERE {\n      ?subject ?predicate ?object .\n      FILTER(?subject = <http://example.org/subject1>)\n  }\n  LIMIT 2'},
+        {'structure': 'PREFIX bican: <https://identifiers.org/brain-bican/vocab/>  \nSELECT DISTINCT (COUNT (?id) as ?count)\nWHERE {\n  ?id bican:structure ?o; \n}\nLIMIT 3'}
+        ]
+    :param max_workers: Maximum number of worker threads. Defaults to None (automatically determined).
+    :return: List of dictionaries, where each contains 'query_key' and 'result' for each query.
+    """
+    results = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Create a mapping of futures to their corresponding query_key
+        future_to_query_key = {
+            executor.submit(fetch_data_gdb, query_value): query_key
+            for query_dict in querylist
+            for query_key, query_value in query_dict.items()
+        }
+
+        for future in concurrent.futures.as_completed(future_to_query_key):
+            query_key = future_to_query_key[future]
+            try:
+                result = future.result()
+                results.append({query_key: result})
+            except Exception as e:
+                print(f"Error occurred during query execution for {query_key}: {e}")
+                results.append({"query_key": query_key, "result": None})  # Optional: Handle failure case
+
+    return results
