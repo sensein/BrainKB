@@ -141,14 +141,13 @@ def fetch_data_gdb(sparql_query):
 
 def concurrent_query(querylist: List[Dict[str, Any]], max_workers: int = None) -> List[Dict[str, Any]]:
     """
-    
     Executes a list of SPARQL queries concurrently and returns the results with the corresponding query_key.
 
     :param querylist: List of dictionaries, each containing one key-value pair representing the query.
         Example: [
         {'query_one': 'SELECT ?subject ?predicate ?object\nWHERE {\n  ?subject ?predicate ?object .\n}\nLIMIT 1'},
-        {'donor': 'SELECT ?subject ?predicate ?object\n  WHERE {\n      ?subject ?predicate ?object .\n      FILTER(?subject = <http://example.org/subject1>)\n  }\n  LIMIT 2'},
-        {'structure': 'PREFIX bican: <https://identifiers.org/brain-bican/vocab/>  \nSELECT DISTINCT (COUNT (?id) as ?count)\nWHERE {\n  ?id bican:structure ?o; \n}\nLIMIT 3'}
+        {'donor': 'SELECT ?subject ?predicate ?object\n  WHERE {\n ?subject ?predicate ?object .\n FILTER(?subject = <http://example.org/subject1>)\n  }\n  LIMIT 2'},
+        {'structure': 'PREFIX bican: <https://identifiers.org/brain-bican/vocab/> \nSELECT DISTINCT (COUNT (?id) as ?count)\nWHERE {\n  ?id bican:structure ?o; \n}\nLIMIT 3'}
         ]
     :param max_workers: Maximum number of worker threads. Defaults to None (automatically determined).
     :return: List of dictionaries, where each contains 'query_key' and 'result' for each query.
