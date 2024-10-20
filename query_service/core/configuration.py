@@ -64,6 +64,8 @@ def load_environment(env_name="development"):
         "GRAPHDATABASE_PORT": os.getenv("GRAPHDATABASE_PORT", 7878),
         "GRAPHDATABASE_TYPE": os.getenv("GRAPHDATABASE_TYPE", "OXIGRAPH"),
         "GRAPHDATABASE_REPOSITORY": os.getenv("GRAPHDATABASE_REPOSITORY"),
+
+        # Data release
         "RAPID_RELEASE_FILE": os.getenv("RAPID_RELEASE_FILE")
     }
 
