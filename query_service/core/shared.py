@@ -21,6 +21,7 @@ import yaml
 from typing import List, Dict, Any
 import re
 import os
+import json
 
 class ValueNotSetException(Exception):
     def __init__(self):
@@ -118,3 +119,79 @@ def contains_ip(string):
     if re.search(ipv4_pattern, string) or re.search(ipv6_pattern, string):
         return True
     return False
+
+
+def transform_data_categories(data):
+    try:
+
+        if data.get('status') != 'success':
+            raise ValueError("The data status is not 'success'.")
+
+        if 'message' not in data or 'head' not in data['message'] or 'results' not in data['message']:
+            raise KeyError("The input data is missing required keys.")
+
+        # Extract the header (first item in 'vars')
+        header = data['message']['head'].get('vars', [None])[0]
+        if not header:
+            raise KeyError("'vars' is missing or empty in the 'head' section.")
+
+        # Extract the values from 'bindings'
+        results = [
+            item['categories']['value']
+            for item in data['message']['results'].get('bindings', [])
+            if 'categories' in item and 'value' in item['categories']
+        ]
+
+        # Return the transformed data
+        return {
+            "header": header,
+            "results": results
+        }
+
+    except KeyError as e:
+        return {"error": f"Missing key in input data: {e}"}
+
+    except ValueError as e:
+        return {"error": str(e)}
+
+    except Exception as e:
+        return {"error": f"An unexpected error occurred: {e}"}
+
+
+def clean_response_concatenated_predicate_object(response):
+    if response.get("status") != "success":
+        raise ValueError(f"Error in response: {response.get('status')}")
+
+    cleaned_data = []
+
+    # Process the 'bindings' section
+    for binding in response["message"]["results"]["bindings"]:
+        try:
+            subject = binding["subject"]["value"]
+            predicates = binding["predicates"]["value"].split(', ')
+            objects = binding["objects"]["value"].split(', ')
+
+            cleaned_data.append({
+                "subject": subject,
+                "predicates": predicates,
+                "objects": objects
+            })
+        except KeyError as e:
+            print(f"Missing key in binding: {e}")
+        except Exception as e:
+            print(f"Error processing binding: {e}")
+
+    return cleaned_data
+
+
+def clean_response_statistics(response):
+    cleaned_data = {}
+
+    for item in response:
+        for key, value in item.items():
+            # Extract the count value
+            count = value['message']['results']['bindings'][0]['count']['value']
+            # Store the count in the cleaned_data dictionary with the key as the category
+            cleaned_data[key] = int(count)
+
+    return cleaned_data

@@ -21,7 +21,8 @@ from core.graph_database_connection_manager import (fetch_data_gdb, concurrent_q
 import json
 import logging
 from core.configuration import load_environment
-from core.shared import (read_yaml_config, yaml_config_list_to_query_dict, yaml_config_single_dict_to_query)
+from core.shared import (read_yaml_config, yaml_config_list_to_query_dict, yaml_config_single_dict_to_query,
+                         transform_data_categories, clean_response_statistics, clean_response_concatenated_predicate_object)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 async def get_statistics():
     file = load_environment()["RAPID_RELEASE_FILE"]
     data = read_yaml_config(file)
-    response = concurrent_query(yaml_config_list_to_query_dict(data, "rapid_releasestatistics", "slug", "sparql_query"))
+    response = clean_response_statistics(concurrent_query(yaml_config_list_to_query_dict(data, "rapid_releasestatistics", "slug", "sparql_query")))
     return response
 
 @router.get("/categories", summary="Categories List",
@@ -39,9 +40,9 @@ async def get_statistics():
 async def get_categories():
     file = load_environment()["RAPID_RELEASE_FILE"]
     data = read_yaml_config(file)
-    response = fetch_data_gdb(
+    response = transform_data_categories(fetch_data_gdb(
         yaml_config_single_dict_to_query(data, "all_categories_list")
-    )
+    ))
     return response
 
 
@@ -54,7 +55,7 @@ async def get_data_by_category(category_name):
     fetched_sparql_query = yaml_config_single_dict_to_query(data, "all_data_by_category")
     corrected_query = fetched_sparql_query.replace("REPLACE_ID", str(category_name))
     print(corrected_query)
-    response = fetch_data_gdb(
+    response = clean_response_concatenated_predicate_object(fetch_data_gdb(
         corrected_query
-    )
+    ))
     return response

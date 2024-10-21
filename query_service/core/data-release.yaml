@@ -58,15 +58,15 @@ all_data_by_category:
      PREFIX bican: <https://identifiers.org/brain-bican/vocab/> 
       PREFIX biolink: <https://w3id.org/biolink/vocab/> 
       
-      SELECT ?s (GROUP_CONCAT(DISTINCT STR(?p); SEPARATOR=", ") AS ?predicates) 
+      SELECT ?subject (GROUP_CONCAT(DISTINCT STR(?p); SEPARATOR=", ") AS ?predicates) 
                   (GROUP_CONCAT(DISTINCT STR(?o); SEPARATOR=", ") AS ?objects)
       WHERE {
         GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
-          ?s ?p ?o .
-          ?s biolink:category bican:REPLACE_ID .
+          ?subject ?p ?o .
+          ?subject biolink:category bican:REPLACE_ID .
         }
       }
-      GROUP BY ?s
+      GROUP BY ?subject
 
 all_categories_list:
   name: "All Categories List"
