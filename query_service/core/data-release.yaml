@@ -20,7 +20,6 @@ rapid_releasestatistics:
       
       SELECT (COUNT(DISTINCT(?s)) AS ?count) WHERE {
         GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
-          ?s ?p ?o .
           ?s biolink:category bican:Donor .
         }
       }
@@ -32,7 +31,6 @@ rapid_releasestatistics:
       PREFIX biolink: <https://w3id.org/biolink/vocab/> 
       SELECT (COUNT(DISTINCT(?s)) AS ?count) WHERE {
         GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
-          ?s ?p ?o .
           ?s biolink:category bican:LibraryAliquot .
         }
       }
@@ -44,8 +42,7 @@ rapid_releasestatistics:
       PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
       PREFIX biolink: <https://w3id.org/biolink/vocab/> 
       SELECT (COUNT(DISTINCT(?s)) AS ?count) WHERE {
-        GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
-          ?s ?p ?o .
+        GRAPH <https://www.portal.brain-bican.org/grapidrelease> { 
           ?s biolink:category bican:TissueSample .
         }
       }
@@ -61,8 +58,7 @@ all_data_by_category:
       SELECT ?subject (GROUP_CONCAT(DISTINCT STR(?p); SEPARATOR=", ") AS ?predicates) 
                   (GROUP_CONCAT(DISTINCT STR(?o); SEPARATOR=", ") AS ?objects)
       WHERE {
-        GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
-          ?subject ?p ?o .
+        GRAPH <https://www.portal.brain-bican.org/grapidrelease> { 
           ?subject biolink:category bican:REPLACE_ID .
         }
       }
