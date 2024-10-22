@@ -22,6 +22,7 @@ origins = [
     "http://127.0.0.1:3001",
     "http://3.134.90.242", #aws ip
     "http://18.119.65.244", #graphdb
+    "https://beta.brainkb.org",
 ]
 
 if environment == "prods":
