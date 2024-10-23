@@ -139,7 +139,7 @@ def fetch_data_gdb(sparql_query):
         return {"status": "fail","message": str(e)}
 
 
-def concurrent_query(querylist: List[Dict[str, Any]], max_workers: int = None) -> List[Dict[str, Any]]:
+def concurrent_query(querylist: List[Dict[str, Any]], max_workers: int = None, timeout: int = 10) -> List[Dict[str, Any]]:
     """
     Executes a list of SPARQL queries concurrently and returns the results with the corresponding query_key.
 
@@ -150,6 +150,7 @@ def concurrent_query(querylist: List[Dict[str, Any]], max_workers: int = None) -
         {'structure': 'PREFIX bican: <https://identifiers.org/brain-bican/vocab/> \nSELECT DISTINCT (COUNT (?id) as ?count)\nWHERE {\n  ?id bican:structure ?o; \n}\nLIMIT 3'}
         ]
     :param max_workers: Maximum number of worker threads. Defaults to None (automatically determined).
+    :param timeout: Time limit for each query in seconds. Defaults to 30 seconds.
     :return: List of dictionaries, where each contains 'query_key' and 'result' for each query.
     """
     results = []
@@ -165,8 +166,11 @@ def concurrent_query(querylist: List[Dict[str, Any]], max_workers: int = None) -
         for future in concurrent.futures.as_completed(future_to_query_key):
             query_key = future_to_query_key[future]
             try:
-                result = future.result()
+                result = future.result(timeout=timeout)
                 results.append({query_key: result})
+            except concurrent.futures.TimeoutError:
+                print(f"Query timed out for {query_key}")
+                results.append({query_key: None})
             except Exception as e:
                 print(f"Error occurred during query execution for {query_key}: {e}")
                 results.append({"query_key": query_key, "result": None})  # Optional: Handle failure case
