@@ -61,8 +61,10 @@ all_data_by_category:
        GRAPH <https://www.portal.brain-bican.org/grapidrelease> { 
          ?subject biolink:category bican:REPLACE_ID .
        }
-     }
+     } 
      GROUP BY ?subject
+     LIMIT REPLACE_LIMIT
+     OFFSET REPLACE_OFFSET
 
 all_categories_list:
   name: "All Categories List"

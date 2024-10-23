@@ -60,11 +60,13 @@ async def get_categories(limit=10, offset=1):
 
 @router.get("/category", summary="Data By Category",
             description="This endpoint gets the all list of data by category, e.g., TissueSample. The fetched data are grouped by rapid ID (or subject) and the values (predicate or property or relationships and objects) are concatenated, separated by comma")
-async def get_data_by_category(category_name):
+async def get_data_by_category(category_name, limit=10, offset=1):
     file = load_environment()["RAPID_RELEASE_FILE"]
     data = read_yaml_config(file)
     fetched_sparql_query = yaml_config_single_dict_to_query(data, "all_data_by_category")
     corrected_query = fetched_sparql_query.replace("REPLACE_ID", str(category_name))
+    corrected_query = corrected_query.replace("REPLACE_LIMIT", str(limit))
+    corrected_query = corrected_query.replace("REPLACE_OFFSET", str(offset))
     print(corrected_query)
     response = clean_response_concatenated_predicate_object(fetch_data_gdb(
         corrected_query
