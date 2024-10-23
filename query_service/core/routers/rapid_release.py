@@ -58,7 +58,7 @@ async def get_data_by_category(category_name, limit=10, offset=1):
     fetched_sparql_query = yaml_config_single_dict_to_query(data, "all_data_by_category")
     corrected_query = fetched_sparql_query.replace("REPLACE_ID", str(category_name))
     corrected_query = corrected_query.replace("REPLACE_LIMIT", str(limit))
-    corrected_query = corrected_query.replace("REPLACE_OFFSET", str(offset)) 
+    corrected_query = corrected_query.replace("REPLACE_OFFSET", str(offset))
     response = clean_response_concatenated_predicate_object(fetch_data_gdb(
         corrected_query
     ))

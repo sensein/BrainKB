@@ -18,10 +18,10 @@
 
 from rdflib import Graph
 import yaml
+from pydantic import BaseModel, Field, ValidationError
 from typing import List, Dict, Any
 import re
 import os
-import json
 
 class ValueNotSetException(Exception):
     def __init__(self):
@@ -30,6 +30,77 @@ class ValueNotSetException(Exception):
 
     def __str__(self):
         return self.message
+
+
+
+# Model for handling basic SPARQL query response
+class HeadModel(BaseModel):
+    """Represents the header of a SPARQL query result."""
+    vars: List[str]
+
+class BindingCategoryModel(BaseModel):
+    """Represents the category for a binding in a SPARQL query result."""
+    value: str
+
+class BindingModel(BaseModel):
+    """Represents the binding in a SPARQL query result."""
+    categories: BindingCategoryModel
+
+class ResultsModel(BaseModel):
+    """Represents the list of bindings in a SPARQL query result."""
+    bindings: List[BindingModel]
+
+class MessageModel(BaseModel):
+    """Encapsulates the header and results for a SPARQL query response."""
+    head: HeadModel
+    results: ResultsModel
+
+class DataModel(BaseModel):
+    """Represents the top-level SPARQL query response."""
+    status: str
+    message: MessageModel
+
+
+# Model for handling concatenated predicate-object responses
+class BindingPredicateObjectModel(BaseModel):
+    """Represents subject, predicates, and objects binding."""
+    subject: Dict[str, Any]
+    predicates: Dict[str, Any]
+    objects: Dict[str, Any]
+
+class ResultsPredicateObjectModel(BaseModel):
+    """Represents the list of predicate-object bindings."""
+    bindings: List[BindingPredicateObjectModel]
+
+class MessagePredicateObjectModel(BaseModel):
+    """Encapsulates results for concatenated predicate-object responses."""
+    results: ResultsPredicateObjectModel
+
+class ResponsePredicateObjectModel(BaseModel):
+    """Represents the top-level response for predicate-object data."""
+    status: str
+    message: MessagePredicateObjectModel
+
+
+# Model for handling statistics (count) responses
+class CountBindingModel(BaseModel):
+    """Represents the count binding in a SPARQL statistics query."""
+    count: Dict[str, Any]
+
+class ResultsCountModel(BaseModel):
+    """Represents the list of count bindings."""
+    bindings: List[CountBindingModel]
+
+class MessageCountModel(BaseModel):
+    """Encapsulates results for count-based responses."""
+    results: ResultsCountModel
+
+class DataModelCount(BaseModel):
+    """Represents the top-level response for count data."""
+    status: str
+    message: MessageCountModel
+
+
 
 def convert_to_turtle(jsonlddata):
         return Graph().parse(data=jsonlddata, format='json-ld').serialize(format="turtle")
@@ -116,30 +187,21 @@ def contains_ip(string):
     ipv6_pattern = r'\b(?:[a-fA-F0-9]{1,4}:){7}[a-fA-F0-9]{1,4}\b'
 
     # Check if the string is an exact match or contains an IP
-    if re.search(ipv4_pattern, string) or re.search(ipv6_pattern, string):
-        return True
-    return False
+    return re.search(ipv4_pattern, string) or re.search(ipv6_pattern, string)
 
 
-def transform_data_categories(data):
+def transform_data_categories(data: Dict[str, Any]):
     try:
-
-        if data.get('status') != 'success':
-            raise ValueError("The data status is not 'success'.")
-
-        if 'message' not in data or 'head' not in data['message'] or 'results' not in data['message']:
-            raise KeyError("The input data is missing required keys.")
+        # Validate input data using the DataModel schema
+        validated_data = DataModel(**data)
 
         # Extract the header (first item in 'vars')
-        header = data['message']['head'].get('vars', [None])[0]
-        if not header:
-            raise KeyError("'vars' is missing or empty in the 'head' section.")
+        header = validated_data.message.head.vars[0]
 
         # Extract the values from 'bindings'
         results = [
-            item['categories']['value']
-            for item in data['message']['results'].get('bindings', [])
-            if 'categories' in item and 'value' in item['categories']
+            item.categories.value
+            for item in validated_data.message.results.bindings
         ]
 
         # Return the transformed data
@@ -148,50 +210,53 @@ def transform_data_categories(data):
             "results": results
         }
 
-    except KeyError as e:
-        return {"error": f"Missing key in input data: {e}"}
-
-    except ValueError as e:
-        return {"error": str(e)}
-
+    except ValidationError as e:
+        return {"error": f"Validation error: {e}"}
     except Exception as e:
         return {"error": f"An unexpected error occurred: {e}"}
 
 
-def clean_response_concatenated_predicate_object(response):
-    if response.get("status") != "success":
-        raise ValueError(f"Error in response: {response.get('status')}")
+# Define the clean_response_concatenated_predicate_object function using Pydantic
+def clean_response_concatenated_predicate_object(response: Dict[str, Any]):
+    try:
+        # Validate input response
+        validated_response = ResponsePredicateObjectModel(**response)
 
-    cleaned_data = []
+        cleaned_data = []
 
-    # Process the 'bindings' section
-    for binding in response["message"]["results"]["bindings"]:
-        try:
-            subject = binding["subject"]["value"]
-            predicates = binding["predicates"]["value"].split(', ')
-            objects = binding["objects"]["value"].split(', ')
+        # Process the 'bindings' section
+        for binding in validated_response.message.results.bindings:
+            subject = binding.subject['value']
+            predicates = binding.predicates['value'].split(', ')
+            objects = binding.objects['value'].split(', ')
 
             cleaned_data.append({
                 "subject": subject,
                 "predicates": predicates,
                 "objects": objects
             })
-        except KeyError as e:
-            print(f"Missing key in binding: {e}")
-        except Exception as e:
-            print(f"Error processing binding: {e}")
 
-    return cleaned_data
+        return cleaned_data
+
+    except ValidationError as e:
+        return {"error": f"Validation error: {e}"}
+    except Exception as e:
+        return {"error": f"An unexpected error occurred: {e}"}
 
 
-def clean_response_statistics(response):
+def clean_response_statistics(response: List[Dict[str, Any]]):
     cleaned_data = {}
 
-    for item in response:
-        for key, value in item.items():
-            # Extract the count value
-            count = value['message']['results']['bindings'][0]['count']['value']
-            # Store the count in the cleaned_data dictionary with the key as the category
-            cleaned_data[key] = int(count)
+    try:
+        for item in response:
+            for key, value in item.items():
+                validated_data = DataModelCount(**value)
+                count = validated_data.message.results.bindings[0].count['value']
+                cleaned_data[key] = int(count)
 
-    return cleaned_data
+        return cleaned_data
+
+    except ValidationError as e:
+        return {"error": f"Validation error: {e}"}
+    except Exception as e:
+        return {"error": f"An unexpected error occurred: {e}"}
