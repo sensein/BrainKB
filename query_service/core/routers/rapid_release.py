@@ -40,17 +40,9 @@ async def get_statistics():
 async def get_categories(limit=10, offset=1):
     file = load_environment()["RAPID_RELEASE_FILE"]
     data = read_yaml_config(file)
-    print("*" * 100)
-    print(file, data)
     query = yaml_config_single_dict_to_query(data, "all_categories_list")
-
-    print(query)
-    print("*" * 100)
     updated_query = query.replace("REPLACE_LIMIT", str(limit))
     updated_query = updated_query.replace("REPLACE_OFFSET", str(offset))
-    print("#" * 100)
-    print(updated_query)
-    print("#" * 100)
     response = transform_data_categories(fetch_data_gdb(
         updated_query
     ))
@@ -66,8 +58,7 @@ async def get_data_by_category(category_name, limit=10, offset=1):
     fetched_sparql_query = yaml_config_single_dict_to_query(data, "all_data_by_category")
     corrected_query = fetched_sparql_query.replace("REPLACE_ID", str(category_name))
     corrected_query = corrected_query.replace("REPLACE_LIMIT", str(limit))
-    corrected_query = corrected_query.replace("REPLACE_OFFSET", str(offset))
-    print(corrected_query)
+    corrected_query = corrected_query.replace("REPLACE_OFFSET", str(offset)) 
     response = clean_response_concatenated_predicate_object(fetch_data_gdb(
         corrected_query
     ))
