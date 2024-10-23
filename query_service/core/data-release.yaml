@@ -36,7 +36,7 @@ rapid_releasestatistics:
       }
 
   - name: "TissueSample"
-    slug: "LTissueSampleCount"
+    slug: "TissueSampleCount"
     short_description: ""
     sparql_query: |-
       PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
@@ -53,29 +53,28 @@ all_data_by_category:
   short_description: ""
   sparql_query: |-
      PREFIX bican: <https://identifiers.org/brain-bican/vocab/> 
-      PREFIX biolink: <https://w3id.org/biolink/vocab/> 
+     PREFIX biolink: <https://w3id.org/biolink/vocab/> 
       
-      SELECT ?subject (GROUP_CONCAT(DISTINCT STR(?p); SEPARATOR=", ") AS ?predicates) 
-                  (GROUP_CONCAT(DISTINCT STR(?o); SEPARATOR=", ") AS ?objects)
-      WHERE {
-        GRAPH <https://www.portal.brain-bican.org/grapidrelease> { 
-          ?subject biolink:category bican:REPLACE_ID .
-        }
-      }
-      GROUP BY ?subject
+     SELECT ?subject (GROUP_CONCAT(DISTINCT STR(?p); SEPARATOR=", ") AS ?predicates) 
+            (GROUP_CONCAT(DISTINCT STR(?o); SEPARATOR=", ") AS ?objects)
+     WHERE {
+       GRAPH <https://www.portal.brain-bican.org/grapidrelease> { 
+         ?subject biolink:category bican:REPLACE_ID .
+       }
+     }
+     GROUP BY ?subject
 
 all_categories_list:
   name: "All Categories List"
   slug: "all_categories_list"
-  short_description: "Get all bican:cateogry classes"
+  short_description: "Get all bican:category classes"
   sparql_query: |-
      PREFIX bican: <https://identifiers.org/brain-bican/vocab/> 
-      PREFIX biolink: <https://w3id.org/biolink/vocab/> 
-      
-      SELECT distinct (?o as ?categories)
-      WHERE {
-        GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
+     PREFIX biolink: <https://w3id.org/biolink/vocab/> 
+     SELECT distinct (?o as ?categories)
+     WHERE {
+       GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
          ?s biolink:category ?o . 
-        }
-      } 
-
+       }
+     } LIMIT REPLACE_LIMIT
+     OFFSET REPLACE_OFFSET

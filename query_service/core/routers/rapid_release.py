@@ -37,11 +37,22 @@ async def get_statistics():
 
 @router.get("/categories", summary="Categories List",
             description="This endpoint gets all the unique rapid release categories, e.g., Donor")
-async def get_categories():
+async def get_categories(limit=10, offset=1):
     file = load_environment()["RAPID_RELEASE_FILE"]
     data = read_yaml_config(file)
+    print("*" * 100)
+    print(file, data)
+    query = yaml_config_single_dict_to_query(data, "all_categories_list")
+
+    print(query)
+    print("*" * 100)
+    updated_query = query.replace("REPLACE_LIMIT", str(limit))
+    updated_query = updated_query.replace("REPLACE_OFFSET", str(offset))
+    print("#" * 100)
+    print(updated_query)
+    print("#" * 100)
     response = transform_data_categories(fetch_data_gdb(
-        yaml_config_single_dict_to_query(data, "all_categories_list")
+        updated_query
     ))
     return response
 
