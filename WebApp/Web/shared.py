@@ -358,25 +358,29 @@ def doner_tissue_to_js(data):
     unit_type = None
     for item in data:
 
-        if not ("donor" in item["object"]["value"].lower() or "tissuesample" in item["object"]["value"].lower()):
-            key = split_and_extract_last(item["property"]["value"])
-            value = item["object"]["value"]
+        try:
+            if not ("donor" in item["object"]["value"].lower() or "tissuesample" in item["object"]["value"].lower()):
+                key = split_and_extract_last(item["property"]["value"])
+                value = item["object"]["value"]
 
-            if key == "Label":
-                key = "Local Name"
-            elif key == "Was Derived From":
-                key = "Source"
-                value = extract_uri_data(item["object"]["value"])
-            elif key == "Species":
-                key = "Taxon Number"
-            elif key == "Age  At  Death  Unit":
-                unit_type = value
-            elif key == "Age  At  Death  Value":
-                value = f"{int(float(value))} {unit_type}"
-            elif key == "Biological  Sex":
-                value = _sex_int_to_word(value)
+                if key == "Label":
+                    key = "Local Name"
+                elif key == "Was Derived From":
+                    key = "Source"
+                    value = extract_uri_data(item["object"]["value"])
+                elif key == "Species":
+                    key = "Taxon Number"
+                elif key == "Age  At  Death  Unit":
+                    unit_type = value
+                elif key == "Age  At  Death  Value":
+                    value = f"{int(float(value))} {unit_type}"
+                elif key == "Biological  Sex":
+                    value = _sex_int_to_word(value)
 
-            js_data.append({key: value})
+                js_data.append({key: value})
+        except Exception as e:
+            continue
+
 
     filtered_js_data = [d for d in js_data if "Age  At  Death  Unit" not in d]
     return filtered_js_data
@@ -492,6 +496,12 @@ def donor_tissues_data_for_kb_single(tissue_doner_data):
     for items in tissue_doner_data:
         donor_tissue[items["tissuedonertype"]["value"].lower().split("/")[-1]] = items["targets"]["value"]
 
-    donor_tissue["donor"] = donor_tissue["donor"].split(",")
-    donor_tissue["tissuesample"] = donor_tissue["tissuesample"].split(",")
+    try:
+
+        donor_tissue["donor"] = donor_tissue["donor"].split(",")
+        donor_tissue["tissuesample"] = donor_tissue["tissuesample"].split(",")
+    except Exception as e:
+        donor_tissue["donor"]=[]
+        donor_tissue["tissuesample"]=[]
+
     return donor_tissue

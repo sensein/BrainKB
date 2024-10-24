@@ -1,0 +1,82 @@
+rapid_releasestatistics:
+  - name: "DigitalAsset"
+    slug: "DigitalAssetCount"
+    short_description: ""
+    sparql_query: |-
+      PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
+      PREFIX biolink: <https://w3id.org/biolink/vocab/>
+      SELECT (COUNT(DISTINCT(?s)) AS ?count) WHERE {
+        GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
+          ?s ?p ?o .
+          ?s biolink:category bican:DigitalAsset .
+        }
+      }
+  - name: "Donor"
+    slug: "DonorCount"
+    short_description: ""
+    sparql_query: |-
+      PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
+      PREFIX biolink: <https://w3id.org/biolink/vocab/> 
+      
+      SELECT (COUNT(DISTINCT(?s)) AS ?count) WHERE {
+        GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
+          ?s biolink:category bican:Donor .
+        }
+      }
+  - name: "LibraryAliquot"
+    slug: "LibraryAliquotCount"
+    short_description: ""
+    sparql_query: |-
+      PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
+      PREFIX biolink: <https://w3id.org/biolink/vocab/> 
+      SELECT (COUNT(DISTINCT(?s)) AS ?count) WHERE {
+        GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
+          ?s biolink:category bican:LibraryAliquot .
+        }
+      }
+
+  - name: "TissueSample"
+    slug: "TissueSampleCount"
+    short_description: ""
+    sparql_query: |-
+      PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
+      PREFIX biolink: <https://w3id.org/biolink/vocab/> 
+      SELECT (COUNT(DISTINCT(?s)) AS ?count) WHERE {
+        GRAPH <https://www.portal.brain-bican.org/grapidrelease> { 
+          ?s biolink:category bican:TissueSample .
+        }
+      }
+
+all_data_by_category:
+  name: "All Data By Category"
+  slug: "all_data_by_category"
+  short_description: ""
+  sparql_query: |-
+     PREFIX bican: <https://identifiers.org/brain-bican/vocab/> 
+     PREFIX biolink: <https://w3id.org/biolink/vocab/> 
+      
+     SELECT ?subject (GROUP_CONCAT(DISTINCT STR(?p); SEPARATOR=", ") AS ?predicates) 
+            (GROUP_CONCAT(DISTINCT STR(?o); SEPARATOR=", ") AS ?objects)
+     WHERE {
+       GRAPH <https://www.portal.brain-bican.org/grapidrelease> { 
+         ?subject biolink:category bican:REPLACE_ID .
+       }
+     } 
+     GROUP BY ?subject
+     LIMIT REPLACE_LIMIT
+     OFFSET REPLACE_OFFSET
+
+all_categories_list:
+  name: "All Categories List"
+  slug: "all_categories_list"
+  short_description: "Get all bican:category classes"
+  sparql_query: |-
+     PREFIX bican: <https://identifiers.org/brain-bican/vocab/> 
+     PREFIX biolink: <https://w3id.org/biolink/vocab/> 
+     SELECT distinct (?o as ?categories)
+     WHERE {
+       GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
+         ?s biolink:category ?o . 
+       }
+     } LIMIT REPLACE_LIMIT
+     OFFSET REPLACE_OFFSET
