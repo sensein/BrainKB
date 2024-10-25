@@ -25,11 +25,15 @@ from core.security import get_current_user, require_scopes
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("/", include_in_schema=False)
 async def root():
     return {"message": "Welcome to FastAPI skeleton"}
 
 
-@router.get("/token-check", dependencies=[Depends(require_scopes(["read"]))])
+@router.get(
+    "/token-check",
+    dependencies=[Depends(require_scopes(["read"]))],
+    include_in_schema=False,
+)
 async def token_check(user: Annotated[LoginUserIn, Depends(get_current_user)]):
     return {"message": "token check passed success"}

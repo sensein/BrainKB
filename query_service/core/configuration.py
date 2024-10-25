@@ -56,14 +56,15 @@ def load_environment(env_name="development"):
         "JWT_POSTGRES_DATABASE_NAME": os.getenv("JWT_POSTGRES_DATABASE_NAME"),
         "JWT_ALGORITHM": os.getenv("JWT_ALGORITHM", "HS256"),
         "JWT_SECRET_KEY": os.getenv("JWT_SECRET_KEY"),
-
         # service specific
         "GRAPHDATABASE_USERNAME": os.getenv("GRAPHDATABASE_USERNAME"),
         "GRAPHDATABASE_PASSWORD": os.getenv("GRAPHDATABASE_PASSWORD"),
-        "GRAPHDATABASE_HOSTNAME": os.getenv("GRAPHDATABASE_HOSTNAME", "http://localhost"),
+        "GRAPHDATABASE_HOSTNAME": os.getenv(
+            "GRAPHDATABASE_HOSTNAME", "https://db.brainkb.org"
+        ),
         "GRAPHDATABASE_PORT": os.getenv("GRAPHDATABASE_PORT", 7878),
         "GRAPHDATABASE_TYPE": os.getenv("GRAPHDATABASE_TYPE", "OXIGRAPH"),
-        "GRAPHDATABASE_REPOSITORY": os.getenv("GRAPHDATABASE_REPOSITORY")
+        "GRAPHDATABASE_REPOSITORY": os.getenv("GRAPHDATABASE_REPOSITORY"),
+        # Data release
+        "RAPID_RELEASE_FILE": os.getenv("RAPID_RELEASE_FILE"),
     }
-
-

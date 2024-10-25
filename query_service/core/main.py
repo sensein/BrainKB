@@ -10,23 +10,20 @@ from core.configure_logging import configure_logging
 from core.routers.index import router as index_router
 from core.routers.jwt_auth import router as jwt_router
 from core.routers.query import router as query_router
+from core.routers.rapid_release import router as rapid_release
 from core.configuration import load_environment
 
 from fastapi.middleware.cors import CORSMiddleware
 
 environment = load_environment()["ENV_STATE"]
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:3001",
-    "http://127.0.0.1:3001",
-    "http://3.134.90.242", #aws ip
-    "http://18.119.65.244", #graphdb
+
+
+origins = [  
     "https://beta.brainkb.org",
 ]
 
 if environment == "prods":
-    app =  FastAPI(docs_url=None, redoc_url=None)
+    app = FastAPI(docs_url=None, redoc_url=None)
 else:
     app = FastAPI()
 logger = logging.getLogger(__name__)
@@ -45,6 +42,9 @@ app.add_middleware(CorrelationIdMiddleware)
 app.include_router(index_router)
 app.include_router(jwt_router)
 app.include_router(query_router)
+
+# rapid-release
+app.include_router(rapid_release, prefix="/api/rapid-release", tags=["Rapid release"])
 
 
 @app.on_event("startup")

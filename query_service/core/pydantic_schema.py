@@ -18,6 +18,7 @@
 from pydantic import BaseModel
 from typing import Dict, Any
 
+
 class InputJSONSLdchema(BaseModel):
     type: str
     kg_data: Dict[Any, Any]
