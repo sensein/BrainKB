@@ -16,17 +16,12 @@ from core.configuration import load_environment
 from fastapi.middleware.cors import CORSMiddleware
 
 environment = load_environment()["ENV_STATE"]
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:3001",
-    "http://127.0.0.1:3001",
-    "http://3.134.90.242", #aws ip
-    "http://18.119.65.244", #graphdb
+origins = [ 
+    "https://beta.brainkb.org",
 ]
 
 if environment == "prods":
-    app =  FastAPI(docs_url=None, redoc_url=None)
+    app = FastAPI(docs_url=None, redoc_url=None)
 else:
     app = FastAPI()
 logger = logging.getLogger(__name__)
@@ -46,7 +41,7 @@ app.include_router(index_router)
 app.include_router(jwt_router)
 app.include_router(query_router)
 
-#rapid-release
+# rapid-release
 app.include_router(rapid_release, prefix="/api/rapid-release", tags=["Rapid release"])
 
 
