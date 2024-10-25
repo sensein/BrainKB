@@ -13,7 +13,6 @@ router = APIRouter()
 
 @router.post("/register", status_code=201, include_in_schema=False)
 async def register(user: UserIn, conn=Depends(connect_postgres)):
-
     if await get_user(conn=conn, email=user.email):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

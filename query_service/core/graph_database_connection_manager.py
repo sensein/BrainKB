@@ -27,8 +27,11 @@ from core.shared import contains_ip
 
 logger = logging.getLogger(__name__)
 
+
 def convert_to_turtle(jsonlddata):
-    return Graph().parse(data=jsonlddata, format='json-ld').serialize(format="turtle")
+    return Graph().parse(data=jsonlddata, format="json-ld").serialize(format="turtle")
+
+
 def _connectionmanager(request_type="get"):
     """
     Connects to a graph database using the provided connection details.
@@ -45,9 +48,16 @@ def _connectionmanager(request_type="get"):
     graphdatabase_port = load_environment()["GRAPHDATABASE_PORT"]
     graphdatabase_type = load_environment()["GRAPHDATABASE_TYPE"]
     graphdatabase_repository = load_environment()["GRAPHDATABASE_REPOSITORY"]
-    print(f"Connecting to {graphdatabase_type}-{graphdatabase_username}-{graphdatabase_password}-{graphdatabase_hostname} Repository: {graphdatabase_repository}")
+    print(
+        f"Connecting to {graphdatabase_type}-{graphdatabase_username}-{graphdatabase_password}-{graphdatabase_hostname} Repository: {graphdatabase_repository}"
+    )
 
-    if not (graphdatabase_username and graphdatabase_password and graphdatabase_hostname and graphdatabase_type):
+    if not (
+        graphdatabase_username
+        and graphdatabase_password
+        and graphdatabase_hostname
+        and graphdatabase_type
+    ):
         raise ValueNotSetException()
 
     if graphdatabase_type == "GRAPHDB":
@@ -75,8 +85,14 @@ def _connectionmanager(request_type="get"):
     elif graphdatabase_type == "BLAZEGRAPH":
         if "bigdata/sparql" in graphdatabase_hostname:
             endpoint = graphdatabase_hostname
-        elif "bigdata/" in graphdatabase_hostname or "bigdata" in graphdatabase_hostname:
-            hostname = graphdatabase_hostname[:-1] if "bigdata/" in graphdatabase_hostname else graphdatabase_hostname
+        elif (
+            "bigdata/" in graphdatabase_hostname or "bigdata" in graphdatabase_hostname
+        ):
+            hostname = (
+                graphdatabase_hostname[:-1]
+                if "bigdata/" in graphdatabase_hostname
+                else graphdatabase_hostname
+            )
             endpoint = f"{hostname}/sparql"
     else:
         raise ValueError("Unsupport database.")
@@ -93,7 +109,7 @@ def _connectionmanager(request_type="get"):
 
 def test_connection():
     connectionmanager = _connectionmanager()
-    connectionmanager.setQuery('SELECT ?s ?p ?o WHERE {?s ?p ?o} LIMIT 1')
+    connectionmanager.setQuery("SELECT ?s ?p ?o WHERE {?s ?p ?o} LIMIT 1")
     connectionmanager.setReturnFormat(JSON)
     try:
         results = connectionmanager.query().convert()
@@ -111,15 +127,21 @@ def insert_data_gdb(turtle_data):
         try:
             sparql = _connectionmanager("post")
             sparql.setMethod(POST)
-            sparql_query = """
+            sparql_query = (
+                """
                     INSERT DATA {
                     %s
                     }
-                    """ % turtle_data
+                    """
+                % turtle_data
+            )
             sparql.setQuery(sparql_query)
             response = sparql.query()
             print(response)
-            return {"status": "success", "message": "Data inserted to graph database successfully"}
+            return {
+                "status": "success",
+                "message": "Data inserted to graph database successfully",
+            }
         except Exception as e:
             return {"status": "fail", "message": {str(e)}}
     else:
@@ -136,10 +158,12 @@ def fetch_data_gdb(sparql_query):
         result = sparql.query().convert()
         return {"status": "success", "message": result}
     except Exception as e:
-        return {"status": "fail","message": str(e)}
+        return {"status": "fail", "message": str(e)}
 
 
-def concurrent_query(querylist: List[Dict[str, Any]], max_workers: int = None, timeout: int = 10) -> List[Dict[str, Any]]:
+def concurrent_query(
+    querylist: List[Dict[str, Any]], max_workers: int = None, timeout: int = 10
+) -> List[Dict[str, Any]]:
     """
     Executes a list of SPARQL queries concurrently and returns the results with the corresponding query_key.
 
@@ -173,6 +197,8 @@ def concurrent_query(querylist: List[Dict[str, Any]], max_workers: int = None, t
                 results.append({query_key: None})
             except Exception as e:
                 print(f"Error occurred during query execution for {query_key}: {e}")
-                results.append({"query_key": query_key, "result": None})  # Optional: Handle failure case
+                results.append(
+                    {"query_key": query_key, "result": None}
+                )  # Optional: Handle failure case
 
     return results

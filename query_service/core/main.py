@@ -16,7 +16,7 @@ from core.configuration import load_environment
 from fastapi.middleware.cors import CORSMiddleware
 
 environment = load_environment()["ENV_STATE"]
-origins = [ 
+origins = [
     "https://beta.brainkb.org",
 ]
 

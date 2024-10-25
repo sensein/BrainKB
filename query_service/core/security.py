@@ -115,7 +115,6 @@ security = HTTPBearer()
 
 def require_scopes(required_scopes: List[str]):
     def scoped_endpoint(credentials: HTTPAuthorizationCredentials = Depends(security)):
-
         if not verify_scopes(required_scopes, credentials.credentials):
             raise HTTPException(status_code=403, detail="Insufficient scopes")
 
