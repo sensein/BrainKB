@@ -17,7 +17,8 @@
 # @Software: PyCharm
 
 from fastapi import APIRouter, HTTPException, Body, Depends
-from fastapi import File, Form, UploadFile
+from fastapi import File, Form, UploadFile, status
+# from typing import List
 from fastapi.responses import JSONResponse
 from core.configure_rabbit_mq import publish_message
 import logging
@@ -39,14 +40,10 @@ async def ingest_file(user: Annotated[LoginUserIn, Depends(get_current_user)],
                       id: str = Form(...),
                       type: str = "file",
                       posting_user: str = Form(...),
-                      filename: str = Form(...),
                       file: UploadFile = File(...)):
     logger.info("Started ingestion operation")
 
-    if not validate_mime_type(file.content_type):
-        raise HTTPException(status_code=400,
-                            detail="Only CSV, JSON, EXCEL, PDF, RDF, TTL, JSONLD and TEXT files are supported.")
-
+    logger.debug(f"Received file: {file.filename} with type: {file.content_type}")
     if not validate_file_extension(file.filename):
         raise HTTPException(status_code=400,
                             detail="Unsupported file extension. Supported extensions: csv, json, xls, txt and pdf")
@@ -55,8 +52,14 @@ async def ingest_file(user: Annotated[LoginUserIn, Depends(get_current_user)],
     publish_message(content)
     logger.info("Successful ingestion operation")
     return JSONResponse(
-        content={"message": "File uploaded successfully", "id": id, "user": posting_user, "type":{type}, "filename": filename})
-
+        content={
+            "message": "File uploaded successfully",
+            "id": id,
+            "user": posting_user,
+            "type": type,
+            "filename": file.filename,
+            "extension": file.filename.split('.')[-1].lower()
+        })
 
 @router.post("/ingest/raw/json", dependencies=[Depends(require_scopes(["write"]))])
 async def ingest_json(user: Annotated[LoginUserIn, Depends(get_current_user)],
