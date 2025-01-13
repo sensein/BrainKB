@@ -16,23 +16,32 @@
 # @File    : file_validator.py
 # @Software: PyCharm
 
-ALLOWED_MIME_TYPES = {"application/json",  # JSON file
-                      "application/vnd.ms-excel",  # Excel file
-                      "text/plain",  # Plain text file
-                      "text/csv",  # CSV file
-                      "application/pdf",  # PDF file
-                      "application/rdf+xml",  # RDF/XML
-                      "application/ld+json",  # JSON-LD
-                      "text/turtle"  # Turtle
-                      }
-ALLOWED_EXTENSIONS = {".json",
-                      ".xls",
-                      ".txt",
-                      ".csv",
-                      ".pdf",
-                      ".ttl",
-                      ".rdf",
-                      "jsonld"}
+ALLOWED_MIME_TYPES = {
+    "application/json",        # JSON file
+    "application/vnd.ms-excel",# Excel file
+    "text/plain",             # Plain text file, also used for TTL
+    "text/csv",               # CSV file
+    "application/pdf",        # PDF file
+    "application/rdf+xml",    # RDF/XML
+    "application/ld+json",    # JSON-LD
+    "text/turtle",            # Turtle (TTL)
+    "application/x-turtle",   # Alternative MIME type for Turtle
+    "application/turtle"      # Another common MIME type for Turtle
+}
+
+ALLOWED_EXTENSIONS = {
+    ".json",
+    ".xls",
+    ".txt",
+    ".csv",
+    ".pdf",
+    ".ttl",
+    ".rdf",
+    ".jsonld",
+    ".n3",
+    ".nt"
+}
+
 
 
 def validate_file_extension(filename: str) -> bool:
