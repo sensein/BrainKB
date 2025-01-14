@@ -19,6 +19,10 @@ from fastapi import APIRouter
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("/home")
 async def root():
     return {"message": "Welcome to the producer ingest service"}
+
+@router.get("/health")
+async def health_check():
+    return {"status": "healthy"}
