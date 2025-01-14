@@ -21,7 +21,6 @@ from typing import Dict, Any
 
 
 class BaseSchema(BaseModel):
-    id: str
     user: str
     type: str
     date_created: datetime = datetime.now()
@@ -43,6 +42,7 @@ class InputJSONSLdchema(BaseModel):
 
 
 class InputTextSchema(BaseSchema):
+    type: str = "text"
     text_data: str
 
 
