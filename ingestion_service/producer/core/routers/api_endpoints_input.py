@@ -25,11 +25,12 @@ import logging
 from core.file_validator import validate_file_extension, validate_mime_type
 from core.file_validator import is_valid_jsonld
 import json
-from core.pydantic_schema import InputJSONSLdchema, InputJSONSchema, InputTextSchema, InputTurtleSchema
+from core.pydantic_schema import InputJSONSLdchema, InputJSONSchema, InputTextSchema
 from core.shared import is_valid_jsonld
 from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
+from core.shared import convert_to_turtle
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -40,27 +41,72 @@ logger = logging.getLogger(__name__)
              )
 async def ingest_kg_file(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
-        type: str = "file",
         posting_user: str = Form(...),
         file: UploadFile = File(...)):
+    """
+    Handles ingestion of knowledge graph (KG) files in TTL or JSON-LD format.
+    """
     logger.info("Started ingestion operation")
-
     logger.debug(f"Received file: {file.filename} with type: {file.content_type}")
-    if not validate_file_extension(file.filename, validation_type="kg"):
-        raise HTTPException(status_code=400,
-                            detail="Unsupported file extension. Supported extensions: TTL and JSONLD")
 
-    content = await file.read()
-    publish_message(content)
-    logger.info("Successful ingestion operation")
-    return JSONResponse(
-        content={
-            "message": "File uploaded successfully",
-            "user": posting_user,
-            "type": type,
-            "filename": file.filename,
-            "extension": file.filename.split('.')[-1].lower()
-        })
+    # Validate file extension
+    if not validate_file_extension(file.filename, validation_type="kg"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file extension. Supported extensions: TTL and JSONLD"
+        )
+
+    try:
+        content = await file.read()
+        file_extension = file.filename.split('.')[-1].lower()
+
+        if file_extension == "jsonld":
+            logger.debug("Processing JSON-LD file")
+            dict_processable_jsonld = {"user": posting_user}
+            json_data = content.decode("utf-8")
+
+            # Convert JSON-LD to Turtle format
+            turtle_representation = convert_to_turtle(json.loads(json_data))
+            if turtle_representation:
+                dict_processable_jsonld["kg_data"] = turtle_representation
+                publish_message(dict_processable_jsonld)
+                logger.info("JSON-LD file ingested successfully")
+                return JSONResponse(
+                    content={
+                        "message": "File uploaded successfully",
+                        "user": posting_user,
+                        "filename": file.filename,
+                        "extension": file_extension
+                    }
+                )
+            else:
+                logger.error("Failed to convert JSON-LD to Turtle")
+                return JSONResponse(
+                    content={"message": "Unable to process JSON-LD file"},
+                    status_code=400
+                )
+        elif file_extension == "ttl":
+            logger.debug("Processing TTL file")
+            formatted_ttl_data = {
+                "user": posting_user,
+                "kg_data": content.decode("utf-8")
+            }
+            publish_message(formatted_ttl_data)
+            logger.info("TTL file ingested successfully")
+            return JSONResponse(
+                content={
+                    "message": "File uploaded successfully",
+                    "user": posting_user,
+                    "filename": file.filename,
+                    "extension": file_extension
+                }
+            )
+        else:
+            logger.error("Unsupported file extension encountered after validation")
+            raise HTTPException(status_code=500, detail="Unexpected file extension")
+    except Exception as e:
+        logger.exception(f"An error occurred during file ingestion: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
 @router.post("/upload/document", summary="Ingest a either TXT, JSON and PDF files",
@@ -146,7 +192,7 @@ async def ingest_json(
 @router.post("/ingest/raw-jsonld",
              dependencies=[Depends(require_scopes(["write"]))]
              )
-async def ingest_raw_json(
+async def ingest_raw_jsonld(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
         jsonldinput:
         Annotated[
@@ -155,8 +201,41 @@ async def ingest_raw_json(
                 examples=[
                     {
                         "user": "testuser",
-                        "kg_data": {"@context": "https://schema.org", "@type": "Person",
-                                    "name": "John Doe"}
+                        "kg_data": {
+                            "@context": {
+                                "Person": "https://schema.org/Person",
+                                "name": "https://schema.org/name",
+                                "jobTitle": "https://schema.org/jobTitle",
+                                "worksFor": "https://schema.org/worksFor",
+                                "Organization": "https://schema.org/Organization",
+                                "email": "https://schema.org/email",
+                                "url": "https://schema.org/url",
+                                "address": "https://schema.org/address",
+                                "PostalAddress": "https://schema.org/PostalAddress",
+                                "streetAddress": "https://schema.org/streetAddress",
+                                "addressLocality": "https://schema.org/addressLocality",
+                                "addressRegion": "https://schema.org/addressRegion",
+                                "postalCode": "https://schema.org/postalCode",
+                                "addressCountry": "https://schema.org/addressCountry"
+                            },
+                            "@type": "Person",
+                            "name": "John Doe",
+                            "jobTitle": "Software Engineer",
+                            "worksFor": {
+                                "@type": "Organization",
+                                "name": "TechCorp"
+                            },
+                            "email": "john.doe@example.com",
+                            "url": "https://johndoe.com",
+                            "address": {
+                                "@type": "PostalAddress",
+                                "streetAddress": "123 Tech Street",
+                                "addressLocality": "Tech City",
+                                "addressRegion": "CA",
+                                "postalCode": "12345",
+                                "addressCountry": "US"
+                            }
+                        }
                     }
                 ],
             ),
@@ -165,13 +244,24 @@ async def ingest_raw_json(
 
         json_data = jsonldinput.json()
         if is_valid_jsonld(json_data):
-            publish_message(json_data)
+            dict_procesable_jsonld = json.loads(json_data)
+            turtle_representation = convert_to_turtle(dict_procesable_jsonld.get("kg_data", {}))
+            if turtle_representation:
+                dict_procesable_jsonld["kg_data"] = turtle_representation
+            else:
+                logger.warning("Conversion to Turtle failed. Data remains unchanged.")
+
+            publish_message(dict_procesable_jsonld)
             return JSONResponse(content={"message": "Data uploaded successfully"})
         else:
             return JSONResponse(content={"message": "Invalid format data! Please provide correct JSON-LD data."})
 
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail="Invalid JSON" + str(e))
+
+    except Exception as e:
+        logger.error(f"An unexpected error occurred: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
 
 
 @router.post("/upload/knowledge-graphs",
@@ -195,15 +285,12 @@ async def ingest_knowledge_graphs_batch(
             detail=f"All files in a batch must be of the same type. Expected: {first_file_ext}"
         )
 
-
-
     if not validate_file_extension(files[0].filename,
                                    validation_type="kg"):
         raise HTTPException(
             status_code=400,
             detail="Unsupported file extension. Supported extensions: TTL and JSONLD"
         )
-
 
     logger.info(f"Started batch ingestion operation for file type: {first_file_ext}")
 
@@ -229,7 +316,7 @@ async def ingest_knowledge_graphs_batch(
                 "message": f"Error processing file: {str(e)}"
             })
 
-    logger.info(f"Completed batch ingestion operation")
+    logger.info("Completed batch ingestion operation")
 
     return JSONResponse(
         content={
@@ -276,8 +363,6 @@ async def ingest_document_batch(
             detail="Unsupported file extension. Supported extensions: JSON,  PDF and TEXT"
         )
 
-
-
     logger.info(f"Started batch ingestion operation for file type: {first_file_ext}")
 
     results = []
@@ -301,7 +386,7 @@ async def ingest_document_batch(
                 "message": f"Error processing file: {str(e)}"
             })
 
-    logger.info(f"Completed batch ingestion operation")
+    logger.info("Completed batch ingestion operation")
 
     return JSONResponse(
         content={
@@ -319,21 +404,21 @@ async def ingest_document_batch(
              )
 async def ingest_text(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
-                      text:
-                      Annotated[
-                          InputTextSchema,
-                          Body(
-                              examples=[
-                                  {
-                                      "user": "U123r",
-                                      "type": "text",
-                                      "date_created": "2024-04-30T12:42:32.203447",
-                                      "date_modified": "2024-04-30T12:42:32.203451",
-                                      "text_data": "Lorem ipsum odor amet, consectetuer adipiscing elit. Scelerisque nostra potenti erat vivamus facilisis netus; egestas hac. Ullamcorper vivamus maecenas conubia nam dui felis at eu. Ac a fames velit penatibus adipiscing. Pulvinar imperdiet habitasse sed taciti venenatis posuere augue. Duis dolor massa curae interdum habitant ultrices aliquam adipiscing aliquet. Sapien eu parturient at curabitur ac ullamcorper suspendisse. Molestie imperdiet in turpis sit ullamcorper risus ipsum aliquet elit. Magnis libero cras potenti litora arcu nunc? Rhoncus enim ipsum cras sit semper accumsan. Tempor aliquam amet massa pharetra tristique metus imperdiet. Arcu vestibulum ex dapibus posuere augue conubia nullam faucibus. Erat sodales rhoncus tincidunt nascetur lacus neque. Lectus ante consequat ex ligula vel imperdiet. Natoque sollicitudin quam pretium; nibh duis malesuada. Consectetur augue tellus eget ligula class accumsan? Auctor id semper purus dignissim; montes posuere velit. Donec tempor tempus etiam litora integer. Viverra quam senectus ac, et dapibus inceptos adipiscing montes auctor. Integer convallis nisi himenaeos aliquet lacinia sodales. Eleifend nascetur viverra per libero a neque. Sagittis lorem ligula fusce elit blandit magnis turpis hendrerit. Blandit quisque etiam diam quisque vivamus. Conubia hac elementum porta dis hendrerit conubia sit. Cursus penatibus ridiculus arcu turpis mi vitae nostra. Vulputate blandit dui quam nibh congue curae magnis. Ridiculus sapien vel senectus augue tellus massa. Eu laoreet etiam placerat lobortis convallis metus efficitur metus. Laoreet non dui placerat nec magna. Conubia etiam in tellus vestibulum convallis erat. Orci elit volutpat felis dui venenatis nisi malesuada nec. Non dapibus suspendisse vitae inceptos viverra tellus eu. Ante volutpat enim interdum non pellentesque. Felis est curae maximus placerat eleifend phasellus quam in. Tortor senectus dictum proin aptent; tortor bibendum rhoncus. Varius nam semper nisi mus varius justo ridiculus. Molestie fusce etiam tellus diam fames. Sagittis orci ex efficitur, taciti sapien consequat condimentum viverra."
-                                  }
-                              ],
-                          ),
-                      ], ):
+        text:
+        Annotated[
+            InputTextSchema,
+            Body(
+                examples=[
+                    {
+                        "user": "U123r",
+                        "type": "text",
+                        "date_created": "2024-04-30T12:42:32.203447",
+                        "date_modified": "2024-04-30T12:42:32.203451",
+                        "text_data": "Lorem ipsum odor amet, consectetuer adipiscing elit. Scelerisque nostra potenti erat vivamus facilisis netus; egestas hac. Ullamcorper vivamus maecenas conubia nam dui felis at eu. Ac a fames velit penatibus adipiscing. Pulvinar imperdiet habitasse sed taciti venenatis posuere augue. Duis dolor massa curae interdum habitant ultrices aliquam adipiscing aliquet. Sapien eu parturient at curabitur ac ullamcorper suspendisse. Molestie imperdiet in turpis sit ullamcorper risus ipsum aliquet elit. Magnis libero cras potenti litora arcu nunc? Rhoncus enim ipsum cras sit semper accumsan. Tempor aliquam amet massa pharetra tristique metus imperdiet. Arcu vestibulum ex dapibus posuere augue conubia nullam faucibus. Erat sodales rhoncus tincidunt nascetur lacus neque. Lectus ante consequat ex ligula vel imperdiet. Natoque sollicitudin quam pretium; nibh duis malesuada. Consectetur augue tellus eget ligula class accumsan? Auctor id semper purus dignissim; montes posuere velit. Donec tempor tempus etiam litora integer. Viverra quam senectus ac, et dapibus inceptos adipiscing montes auctor. Integer convallis nisi himenaeos aliquet lacinia sodales. Eleifend nascetur viverra per libero a neque. Sagittis lorem ligula fusce elit blandit magnis turpis hendrerit. Blandit quisque etiam diam quisque vivamus. Conubia hac elementum porta dis hendrerit conubia sit. Cursus penatibus ridiculus arcu turpis mi vitae nostra. Vulputate blandit dui quam nibh congue curae magnis. Ridiculus sapien vel senectus augue tellus massa. Eu laoreet etiam placerat lobortis convallis metus efficitur metus. Laoreet non dui placerat nec magna. Conubia etiam in tellus vestibulum convallis erat. Orci elit volutpat felis dui venenatis nisi malesuada nec. Non dapibus suspendisse vitae inceptos viverra tellus eu. Ante volutpat enim interdum non pellentesque. Felis est curae maximus placerat eleifend phasellus quam in. Tortor senectus dictum proin aptent; tortor bibendum rhoncus. Varius nam semper nisi mus varius justo ridiculus. Molestie fusce etiam tellus diam fames. Sagittis orci ex efficitur, taciti sapien consequat condimentum viverra."
+                    }
+                ],
+            ),
+        ], ):
     text_data = text.json()
     publish_message(text_data)
     return JSONResponse(content={"message": "Text uploaded successfully"})
