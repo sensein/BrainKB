@@ -19,11 +19,13 @@ import json
 
 
 from core.configuration import load_environment
-from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+import logging
 import pika
 
 # Load environment variables
 
+logger = logging.getLogger(__name__)
 
 # Retrieve username and password from environment
 rabbitmq_username = load_environment()["RABBITMQ_USERNAME"]
@@ -57,9 +59,10 @@ def publish_message(message, exchange_name="ingest_message"):
                                   delivery_mode=2,  # Make message persistent
                               ))
     except Exception as e:
-        print(f"Publisher '{exchange_name}': {e} {rabbitmq_port} {rabbitmq_url} {rabbitmq_vhost}")
-        raise HTTPException(status_code=500, detail=f"RabbitMQ: {str(e)}")
-    print(f"Published message to exchange '{exchange_name}': {message}")
+        logger.info(f"Publisher '{exchange_name}': {e} {rabbitmq_port} {rabbitmq_url} {rabbitmq_vhost}")
+
+        return JSONResponse(content={"message": "Error occured. Please contact administrator"})
+    logger.info(f"Published message to exchange '{exchange_name}': {message}")
 
     channel.close()
     connection.close()
