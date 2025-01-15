@@ -53,49 +53,59 @@ def _get_base_from_context(jsonld_data):
     Handles both inline contexts (dictionaries) and external contexts (strings).
     Raises an error if neither @base nor @vocab is available.
     """
-    logger.info("Extracting base ")
     context = jsonld_data.get('@context', {})
+    logger.info(f"Extracting context {context}")
 
     # If @context is a string, fetch the external context
     if isinstance(context, str):
         try:
             response = requests.get(context)
             response.raise_for_status()
-            context_data = response.json()
+            context = response.json()
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to fetch the external context from {context}: {e}")
             raise ValueError(f"Failed to fetch the external context from {context}: {e}")
 
     # Ensure context is now a dictionary
-    if not isinstance(context_data, dict):
+    if not isinstance(context, dict):
         logger.error(f"The @context must resolve to a dictionary. Found: {type(context)}")
         raise ValueError(f"The @context must resolve to a dictionary. Found: {type(context)}")
 
+    to_fetch_context = context.get("@context")
+    if to_fetch_context is None:
+        return None
 
-    to_fetch_context = context_data.get("@context")
+    base = to_fetch_context.get('@base') or to_fetch_context.get('@vocab') or None
 
-    base = to_fetch_context.get('@base', to_fetch_context.get('@vocab'))
-
-    if not base:
+    if not base or base is None:
         # Raise an error if neither @base nor @vocab is found
-        logger.error("The JSON-LD context does not contain '@base' or '@vocab'. Please define a base URI in the context.")
-        raise ValueError(
-            "The JSON-LD context does not contain '@base' or '@vocab'. "
-            "Please define a base URI in the context."
-        )
-
+        logger.info(
+            "The JSON-LD context does not contain '@base' or '@vocab'. Please define a base URI in the context.")
+        return None
     return base
 
 
-def _convert_to_turtle(jsonld_data):
+def convert_to_turtle(jsonld_data):
     """
     Converts JSON-LD data to Turtle format.
+    Returns:
+        - Serialized Turtle string on success.
+        - False if an error occurs.
     """
     logger.info("Converting JSON-LD data to Turtle format")
     base = _get_base_from_context(jsonld_data)
-    graph = Graph()
-    graph.parse(data=json.dumps(jsonld_data), format='json-ld', base=base)
-    return graph.serialize(format="turtle")
+    try:
+        graph = Graph()
+        if base is not None:
+            graph.parse(data=json.dumps(jsonld_data), format='json-ld', base=base)
+        else:
+            graph.parse(data=json.dumps(jsonld_data), format='json-ld')
+        serialized_graph = graph.serialize(format='turtle')
+        return serialized_graph
+    except Exception as e:
+        logger.error(f"Error converting JSON-LD to Turtle: {e}")
+        return False
+
 
 
 
