@@ -435,7 +435,7 @@ async def ingest_document_batch(
     )
 
 
-@router.post("/ingest/raw/text/",
+@router.post("/ingest/raw-text",
              dependencies=[Depends(require_scopes(["write"]))]
              )
 async def ingest_text(
