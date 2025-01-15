@@ -285,8 +285,7 @@ async def ingest_knowledge_graphs_batch(
             detail=f"All files in a batch must be of the same type. Expected: {first_file_ext}"
         )
 
-    if not validate_file_extension(files[0].filename,
-                                   validation_type="kg"):
+    if not validate_file_extension(files[0].filename, validation_type="kg"):
         raise HTTPException(
             status_code=400,
             detail="Unsupported file extension. Supported extensions: TTL and JSONLD"
@@ -299,14 +298,51 @@ async def ingest_knowledge_graphs_batch(
         try:
             content = await file.read()
 
-            logger.info(f"Publishing batch knowledge graphs content - {file}")
+            if first_file_ext == "jsonld":
+                # Convert JSON-LD content to Turtle
+                json_data = content.decode("utf-8")
+                turtle_representation = convert_to_turtle(json.loads(json_data))
 
-            publish_message(content)
-            results.append({
-                "filename": file.filename,
-                "status": "success",
-                "message": "File uploaded successfully"
-            })
+                if turtle_representation:
+                    formatted_data = {
+                        "user": posting_user,
+                        "kg_data": turtle_representation
+                    }
+
+                    logger.info(f"Successfully converted JSON-LD to Turtle for file: {file.filename}")
+                    publish_message(formatted_data)
+                    results.append({
+                        "filename": file.filename,
+                        "status": "success",
+                        "message": "File uploaded successfully with Turtle conversion"
+                    })
+                else:
+                    logger.warning(f"Failed to convert JSON-LD to Turtle for file: {file.filename}")
+                    results.append({
+                        "filename": file.filename,
+                        "status": "failed",
+                        "message": "Conversion to Turtle failed"
+                    })
+            elif first_file_ext == "ttl":
+                # Directly process TTL files
+                formatted_data = {
+                    "user": posting_user,
+                    "kg_data": content.decode("utf-8")
+                }
+                publish_message(formatted_data)
+                results.append({
+                    "filename": file.filename,
+                    "status": "success",
+                    "message": "File uploaded successfully"
+                })
+            else:
+                # This shouldn't occur due to earlier validation
+                logger.error(f"Unexpected file extension for file: {file.filename}")
+                results.append({
+                    "filename": file.filename,
+                    "status": "failed",
+                    "message": "Unsupported file extension"
+                })
 
         except Exception as e:
             logger.error(f"Error processing file {file.filename}: {str(e)}")
