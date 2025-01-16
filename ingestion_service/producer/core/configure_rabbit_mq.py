@@ -46,14 +46,15 @@ def connect_to_rabbitmq():
     return connection, channel
 
 
-def publish_message(message, exchange_name="ingest_message"):
+def publish_message(message, exchange_name="ingest_message_direct"):
     """Publish a message to a fanout exchange in RabbitMQ, meaning, there will be multiple consumers (or subscribers)
     for the same mesage."""
     connection, channel = connect_to_rabbitmq()
-    channel.exchange_declare(exchange=exchange_name, exchange_type='fanout')
+    channel.exchange_declare(exchange=exchange_name, durable=True)
     try:
+        # print(f"message to publish {message}")
         channel.basic_publish(exchange=exchange_name,
-                              routing_key='',  # Routing key is ignored by fanout exchanges
+                              routing_key='brainkb',  # Routing key is ignored by fanout exchanges
                               body=message,
                               properties=pika.BasicProperties(
                                   delivery_mode=2,  # Make message persistent
