@@ -189,7 +189,7 @@ async def ingest_raw_jsonld(
         raise HTTPException(status_code=400, detail="Invalid JSON" + str(e))
 
     except Exception as e:
-        logger.error(f"An unexpected error occurred: {e}")
+        logger.error(f"An unexpected error occurred: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
 
 
@@ -349,7 +349,7 @@ async def ingest_knowledge_graphs_batch(
                 })
             else:
                 # This shouldn't occur due to earlier validation
-                logger.error(f"Unexpected file extension for file: {file.filename}")
+                logger.error(f"Unexpected file extension for file: {file.filename}", exc_info=True)
                 results.append({
                     "filename": file.filename,
                     "status": "failed",
@@ -357,7 +357,7 @@ async def ingest_knowledge_graphs_batch(
                 })
 
         except Exception as e:
-            logger.error(f"Error processing file {file.filename}: {str(e)}")
+            logger.error(f"Error processing file {file.filename}: {str(e)}", exc_info=True)
             results.append({
                 "filename": file.filename,
                 "status": "failed",
@@ -460,7 +460,7 @@ async def ingest_document_batch(
             })
 
         except Exception as e:
-            logger.error(f"Error processing file {file.filename}: {str(e)}")
+            logger.error(f"Error processing file {file.filename}: {str(e)}", exc_info=True)
             results.append({
                 "filename": file.filename,
                 "status": "failed",

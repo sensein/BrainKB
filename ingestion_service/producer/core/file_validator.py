@@ -46,16 +46,15 @@ ALLOWED_KG_EXTENSIONS = {
 
 ALLOWED_RAW_FILE_EXTENSIONS = {
     ".json",
-    # ".xls",
     ".txt",
-    # ".csv",
     ".pdf",
 
 }
 
 
 def validate_file_extension(filename: str, validation_type="raw") -> bool:
-    logger.info(f"Running validate_file_extension")
+    """Validate file by checking the file extension"""
+    logger.info(f"Running validation to check if the uploaded file ({filename}) is allowed.")
     if validation_type=="kg":
         return any(filename.endswith(ext) for ext in ALLOWED_KG_EXTENSIONS)
 
@@ -63,7 +62,8 @@ def validate_file_extension(filename: str, validation_type="raw") -> bool:
 
 
 def validate_mime_type(mime_type: str, validation_type="raw") -> bool:
-    logger.info(f"Running validate_mime_type")
+    """Validate mime type of the uploaded file"""
+    logger.info(f"Running validation to check MIME type of the uploaded file.")
     if validation_type == "kg":
         return mime_type in ALLOWED_KG_MIME_TYPES
 
@@ -75,22 +75,22 @@ def is_valid_turtle(turtle_data: str) -> bool:
         graph = Graph()
         graph.parse(data=turtle_data, format="turtle")
         return True
-    except exceptions.ParserError:
-        logger.error(f"ParserError error")
+    except exceptions.ParserError as pe:
+        logger.error(f"ParserError error:  {pe}", exc_info=True)
         return False
     except Exception as e:
-        logger.error(f"Validation error: {e}")
+        logger.error(f"Validation error: {e}", exc_info=True)
         return False
 
 def is_valid_jsonld(jsonld_data: dict) -> bool:
     """Validates whether the given dictionary is a valid JSON-LD format."""
-    logger.info(f"Running is_valid_jsonld")
+    logger.info(f"Running validation to check whether the given dictionary is a valid JSON-LD format.")
     try:
         compacted = jsonld.compact(jsonld_data, jsonld_data.get("@context", {}))
         return "@context" in compacted and "@type" in compacted
-    except JSONDecodeError:
-        logger.error(f"JSONDecodeError error")
+    except JSONDecodeError as jde:
+        logger.error(f"JSONDecodeError error: {jde}", exc_info=True)
         return False
     except Exception as e:
-        logger.error(f"Validation error: {e}")
+        logger.error(f"Validation error: {e}", exc_info=True)
         return False

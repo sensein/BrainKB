@@ -52,7 +52,6 @@ def publish_message(message, exchange_name="ingest_message_direct"):
     connection, channel = connect_to_rabbitmq()
     channel.exchange_declare(exchange=exchange_name, durable=True)
     try:
-        # print(f"message to publish {message}")
         channel.basic_publish(exchange=exchange_name,
                               routing_key='brainkb',  # Routing key is ignored by fanout exchanges
                               body=message,
@@ -60,9 +59,9 @@ def publish_message(message, exchange_name="ingest_message_direct"):
                                   delivery_mode=2,  # Make message persistent
                               ))
     except Exception as e:
-        logger.info(f"Publisher '{exchange_name}': {e} {rabbitmq_port} {rabbitmq_url} {rabbitmq_vhost}")
+        logger.error(f"Publisher '{exchange_name}': {e} {rabbitmq_port} {rabbitmq_url} {rabbitmq_vhost}", exc_info=True)
 
-        return JSONResponse(content={"message": "Error occured. Please contact administrator"})
+        return JSONResponse(content={"message": "Error occured. Please contact administrator"}, status_code=400)
     logger.info(f"Published message to exchange '{exchange_name}': {message}")
 
     channel.close()
