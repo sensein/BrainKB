@@ -19,11 +19,13 @@ import json
 
 
 from core.configuration import load_environment
-from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+import logging
 import pika
 
 # Load environment variables
 
+logger = logging.getLogger(__name__)
 
 # Retrieve username and password from environment
 rabbitmq_username = load_environment()["RABBITMQ_USERNAME"]
@@ -44,22 +46,23 @@ def connect_to_rabbitmq():
     return connection, channel
 
 
-def publish_message(message, exchange_name="ingest_message"):
+def publish_message(message, exchange_name="ingest_message_direct"):
     """Publish a message to a fanout exchange in RabbitMQ, meaning, there will be multiple consumers (or subscribers)
     for the same mesage."""
     connection, channel = connect_to_rabbitmq()
-    channel.exchange_declare(exchange=exchange_name, exchange_type='fanout')
+    channel.exchange_declare(exchange=exchange_name, durable=True)
     try:
         channel.basic_publish(exchange=exchange_name,
-                              routing_key='',  # Routing key is ignored by fanout exchanges
+                              routing_key='brainkb',  # Routing key is ignored by fanout exchanges
                               body=message,
                               properties=pika.BasicProperties(
                                   delivery_mode=2,  # Make message persistent
                               ))
     except Exception as e:
-        print(f"Publisher '{exchange_name}': {e} {rabbitmq_port} {rabbitmq_url} {rabbitmq_vhost}")
-        raise HTTPException(status_code=500, detail=f"RabbitMQ: {str(e)}")
-    print(f"Published message to exchange '{exchange_name}': {message}")
+        logger.error(f"Publisher '{exchange_name}': {e} {rabbitmq_port} {rabbitmq_url} {rabbitmq_vhost}", exc_info=True)
+
+        return JSONResponse(content={"message": "Error occured. Please contact administrator"}, status_code=400)
+    logger.info(f"Published message to exchange '{exchange_name}': {message}")
 
     channel.close()
     connection.close()

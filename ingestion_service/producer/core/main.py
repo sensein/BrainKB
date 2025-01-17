@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 app.add_middleware(CorrelationIdMiddleware)
 
 
-app.include_router(index_router)
-app.include_router(jwt_router)
-app.include_router(ingest_api_router)
+app.include_router(index_router, prefix="/api")
+app.include_router(jwt_router, prefix="/api", tags=["Security"])
+app.include_router(ingest_api_router, prefix="/api", tags=["Ingestion"])
 
 @app.on_event("startup")
 async def startup_event():

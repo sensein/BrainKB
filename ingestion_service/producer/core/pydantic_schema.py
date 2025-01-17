@@ -15,15 +15,13 @@
 # @Web     : https://tekrajchhetri.com/
 # @File    : pydantic_schema.py
 # @Software: PyCharm
-from pydantic import BaseModel
 from datetime import datetime
 from typing import Dict, Any
+from pydantic import BaseModel, Field
 
 
 class BaseSchema(BaseModel):
-    id: str
     user: str
-    type: str
     date_created: datetime = datetime.now()
     date_modified: datetime = datetime.now()
 
@@ -38,68 +36,16 @@ class InputJSONSchema(BaseSchema):
 
 
 class InputJSONSLdchema(BaseModel):
-    type: str
+    user: str
     kg_data: Dict[Any, Any]
 
 
 class InputTextSchema(BaseSchema):
+    user: str = "testuser"
     text_data: str
 
 
-if __name__ == "__main__":
-    """Test pydantic schema"""
-    import json
-    print(InputJSONSchema.model_validate_json(
-        json.dumps(
-            {
-                "id": "1BCD",
-                "user": "U123r",
-                "date_created": "2024-04-30T12:42:32.203447",
-                "date_modified": "2024-04-30T12:42:32.203451",
-                "json_data": {
-                    "neuroscience_disorders": [
-                        {
-                            "disorder": "Alzheimer's disease",
-                            "description": "A progressive neurodegenerative disorder that leads to memory loss and cognitive decline.",
-                            "symptoms": [
-                                "Memory loss",
-                                "Confusion",
-                                "Trouble with language and reasoning"
-                            ],
-                            "treatments": [
-                                "Medications (e.g., cholinesterase inhibitors)",
-                                "Cognitive therapy"
-                            ]
-                        },
-                        {
-                            "disorder": "Parkinson's disease",
-                            "description": "A neurodegenerative disorder characterized by tremors, rigidity, and difficulty with movement.",
-                            "symptoms": [
-                                "Tremors",
-                                "Bradykinesia",
-                                "Postural instability"
-                            ],
-                            "treatments": [
-                                "Levodopa",
-                                "Deep brain stimulation (DBS)"
-                            ]
-                        },
-                        {
-                            "disorder": "Schizophrenia",
-                            "description": "A chronic and severe mental disorder that affects how a person thinks, feels, and behaves.",
-                            "symptoms": [
-                                "Hallucinations",
-                                "Delusions",
-                                "Disorganized thinking"
-                            ],
-                            "treatments": [
-                                "Antipsychotic medications",
-                                "Psychotherapy"
-                            ]
-                        }
-                    ]
-                }
-            }
-        )
-    )
-    )
+class InputTurtleSchema(BaseModel):
+    user: str = "testuser"
+    turtle_kg_data: str = Field(..., description="RDF Turtle data as a multiline string.")
+
