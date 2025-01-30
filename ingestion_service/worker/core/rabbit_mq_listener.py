@@ -29,6 +29,7 @@ rabbitmq_password = load_environment()["RABBITMQ_PASSWORD"]
 rabbitmq_url = load_environment()["RABBITMQ_URL"]
 rabbitmq_port = load_environment()["RABBITMQ_PORT"]
 rabbitmq_vhost = load_environment()["RABBITMQ_VHOST"]
+ingest_url = load_environment()["INGEST_URL"]
 
 logger = logging.getLogger(__name__)
 def connect_to_rabbitmq():
@@ -53,12 +54,12 @@ def callback(ch, method, properties, body):
     print("Message processed and acknowledged")
 
 
-def start_consuming(exchange_name='ingest_message'):
+def start_consuming(exchange_name='ingest_message_direct', routing_key='brainkb'):
     connection, channel = connect_to_rabbitmq()
-    channel.exchange_declare(exchange=exchange_name, exchange_type='fanout')
+    channel.exchange_declare(exchange=exchange_name, exchange_type='direct',durable=True)
     result = channel.queue_declare(queue='', exclusive=True)
     queue_name = result.method.queue
-    channel.queue_bind(exchange=exchange_name, queue=queue_name)
+    channel.queue_bind(exchange=exchange_name, queue=queue_name, routing_key=routing_key)
 
     channel.basic_consume(
         queue=queue_name, on_message_callback=callback, auto_ack=False)
