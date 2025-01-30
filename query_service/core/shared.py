@@ -295,3 +295,31 @@ def clean_response_statistics(response: List[Dict[str, Any]]):
         return {"error": f"Validation error: {e}"}
     except Exception as e:
         return {"error": f"An unexpected error occurred: {e}"}
+
+def convert_ttl_to_named_graph(ttl_str: str, named_graph_uri: str = "https://brainkb.org/test") -> str:
+    """
+    Converts a Turtle (TTL) file to a Named Graph format and returns it as a string.
+
+    :param ttl_str: A string containing Turtle (TTL) formatted RDF data.
+    :param named_graph_uri: URI of the named graph.
+    :return: A string containing the N-Quads formatted data.
+
+    Example:
+        Input ttl:
+            @prefix ex: <http://example.org/> .
+            ex:Alice ex:knows ex:Bob .
+        Output:
+            Graph <http://example.org/myGraph> {
+             <http://example.org/Alice> <http://example.org/knows> <http://example.org/Bob> .
+           }
+
+
+    """
+    g = Graph()
+    g.parse(data=ttl_str, format="turtle")
+    # format output to include `Graph <> {}` syntax
+    n3_named_graph_data = f"Graph <{named_graph_uri}> {{\n"
+    n3_named_graph_data += g.serialize(format="nt")  # Serialize as N-Triples (s p o .) for structured output
+    n3_named_graph_data += "}\n"
+
+    return n3_named_graph_data
