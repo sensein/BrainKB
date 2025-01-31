@@ -35,7 +35,7 @@ def extract_base_namespace(graph):
         if isinstance(subj, URIRef) and "#" not in subj and "/" in str(subj):
             base = str(subj).rsplit("/", 1)[0] + "/"  # Extract the base URI up to the last '/'
             return Namespace(base)
-    return Namespace("http://example.org/kgdata/")  # Default fallback if extraction fails
+    return Namespace("http://brainkb.org/")  # Default fallback if extraction fails
 
 
 def attach_provenance(user, ttl_data):
