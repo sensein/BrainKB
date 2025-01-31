@@ -108,15 +108,22 @@ def _connectionmanager(request_type="get"):
 
 
 def test_connection():
+    """
+        Check if the SPARQL response indicates a successful connection.
+
+        Args:
+            response (dict): The JSON response from the SPARQL query.
+
+        Returns:
+            bool: True if the response indicates a successful connection, False otherwise.
+        """
     connectionmanager = _connectionmanager()
     connectionmanager.setQuery("SELECT ?s ?p ?o WHERE {?s ?p ?o} LIMIT 1")
     connectionmanager.setReturnFormat(JSON)
     try:
-        results = connectionmanager.query().convert()
-        if len(results["results"]["bindings"]) > 0:
-            return True
-        else:
-            return False
+        response = connectionmanager.query().convert()
+        return isinstance(response, dict) and "head" in response and "results" in response and "bindings" in response["results"]
+
     except Exception as e:
         print(f"Error-test conn:{e}")
         return False
