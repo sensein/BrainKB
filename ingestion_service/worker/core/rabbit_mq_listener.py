@@ -22,7 +22,7 @@ import logging
 from core.configuration import load_environment
 from core.shared import get_endpoints
 import requests
-
+from core.shared import attach_provenance
 # Retrieve username and password from environment
 rabbitmq_username = load_environment()["RABBITMQ_USERNAME"]
 rabbitmq_password = load_environment()["RABBITMQ_PASSWORD"]
@@ -44,14 +44,21 @@ def connect_to_rabbitmq():
 def callback(ch, method, properties, body):
     """Callback function to handle messages from RabbitMQ."""
     logger.info("###### Received!! ######")
-    req_type = json.loads(body)["type"]
-    _URL = get_endpoints(req_type)
+    req_type = json.loads(body)
+    if req_type["data_type"] == "ttl":
 
-    if req_type == "json" or req_type=="jsonld":
-        req = requests.post(_URL, data=body, headers={"Content-Type": "application/json"})
-        print(req.status_code)
+        ttl_data_with_provenance = attach_provenance(user=req_type["user"],
+                                                 ttl_data=req_type["kg_data"]
+                                                 )
+        kg_data_for_req = {"kg_data":ttl_data_with_provenance,
+                           "type": req_type["data_type"]}
+        if isinstance(kg_data_for_req, dict):
+            kg_data_for_req = json.dumps(kg_data_for_req)  # Convert to JSON string
+
+        req = requests.post(ingest_url, data=kg_data_for_req, headers={"Content-Type": "application/json"})
+        logger.info(req.status_code)
     ch.basic_ack(delivery_tag=method.delivery_tag)
-    print("Message processed and acknowledged")
+    logger.info("Message processed and acknowledged")
 
 
 def start_consuming(exchange_name='ingest_message_direct', routing_key='brainkb'):
