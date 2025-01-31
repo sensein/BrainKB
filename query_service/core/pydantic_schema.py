@@ -19,6 +19,6 @@ from pydantic import BaseModel
 from typing import Dict, Any
 
 
-class InputJSONSLdchema(BaseModel):
+class InputKGTripleSchema(BaseModel):
     type: str
-    kg_data: Dict[Any, Any]
+    kg_data: str
