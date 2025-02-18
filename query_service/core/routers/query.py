@@ -23,10 +23,35 @@ from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
 from fastapi import Depends
-
+from pydantic import BaseModel, root_validator
+from typing import List
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
+@router.get("/query/registered-named-graphs")
+async def get_named_graphs():
+    query_named_graph = """
+          PREFIX prov: <http://www.w3.org/ns/prov#>
+        PREFIX dcterms: <http://purl.org/dc/terms/>
+        Select distinct ?graph ?description ?registered_at
+        WHERE  {
+          GRAPH <https://brainkb.org/metadata/named-graph> {
+            ?graph dcterms:description ?description;
+               prov:generatedAtTime ?registered_at.
+          } 
+        }
+    """
+    response =  fetch_data_gdb(query_named_graph)
+
+    response_graph = {}
+    for graphs_info in response["message"]["results"]["bindings"]:
+        response_graph[graphs_info["graph"]["value"]] = {
+            "graph": graphs_info["graph"]["value"],
+            "description": graphs_info["description"]["value"],
+            "registered_at": graphs_info["registered_at"]["value"]
+        }
+    return response_graph
 
 
 @router.get("/query/sparql/", include_in_schema=False)
