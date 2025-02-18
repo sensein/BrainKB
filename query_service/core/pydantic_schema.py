@@ -15,10 +15,14 @@
 # @Web     : https://tekrajchhetri.com/
 # @File    : pydantic_schema.py
 # @Software: PyCharm
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl
 from typing import Dict, Any
 
 
 class InputKGTripleSchema(BaseModel):
     type: str
     kg_data: str
+
+class NamedGraphSchema(BaseModel):
+    named_graph_url: HttpUrl
+    description: str
