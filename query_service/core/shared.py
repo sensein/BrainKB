@@ -16,12 +16,15 @@
 # @File    : shared.py
 # @Software: PyCharm
 
-from rdflib import Graph
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 from typing import List, Dict, Any
 import re
 import os
+
+from rdflib import Graph, URIRef, Literal, RDF, XSD , DCTERMS , PROV
+import datetime
+
 
 try:
     from yaml import CLoader as Loader
@@ -323,3 +326,44 @@ def convert_ttl_to_named_graph(ttl_str: str, named_graph_uri: str = "https://bra
     n3_named_graph_data += "}\n"
 
     return n3_named_graph_data
+
+def named_graph_metadata(named_graph_url, description):
+    """
+        Generates metadata for a named graph using the PROV and DCTERMS ontologies.
+
+        This function creates an RDF graph containing metadata for a given named graph.
+        It includes:
+        - The named graph as a PROV entity.
+        - A timestamp indicating when the metadata was generated.
+        - A description of the named graph.
+
+        The generated RDF graph is then converted into a named graph format.
+
+        Args:
+            named_graph_url (str): The URL of the named graph for which metadata is created.
+            description (str): A textual description of the named graph.
+
+        Returns:
+            str: The serialized named graph metadata in Turtle format.
+
+        Dependencies:
+            - rdflib (for RDF graph manipulation)
+            - datetime (for timestamp generation)
+            - convert_ttl_to_named_graph (a function to convert RDF Turtle data into a named graph)
+
+        Example:
+            >>> metadata = named_graph_metadata("https://example.org/mygraph", "This is a sample named graph.")
+            >>> print(metadata)  # Outputs the RDF metadata as a named graph in ntriple format
+    """
+    g = Graph()
+    prov_entity = URIRef(named_graph_url)
+    created_At = datetime.datetime.utcnow().isoformat() + "Z"
+    g.add((prov_entity, RDF.type, PROV.Entity))
+    g.add((prov_entity,PROV.generatedAtTime, Literal(created_At, datatype=XSD.dateTime)))
+    g.add((prov_entity,DCTERMS.description, Literal(description, datatype=XSD.string)))
+    named_graph_metadata = convert_ttl_to_named_graph(
+        ttl_str=g.serialize(format='turtle'),
+        named_graph_uri="https://brainkb.org/metadata/named-graph"
+    )
+    return named_graph_metadata
+
