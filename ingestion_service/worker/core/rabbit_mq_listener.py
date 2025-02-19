@@ -33,6 +33,8 @@ ingest_url = load_environment()["INGEST_URL"]
 
 logger = logging.getLogger(__name__)
 def connect_to_rabbitmq():
+    """Connect to RabbitMQ"""
+    logger.info("###### Connect to RabbitMQ ######")
     credentials = pika.PlainCredentials(rabbitmq_username, rabbitmq_password)
     connection = pika.BlockingConnection(
         pika.ConnectionParameters(rabbitmq_url, rabbitmq_port, rabbitmq_vhost, credentials)
@@ -45,23 +47,28 @@ def callback(ch, method, properties, body):
     """Callback function to handle messages from RabbitMQ."""
     logger.info("###### Received!! ######")
     req_type = json.loads(body)
-    if req_type["data_type"] == "ttl":
+    logger.info(f"###### Received data before attaching provenance - {req_type}")
 
+
+    # the ingested data comes in TTL, particularly, the json-ld and ttl data
+    if req_type["data_type"] == "ttl":
         ttl_data_with_provenance = attach_provenance(user=req_type["user"],
                                                  ttl_data=req_type["kg_data"]
                                                  )
         kg_data_for_req = {"kg_data":ttl_data_with_provenance,
                            "type": req_type["data_type"]}
+        logger.info(f"###### After adding ingestion provenance - {kg_data_for_req}")
         if isinstance(kg_data_for_req, dict):
-            kg_data_for_req = json.dumps(kg_data_for_req)  # Convert to JSON string
-
+            kg_data_for_req = json.dumps(kg_data_for_req)
+        logger.info(f"###### Sending data to QueryService to insert into the database - {kg_data_for_req}  ######")
         req = requests.post(ingest_url, data=kg_data_for_req, headers={"Content-Type": "application/json"})
         logger.info(req.status_code)
     ch.basic_ack(delivery_tag=method.delivery_tag)
-    logger.info("Message processed and acknowledged")
+    logger.info("###### Acknowledging the RabbitMQ queue that the message in the queue has been processed ###### ")
 
 
 def start_consuming(exchange_name='ingest_message_direct', routing_key='brainkb'):
+    logger.info("###### Starting the RabbitMQ consumer ######")
     connection, channel = connect_to_rabbitmq()
     channel.exchange_declare(exchange=exchange_name, exchange_type='direct',durable=True)
     result = channel.queue_declare(queue='', exclusive=True)
