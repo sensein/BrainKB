@@ -31,6 +31,7 @@ from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
 from core.shared import convert_to_turtle
+from core.shared import named_graph_exists
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ async def ingest_text(
         ], ):
     text_data = text.json()
     publish_message(text_data)
-    return JSONResponse(content={"message": "Text uploaded successfully"})
+    return JSONResponse(content={"message": "Text uploaded successfully to messaging server"})
 
 
 @router.post("/ingest/raw-json",
@@ -115,7 +116,7 @@ async def ingest_json(
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail="Invalid JSON" + str(e))
 
-    return JSONResponse(content={"message": "Data uploaded successfully"})
+    return JSONResponse(content={"message": "Data uploaded successfully to messaging server"})
 
 
 @router.post("/ingest/raw-jsonld",
@@ -130,6 +131,7 @@ async def ingest_raw_jsonld(
                 examples=[
                     {
                         "user": "testuser",
+                        "graph":"https://example.com/",
                         "kg_data": {
                             "@context": {
                                 "bican": "https://identifiers.org/brain-bican/vocab/",
@@ -181,17 +183,24 @@ async def ingest_raw_jsonld(
         json_data = jsonldinput.json()
         if is_valid_jsonld(json_data):
             dict_procesable_jsonld = json.loads(json_data)
-            turtle_representation = convert_to_turtle(dict_procesable_jsonld.get("kg_data", {}))
-            if turtle_representation:
-                dict_procesable_jsonld["data_type"] = "ttl"
-                dict_procesable_jsonld["kg_data"] = turtle_representation
-            else:
-                logger.warning("Conversion to Turtle failed. Data remains unchanged.")
+            named_graph_iri = named_graph_exists(dict_procesable_jsonld.get("graph"))
 
-            serialized_message = json.dumps(dict_procesable_jsonld)
-            encoded_message = serialized_message.encode('utf-8')
-            publish_message(encoded_message)
-            return JSONResponse(content={"message": "Data uploaded successfully"})
+
+            if named_graph_iri["status"]==True:
+                turtle_representation = convert_to_turtle(dict_procesable_jsonld.get("kg_data", {}))
+                if turtle_representation:
+                    dict_procesable_jsonld["data_type"] = "ttl"
+                    dict_procesable_jsonld["named_graph"] = named_graph_iri["formatted_iri"]
+                    dict_procesable_jsonld["kg_data"] = turtle_representation
+                else:
+                    logger.warning("Conversion to Turtle failed. Data remains unchanged.")
+
+                serialized_message = json.dumps(dict_procesable_jsonld)
+                encoded_message = serialized_message.encode('utf-8')
+                publish_message(encoded_message)
+                return JSONResponse(content={"message": "Data uploaded successfully to messaging server"})
+            else:
+                return JSONResponse(content={"message": named_graph_iri["message"]})
         else:
             return JSONResponse(content={"message": "Invalid format data! Please provide correct JSON-LD data."})
 
@@ -207,8 +216,9 @@ async def ingest_raw_jsonld(
              dependencies=[Depends(require_scopes(["write"]))]
              )
 async def ingest_kg_file(
-        # user: Annotated[LoginUserIn, Depends(get_current_user)],
+        user: Annotated[LoginUserIn, Depends(get_current_user)],
         posting_user: str = Form(...),
+        graph: str = Form(...),
         file: UploadFile = File(...)):
     """
     Handles ingestion of knowledge graph (KG) files in TTL or JSON-LD format.
@@ -222,6 +232,9 @@ async def ingest_kg_file(
             status_code=400,
             detail="Unsupported file extension. Supported extensions: TTL and JSONLD"
         )
+    named_graph_iri = named_graph_exists(graph)
+    if named_graph_iri["status"] != True:
+        return JSONResponse(content={"message": named_graph_iri["message"]})
 
     try:
         content = await file.read()
@@ -229,7 +242,8 @@ async def ingest_kg_file(
 
         if file_extension == "jsonld":
             logger.debug("Processing JSON-LD file")
-            dict_processable_jsonld = {"user": posting_user, "data_type": "ttl"}
+            dict_processable_jsonld = {"user": posting_user, "data_type": "ttl",
+                                       "named_graph":named_graph_iri["formatted_iri"]}
             json_data = content.decode("utf-8")
 
             # Convert JSON-LD to Turtle format
@@ -238,11 +252,12 @@ async def ingest_kg_file(
                 dict_processable_jsonld["kg_data"] = turtle_representation
                 serialized_message = json.dumps(dict_processable_jsonld)
                 encoded_message = serialized_message.encode('utf-8')
+
                 publish_message(encoded_message)
                 logger.info("JSON-LD file ingested successfully")
                 return JSONResponse(
                     content={
-                        "message": "File uploaded successfully",
+                        "message": "File uploaded successfully to messaging server",
                         "user": posting_user,
                         "filename": file.filename,
                         "extension": file_extension
@@ -259,6 +274,7 @@ async def ingest_kg_file(
             formatted_ttl_data = {
                 "user": posting_user,
                 "data_type": "ttl",
+                "named_graph": named_graph_iri["formatted_iri"],
                 "kg_data": content.decode("utf-8")
             }
             serialized_message_ttl = json.dumps(formatted_ttl_data)
@@ -267,7 +283,7 @@ async def ingest_kg_file(
             logger.info("TTL file ingested successfully")
             return JSONResponse(
                 content={
-                    "message": "File uploaded successfully",
+                    "message": "File uploaded successfully to messaging server",
                     "user": posting_user,
                     "filename": file.filename,
                     "extension": file_extension
@@ -290,9 +306,14 @@ async def ingest_knowledge_graphs_batch(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
         files: List[UploadFile] = File(...),
         posting_user: str = Form(...),
+        graph: str = Form(...)
+
 ):
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
+    named_graph_iri = named_graph_exists(graph)
+    if named_graph_iri["status"] != True:
+        return JSONResponse(content={"message": named_graph_iri["message"]})
 
     # Validate all files are of the same type
     first_file_ext = files[0].filename.split('.')[-1].lower()
@@ -324,6 +345,7 @@ async def ingest_knowledge_graphs_batch(
                     formatted_data = {
                         "user": posting_user,
                         "kg_data": turtle_representation,
+                        "named_graph": named_graph_iri["formatted_iri"],
                         "data_type": "ttl",
                     }
 
@@ -336,7 +358,7 @@ async def ingest_knowledge_graphs_batch(
                     results.append({
                         "filename": file.filename,
                         "status": "success",
-                        "message": "File uploaded successfully with Turtle conversion"
+                        "message": "File uploaded successfully with Turtle conversion to messaging server"
                     })
                 else:
                     logger.warning(f"Failed to convert JSON-LD to Turtle for file: {file.filename}")
@@ -350,6 +372,7 @@ async def ingest_knowledge_graphs_batch(
                 formatted_data = {
                     "user": posting_user,
                     "kg_data": content.decode("utf-8"),
+                    "named_graph": named_graph_iri["formatted_iri"],
                     "data_type": "ttl",
                 }
                 serialized_message_ttl_batch = json.dumps(formatted_data)
@@ -358,7 +381,7 @@ async def ingest_knowledge_graphs_batch(
                 results.append({
                     "filename": file.filename,
                     "status": "success",
-                    "message": "File uploaded successfully"
+                    "message": "File uploaded successfully to messaging server"
                 })
             else:
                 # This shouldn't occur due to earlier validation
@@ -417,7 +440,7 @@ async def ingest_raw_file(
     logger.info("Successful ingestion operation")
     return JSONResponse(
         content={
-            "message": "File uploaded successfully",
+            "message": "File uploaded successfully to messaging server",
             "user": posting_user,
             "filename": file.filename,
             "extension": file.filename.split('.')[-1].lower()
@@ -468,7 +491,7 @@ async def ingest_document_batch(
             results.append({
                 "filename": file.filename,
                 "status": "success",
-                "message": "File uploaded successfully"
+                "message": "File uploaded successfully to messaging server"
             })
 
         except Exception as e:

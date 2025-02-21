@@ -33,7 +33,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/knowledge-graph-triples/",
+@router.post("/insert/knowledge-graph-triples/",
              include_in_schema=True
              )
 async def insert_knowledge_graph_triples(
@@ -44,9 +44,11 @@ async def insert_knowledge_graph_triples(
         data = json.loads(request.json())
         logger.info(f"Received data: {data}")
         if data["type"] == "ttl":
-            named_graph_ttl = convert_ttl_to_named_graph(data["kg_data"])
+            named_graph_ttl = convert_ttl_to_named_graph(ttl_str=data["kg_data"],
+                                                         named_graph_uri=data["named_graph_iri"])
             response = insert_data_gdb(named_graph_ttl)
             return response
+
     except json.JSONDecodeError as e:
         logger.error("JSON decoding failed", exc_info=True)
         raise HTTPException(

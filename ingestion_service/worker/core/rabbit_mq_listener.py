@@ -56,11 +56,14 @@ def callback(ch, method, properties, body):
                                                  ttl_data=req_type["kg_data"]
                                                  )
         kg_data_for_req = {"kg_data":ttl_data_with_provenance,
+                           "named_graph_iri":req_type["named_graph"],
                            "type": req_type["data_type"]}
+
         logger.info(f"###### After adding ingestion provenance - {kg_data_for_req}")
         if isinstance(kg_data_for_req, dict):
             kg_data_for_req = json.dumps(kg_data_for_req)
         logger.info(f"###### Sending data to QueryService to insert into the database - {kg_data_for_req}  ######")
+
         req = requests.post(ingest_url, data=kg_data_for_req, headers={"Content-Type": "application/json"})
         logger.info(req.status_code)
     ch.basic_ack(delivery_tag=method.delivery_tag)
