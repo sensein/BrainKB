@@ -21,7 +21,7 @@ import json
 from rdflib import Graph
 import requests
 import logging
-
+from core.configuration import load_environment
 logger = logging.getLogger(__name__)
 
 # Helper function to resolve issues during the conversion from JSON-LD to Turtle representation.
@@ -121,3 +121,61 @@ def is_valid_jsonld(jsonld_str):
     except ValueError:
         return False
 
+def check_url_for_slash(url:str):
+    if not url.endswith("/"):
+        return url + "/"
+    return url
+
+def check_if_url_wellformed(url:str):
+    "We want to ensure that the name graph IRI is wellformed, i.e., starts with http or https, not www"
+    if url is None:
+        return False
+    else:
+        return True if url.startswith("http://") or  url.startswith("https://") else False
+
+
+import requests
+
+
+def named_graph_exists(named_graph_iri: str) -> dict:
+    """
+    Checks whether a named graph exists in the registered named graphs list.
+
+    Args:
+        named_graph_iri (str): The IRI of the named graph to check.
+
+    Returns:
+        dict: A dictionary indicating success or failure with a relevant message.
+    """
+
+    query_service_url = load_environment().get("QUERY_SERVICE_BASE_URL", "")
+    endpoint = f"{check_url_for_slash(query_service_url)}query/registered-named-graphs"
+
+    # Validate the named graph IRI
+    print(check_if_url_wellformed(named_graph_iri))
+    if not check_if_url_wellformed(named_graph_iri):
+        return {
+            "status": "error",
+            "message": "The graph IRI is not well-formed. It should start with 'http' or 'https'."
+        }
+
+    try:
+        response = requests.get(endpoint)
+        response.raise_for_status()  # Raise an error for bad responses (4xx, 5xx)
+
+        registered_graphs = response.json()
+        formatted_iri= check_url_for_slash(named_graph_iri)
+        if formatted_iri in registered_graphs:
+            return {
+                "status": True,
+                "formatted_iri": formatted_iri
+            }
+        return {
+                "status": False,
+                "message": f"The graph is not registered. Available graphs: {list(registered_graphs.keys())}"
+            }
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "message": f"Error connecting to query service: {str(e)}"
+        }
