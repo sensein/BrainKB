@@ -21,6 +21,7 @@ from typing import Dict, Any
 
 class InputKGTripleSchema(BaseModel):
     type: str
+    named_graph_iri: str
     kg_data: str
 
 class NamedGraphSchema(BaseModel):

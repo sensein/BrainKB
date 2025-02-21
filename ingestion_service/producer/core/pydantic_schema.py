@@ -37,6 +37,7 @@ class InputJSONSchema(BaseSchema):
 
 class InputJSONSLdchema(BaseModel):
     user: str
+    graph: str
     kg_data: Dict[Any, Any]
 
 
