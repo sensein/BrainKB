@@ -65,9 +65,12 @@ def callback(ch, method, properties, body):
         logger.info(f"###### Sending data to QueryService to insert into the database - {kg_data_for_req}  ######")
 
         req = requests.post(ingest_url, data=kg_data_for_req, headers={"Content-Type": "application/json"})
-        logger.info(req.status_code)
-    ch.basic_ack(delivery_tag=method.delivery_tag)
-    logger.info("###### Acknowledging the RabbitMQ queue that the message in the queue has been processed ###### ")
+
+        logger.info(req.status_code, req.text)
+        if req.status_code == 200 and json.loads(req.text)["status"] == "success": 
+            # Successful acknowledgment
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            logger.info("###### Acknowledging the RabbitMQ queue that the message in the queue has been processed ###### ")
 
 
 def start_consuming(exchange_name='ingest_message_direct', routing_key='brainkb'):
