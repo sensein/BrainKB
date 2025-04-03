@@ -74,13 +74,4 @@ class EmbedderConfig(BaseModel):
 class SearchKeyConfig(BaseModel):
     search_key: List[str]
 
-# === StructSense Unified Input ===
-
-class StructSenseInput(BaseModel):
-    agentconfig: AgentConfig
-    taskconfig: TaskConfig
-    flowconfig: FlowConfig
-    embedderconfig: EmbedderConfig
-    input_source: Dict[str, str]
-    knowledgeconfig: Optional[SearchKeyConfig] = None
 
