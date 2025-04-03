@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .ml_service
-
+crew_memory
 # C extensions
 *.so
 *.log
