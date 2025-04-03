@@ -24,6 +24,20 @@ app.include_router(structsense_router, prefix="/api", tags=["Multi-agent Systems
 async def startup_event():
     configure_logging()
     logger.info("Starting FastAPI")
+    # Initialize database connection pool
+    from core.database import init_db_pool
+    await init_db_pool()
+    logger.info("Database connection pool initialized")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Shutting down FastAPI")
+    # Close database connection pool
+    from core.database import get_db_pool
+    pool = await get_db_pool()
+    if pool:
+        await pool.close()
+        logger.info("Database connection pool closed")
 
 
 # log all HTTP exception when raised

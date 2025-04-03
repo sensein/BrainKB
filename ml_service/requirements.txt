@@ -1,4 +1,6 @@
 fastapi==0.115.3
+uvicorn==0.29.0
+gunicorn==21.2.0
 #richlogging
 rich == 13.9.4
 #python-json-logger

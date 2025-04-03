@@ -10,6 +10,7 @@
 # software or the use or other dealings in the software.
 # -----------------------------------------------------------------------------
 from datetime import datetime
+import logging
 
 # @Author  : Tek Raj Chhetri
 # @Email   : tekraj@mit.edu
@@ -20,6 +21,8 @@ import asyncpg
 from fastapi import HTTPException
 
 from core.configuration import load_environment
+
+logger = logging.getLogger(__name__)
 
 DB_SETTINGS = {
     "user": load_environment()["JWT_POSTGRES_DATABASE_USER"],
@@ -33,87 +36,132 @@ table_name_user = load_environment()["JWT_POSTGRES_TABLE_USER"]
 table_name_scope = load_environment()["JWT_POSTGRES_TABLE_SCOPE"]
 table_relation = load_environment()["JWT_POSTGRES_TABLE_USER_SCOPE_REL"]
 
+# Global connection pool
+pool = None
+
+async def init_db_pool():
+    """Initialize the database connection pool."""
+    global pool
+    try:
+        # Create a connection pool with min_size=10 and max_size=100 to handle high concurrency
+        pool = await asyncpg.create_pool(
+            min_size=10,
+            max_size=100,
+            **DB_SETTINGS
+        )
+        logger.info("Database connection pool initialized")
+        return pool
+    except Exception as e:
+        logger.error(f"Failed to initialize database connection pool: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
+
+async def get_db_pool():
+    """Get the database connection pool. Initialize if not already done."""
+    global pool
+    if pool is None:
+        pool = await init_db_pool()
+    return pool
 
 async def connect_postgres():
+    """Get a connection from the pool."""
     try:
-        connection = await asyncpg.connect(**DB_SETTINGS)
-        return connection
+        pool = await get_db_pool()
+        return await pool.acquire()
     except Exception as e:
+        logger.error(f"Failed to acquire connection from pool: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 async def close_db_connection(conn):
-    await conn.close()
-
-
-async def insert_data(conn, fullname, email, password):
+    """Release a connection back to the pool."""
     try:
-        scope_exist_id = await select_scope_id(conn)
-        if not scope_exist_id:
-            # First insert the default read access
-            scope_query_exist_case = f"""
-            INSERT INTO \"{table_name_scope}\" (name, description, created_at, updated_at) 
-            VALUES ($1, $2, $3, $4,) RETURNING id"""
+        pool = await get_db_pool()
+        await pool.release(conn)
+    except Exception as e:
+        logger.error(f"Failed to release connection to pool: {str(e)}")
 
-            new_scope_id = await conn.fetchval(
-                scope_query_exist_case,
-                "read",
-                "This allows read access",
-                datetime.utcnow(),
-                datetime.utcnow(),
-            )
-            pg_query = f"""
-                INSERT INTO \"{table_name_user}\" (full_name, email, password, is_active, created_at, updated_at) 
-                VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
-            """
-            jwt_user_id = await conn.fetchval(
-                pg_query,
-                fullname,
-                email,
-                password,
-                False,
-                datetime.utcnow(),
-                datetime.utcnow(),
-            )
 
-            # now connect with rel
-            await conn.execute(
-                f"""INSERT INTO \"{table_relation}\" (jwtuser_id, scope_id) VALUES ($1, $2)""",
-                jwt_user_id,
-                new_scope_id,
-            )
-        else:
-            pg_query = f"""
-                INSERT INTO \"{table_name_user}\" (full_name, email, password, is_active, created_at, updated_at) 
-                VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
-            """
-            jwt_user_id = await conn.fetchval(
-                pg_query,
-                fullname,
-                email,
-                password,
-                False,
-                datetime.utcnow(),
-                datetime.utcnow(),
-            )
+async def insert_data(conn=None, fullname=None, email=None, password=None):
+    connection_created = False
+    try:
+        if conn is None:
+            conn = await connect_postgres()
+            connection_created = True
+        
+        # Use a transaction to ensure all operations succeed or fail together
+        async with conn.transaction():
+            scope_exist_id = await select_scope_id(conn)
+            if not scope_exist_id:
+                # First insert the default read access
+                scope_query_exist_case = f"""
+                INSERT INTO \"{table_name_scope}\" (name, description, created_at, updated_at) 
+                VALUES ($1, $2, $3, $4) RETURNING id"""
 
-            await conn.execute(
-                f"""INSERT INTO \"{table_relation}\" (jwtuser_id, scope_id) VALUES ($1, $2)""",
-                jwt_user_id,
-                scope_exist_id,
-            )
+                new_scope_id = await conn.fetchval(
+                    scope_query_exist_case,
+                    "read",
+                    "This allows read access",
+                    datetime.utcnow(),
+                    datetime.utcnow(),
+                )
+                pg_query = f"""
+                    INSERT INTO \"{table_name_user}\" (full_name, email, password, is_active, created_at, updated_at) 
+                    VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+                """
+                jwt_user_id = await conn.fetchval(
+                    pg_query,
+                    fullname,
+                    email,
+                    password,
+                    False,
+                    datetime.utcnow(),
+                    datetime.utcnow(),
+                )
+
+                # now connect with rel
+                await conn.execute(
+                    f"""INSERT INTO \"{table_relation}\" (jwtuser_id, scope_id) VALUES ($1, $2)""",
+                    jwt_user_id,
+                    new_scope_id,
+                )
+            else:
+                pg_query = f"""
+                    INSERT INTO \"{table_name_user}\" (full_name, email, password, is_active, created_at, updated_at) 
+                    VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+                """
+                jwt_user_id = await conn.fetchval(
+                    pg_query,
+                    fullname,
+                    email,
+                    password,
+                    False,
+                    datetime.utcnow(),
+                    datetime.utcnow(),
+                )
+
+                await conn.execute(
+                    f"""INSERT INTO \"{table_relation}\" (jwtuser_id, scope_id) VALUES ($1, $2)""",
+                    jwt_user_id,
+                    scope_exist_id,
+                )
 
         return {
             "detail": "Registration completed successfully! Admin will activate your account after verification."
         }
     except Exception as e:
+        logger.error(f"Error inserting data for user {email}: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        # Only release the connection if we created it in this function
+        if connection_created and conn:
+            await close_db_connection(conn)
 
 
 async def insert_scope(conn=None):
+    connection_created = False
     try:
         if conn is None:
             conn = await connect_postgres()
+            connection_created = True
             query = f"SELECT id FROM \"{table_name_scope}\" WHERE NAME = 'read'"
         row = await conn.fetchrow(
             query
@@ -122,26 +170,32 @@ async def insert_scope(conn=None):
             return row
         return False
     except Exception as e:
+        logger.error(f"Error inserting scope: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        # Only release the connection if we created it in this function
+        if connection_created and conn:
+            await close_db_connection(conn)
 
 
 async def select_scope_id(conn=None):
-    print("*" * 100)
-    print(conn)
-    print("*" * 100)
+    connection_created = False
     try:
         if conn is None:
             conn = await connect_postgres()
+            connection_created = True
+        
         query = f"SELECT id FROM \"{table_name_scope}\" WHERE NAME = 'read' LIMIT 1;"
-        scope_id = await conn.fetchval(
-            query
-        )
-        print("*"*100)
-        print(scope_id)
-        print("*"*100)
+        scope_id = await conn.fetchval(query)
+        logger.debug(f"Selected scope ID: {scope_id}")
         return scope_id  # Returns the user ID if found, or None if no user exists
     except Exception as e:
+        logger.error(f"Error selecting scope ID: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        # Only release the connection if we created it in this function
+        if connection_created and conn:
+            await close_db_connection(conn)
 
 
 async def get_scopes_by_user(user_id):
@@ -153,19 +207,23 @@ async def get_scopes_by_user(user_id):
     try:
         results = await conn.fetch(query, user_id)
         assigned_scopes_to_user = [result["name"] for result in results]
-        print("*" * 100)
-        print(assigned_scopes_to_user)
-        print("#" * 100)
+        logger.debug(f"Scopes for user {user_id}: {assigned_scopes_to_user}")
         return assigned_scopes_to_user
+    except Exception as e:
+        logger.error(f"Error getting scopes for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
-        # Ensure the connection is closed even if an error occurs
-        await conn.close()
+        # Release the connection back to the pool
+        await close_db_connection(conn)
 
 
 async def get_user(conn=None, email=None):
+    connection_created = False
     try:
         if conn is None:
             conn = await connect_postgres()
+            connection_created = True
+        
         query = """
         SELECT * FROM "{}" WHERE email = $1 AND is_active=True LIMIT 1
         """.format(
@@ -176,4 +234,9 @@ async def get_user(conn=None, email=None):
             return row
         return False
     except Exception as e:
+        logger.error(f"Error getting user with email {email}: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        # Only release the connection if we created it in this function
+        if connection_created and conn:
+            await close_db_connection(conn)
