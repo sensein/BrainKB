@@ -22,7 +22,70 @@ from rdflib import Graph
 import requests
 import logging
 from core.configuration import load_environment
+import yaml
+from fastapi import HTTPException, UploadFile
+from pydantic import BaseModel, ValidationError
+from typing import List, Optional, Dict, Union
+
 logger = logging.getLogger(__name__)
+
+
+def parse_yaml_or_json(input_str: Optional[Union[str, dict]], file_or_model_type: Optional[Union[UploadFile, BaseModel]] = None, model_type: Optional[BaseModel] = None) -> BaseModel:
+    logger.debug(f"parse_yaml_or_json called with: input_str={type(input_str)}, file_or_model_type={type(file_or_model_type)}, model_type={model_type}")
+    
+    # Handle the case where model_type is passed as the second parameter
+    if isinstance(file_or_model_type, type) and issubclass(file_or_model_type, BaseModel):
+        logger.debug("Detected model_type as second parameter")
+        model_type = file_or_model_type
+        file = None
+    else:
+        file = file_or_model_type
+    
+    raw = None
+    # If input_str is already a dict, use it directly
+    if isinstance(input_str, dict):
+        logger.debug("Input is already a dictionary")
+        raw = input_str
+    # Otherwise, try to parse it from a file or string
+    elif file and hasattr(file, 'file'):
+        logger.debug(f"Parsing from file: {file.filename}")
+        try:
+            raw_bytes = file.file.read()
+            raw = yaml.safe_load(raw_bytes)
+            logger.debug(f"Successfully parsed YAML from file: {type(raw)}")
+        except Exception as e:
+            logger.error(f"Error parsing YAML file: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid YAML file: {str(e)}")
+    elif input_str:
+        logger.debug("Parsing from string")
+        try:
+            raw = json.loads(input_str)
+            logger.debug("Successfully parsed as JSON")
+        except (json.JSONDecodeError, TypeError):
+            try:
+                raw = yaml.safe_load(input_str)
+                logger.debug("Successfully parsed as YAML")
+            except Exception as e:
+                logger.error(f"Error parsing string as YAML/JSON: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Invalid YAML/JSON string: {str(e)}")
+
+    if raw is None:
+        logger.error("Missing or invalid config input")
+        raise HTTPException(status_code=400, detail="Missing or invalid config input.")
+
+    if model_type is None:
+        logger.error("Model type is required")
+        raise HTTPException(status_code=400, detail="Model type is required.")
+
+    try:
+        logger.debug(f"Validating against model: {model_type.__name__}")
+        result = model_type(**raw)
+        logger.debug("Validation successful")
+        return result
+    except ValidationError as e:
+        logger.error(f"Validation error: {e.errors()}")
+        raise HTTPException(status_code=422, detail=e.errors())
+
 
 # Helper function to resolve issues during the conversion from JSON-LD to Turtle representation.
 #
