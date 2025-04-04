@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Multi-agent Systems"])
 
-
 @router.post("/multiagent/process/pdf/",
              dependencies=[Depends(require_scopes(["read"]))],
              summary="Run multi-agent systems with PDF and configuration files",
@@ -70,7 +69,8 @@ router = APIRouter(tags=["Multi-agent Systems"])
                  - WEAVIATE_GRPC_SECURE: Weaviate https access if enabled (default: false)
                  - OLLAMA_API_ENDPOINT: Ollama API endpoint (default: "http://localhost:11434")
                  - OLLAMA_MODEL: Ollama model name (default: "nomic-embed-text")
-            - GROBID_SERVER_URL: Grobid-server url (default: "http://localhost:8070") used for PDF extraction
+            - GROBID_SERVER_URL_OR_EXTERNAL_SERVICE: Grobid server or external PDF extraction service url (default: "http://localhost:8070").
+            - EXTERNAL_PDF_EXTRACTION_SERVICE: To enable external PDF = extraction service (default: "False")
 
              Response
 
@@ -133,7 +133,8 @@ async def run_structsense_with_pdf(
         WEAVIATE_GRPC_SECURE: str = Form("False", description="Secure GRPC access to Weaviate if enabled in Weaviate deployment"),
         OLLAMA_API_ENDPOINT: str = Form("http://localhost:11434", description="Ollama API endpoint"),
         OLLAMA_MODEL: str = Form("nomic-embed-text", description="Ollama model name"),
-        GROBID_SERVER_URL: str = Form("http://localhost:8070", description="Grobid server url"),
+        GROBID_SERVER_URL_OR_EXTERNAL_SERVICE: str = Form("http://localhost:8070", description="Grobid server url"),
+        EXTERNAL_PDF_EXTRACTION_SERVICE: str = Form("False", description="Enable external PDF extraction service")
 ):
     # Parse configuration files
     logger.info("=" * 50)
@@ -181,7 +182,13 @@ async def run_structsense_with_pdf(
 
     os.environ["OLLAMA_API_ENDPOINT"] = OLLAMA_API_ENDPOINT
     os.environ["OLLAMA_MODEL"] = OLLAMA_MODEL
-    os.environ["GROBID_SERVER_URL"] = GROBID_SERVER_URL
+    os.environ["GROBID_SERVER_URL_OR_EXTERNAL_SERVICE"] = GROBID_SERVER_URL_OR_EXTERNAL_SERVICE
+    os.environ["EXTERNAL_PDF_EXTRACTION_SERVICE"] = EXTERNAL_PDF_EXTRACTION_SERVICE
+
+    logger.info("*"*100)  
+    logger.info(os.getenv("GROBID_SERVER_URL_OR_EXTERNAL_SERVICE"))
+    logger.info(os.getenv("EXTERNAL_PDF_EXTRACTION_SERVICE"))
+    logger.info("*" * 100)
 
     try:
         # Log configuration details
