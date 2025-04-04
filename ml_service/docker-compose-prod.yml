@@ -1,12 +1,12 @@
 version: '3.8'
 
 services:
-  app-prod-producer:
+  app-prod-ml-service-agent:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8006:8006"
+      - "8007:8007"
     environment:
       - ENVIRONMENT=production
     restart: unless-stopped

@@ -1,4 +1,4 @@
-FROM tiangolo/uvicorn-gunicorn-fastapi:python3.9
+FROM tiangolo/uvicorn-gunicorn-fastapi:python3.10
 
 # Set metadata for the image
 LABEL project="BrainyPedia" \
@@ -8,7 +8,6 @@ LABEL project="BrainyPedia" \
 
 
 COPY . .
-
 RUN pip install -r requirements.txt
 
 # Expose the port the app runs on

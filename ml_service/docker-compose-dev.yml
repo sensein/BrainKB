@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  app-dev-producer:
+  app-dev-ml-service-agent:
     build:
       context: .
       dockerfile: Dockerfile
