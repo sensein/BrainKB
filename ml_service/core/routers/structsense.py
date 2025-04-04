@@ -62,8 +62,15 @@ router = APIRouter(tags=["Multi-agent Systems"])
                Required if ENABLE_KG_SOURCE is True
                  - ONTOLOGY_DATABASE: Ontology database name (default: "Ontology_database_agent_test")
                  - WEAVIATE_API_KEY: Weaviate API key (default: "")
+                 - WEAVIATE_HTTP_HOST: Weaviate HTTP host (default: localhost)
+                 - WEAVIATE_HTTP_PORT: Weaviate port number (default: 8080)
+                 - WEAVIATE_HTTP_SECURE: Weaviate https access if enabled (default: False)
+                 - WEAVIATE_GRPC_HOST: Weaviate grpc host (default: localhost)
+                 - WEAVIATE_GRPC_PORT: Weaviate grpc port number (default:50051)
+                 - WEAVIATE_GRPC_SECURE: Weaviate https access if enabled (default: false)
                  - OLLAMA_API_ENDPOINT: Ollama API endpoint (default: "http://localhost:11434")
                  - OLLAMA_MODEL: Ollama model name (default: "nomic-embed-text")
+            - GROBID_SERVER_URL: Grobid-server url (default: "http://localhost:8070") used for PDF extraction
 
              Response
 
@@ -118,8 +125,15 @@ async def run_structsense_with_pdf(
         ENABLE_KG_SOURCE: bool = Form(False, description="Enable Knowledge Graph source"),
         ONTOLOGY_DATABASE: str = Form("Ontology_database_agent_test", description="Ontology database name"),
         WEAVIATE_API_KEY: str = Form("", description="Weaviate API key"),
+        WEAVIATE_HTTP_HOST: str = Form("localhost", description="Weaviate HTTP host"),
+        WEAVIATE_HTTP_PORT: str = Form("8080", description="Weaviate Port"),
+        WEAVIATE_HTTP_SECURE: str = Form("False", description="Secure access to Weaviate. Note this needs to be supported by the Weaviate deployment"),
+        WEAVIATE_GRPC_HOST: str = Form("localhost", description="Weaviate GRPC host address"),
+        WEAVIATE_GRPC_PORT: str = Form("50051", description="Weaviate GRPC port"),
+        WEAVIATE_GRPC_SECURE: str = Form("False", description="Secure GRPC access to Weaviate if enabled in Weaviate deployment"),
         OLLAMA_API_ENDPOINT: str = Form("http://localhost:11434", description="Ollama API endpoint"),
-        OLLAMA_MODEL: str = Form("nomic-embed-text", description="Ollama model name")
+        OLLAMA_MODEL: str = Form("nomic-embed-text", description="Ollama model name"),
+        GROBID_SERVER_URL: str = Form("http://localhost:8070", description="Grobid server url"),
 ):
     # Parse configuration files
     logger.info("=" * 50)
@@ -158,8 +172,16 @@ async def run_structsense_with_pdf(
     os.environ["ENABLE_KG_SOURCE"] = str(ENABLE_KG_SOURCE).lower()
     os.environ["ONTOLOGY_DATABASE"] = ONTOLOGY_DATABASE
     os.environ["WEAVIATE_API_KEY"] = WEAVIATE_API_KEY
+    os.environ["WEAVIATE_HTTP_HOST"] = WEAVIATE_HTTP_HOST
+    os.environ["WEAVIATE_HTTP_PORT"] = WEAVIATE_HTTP_PORT
+    os.environ["WEAVIATE_HTTP_SECURE"] = WEAVIATE_HTTP_SECURE
+    os.environ["WEAVIATE_GRPC_HOST"] = WEAVIATE_GRPC_HOST
+    os.environ["WEAVIATE_GRPC_PORT"] = WEAVIATE_GRPC_PORT
+    os.environ["WEAVIATE_GRPC_SECURE"] = WEAVIATE_GRPC_SECURE
+
     os.environ["OLLAMA_API_ENDPOINT"] = OLLAMA_API_ENDPOINT
     os.environ["OLLAMA_MODEL"] = OLLAMA_MODEL
+    os.environ["GROBID_SERVER_URL"] = GROBID_SERVER_URL
 
     try:
         # Log configuration details
@@ -216,8 +238,15 @@ async def run_structsense_with_pdf(
                Required if ENABLE_KG_SOURCE is True
                  - ONTOLOGY_DATABASE: Ontology database name (default: "Ontology_database_agent_test")
                  - WEAVIATE_API_KEY: Weaviate API key (default: "")
+                 - WEAVIATE_HTTP_HOST: Weaviate HTTP host (default: localhost)
+                 - WEAVIATE_HTTP_PORT: Weaviate port number (default: 8080)
+                 - WEAVIATE_HTTP_SECURE: Weaviate https access if enabled (default: False)
+                 - WEAVIATE_GRPC_HOST: Weaviate grpc host (default: localhost)
+                 - WEAVIATE_GRPC_PORT: Weaviate grpc port number (default:50051)
+                 - WEAVIATE_GRPC_SECURE: Weaviate https access if enabled (default: False)
                  - OLLAMA_API_ENDPOINT: Ollama API endpoint (default: "http://localhost:11434")
                  - OLLAMA_MODEL: Ollama model name (default: "nomic-embed-text")
+                 
 
              Response
 
@@ -272,6 +301,15 @@ async def run_structsense_with_raw_text(
         ENABLE_KG_SOURCE: bool = Form(False, description="Enable Knowledge Graph source"),
         ONTOLOGY_DATABASE: str = Form("Ontology_database_agent_test", description="Ontology database name"),
         WEAVIATE_API_KEY: str = Form("", description="Weaviate API key"),
+        WEAVIATE_HTTP_HOST: str = Form("localhost", description="Weaviate HTTP host"),
+        WEAVIATE_HTTP_PORT: str = Form("8080", description="Weaviate Port"),
+        WEAVIATE_HTTP_SECURE: str = Form("False",
+                                          description="Secure access to Weaviate. Note this needs to be supported by the Weaviate deployment"),
+        WEAVIATE_GRPC_HOST: str = Form("localhost", description="Weaviate GRPC host address"),
+        WEAVIATE_GRPC_PORT: str = Form("50051", description="Weaviate GRPC port"),
+        WEAVIATE_GRPC_SECURE: str = Form("False",
+                                          description="Secure GRPC access to Weaviate if enabled in Weaviate deployment"),
+
         OLLAMA_API_ENDPOINT: str = Form("http://localhost:11434", description="Ollama API endpoint"),
         OLLAMA_MODEL: str = Form("nomic-embed-text", description="Ollama model name")
 ):
@@ -296,6 +334,12 @@ async def run_structsense_with_raw_text(
     os.environ["ENABLE_KG_SOURCE"] = str(ENABLE_KG_SOURCE).lower()
     os.environ["ONTOLOGY_DATABASE"] = ONTOLOGY_DATABASE
     os.environ["WEAVIATE_API_KEY"] = WEAVIATE_API_KEY
+    os.environ["WEAVIATE_HTTP_HOST"] = WEAVIATE_HTTP_HOST
+    os.environ["WEAVIATE_HTTP_PORT"] = WEAVIATE_HTTP_PORT
+    os.environ["WEAVIATE_HTTP_SECURE"] = WEAVIATE_HTTP_SECURE
+    os.environ["WEAVIATE_GRPC_HOST"] = WEAVIATE_GRPC_HOST
+    os.environ["WEAVIATE_GRPC_PORT"] = WEAVIATE_GRPC_PORT
+    os.environ["WEAVIATE_GRPC_SECURE"] = WEAVIATE_GRPC_SECURE
     os.environ["OLLAMA_API_ENDPOINT"] = OLLAMA_API_ENDPOINT
     os.environ["OLLAMA_MODEL"] = OLLAMA_MODEL
 

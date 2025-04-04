@@ -32,7 +32,6 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Shutting down FastAPI")
-    # Close database connection pool
     from core.database import get_db_pool
     pool = await get_db_pool()
     if pool:
