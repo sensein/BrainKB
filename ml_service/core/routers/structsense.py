@@ -23,13 +23,14 @@ from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
 from core.shared import parse_yaml_or_json
-from core.pydantic_models import AgentConfig, TaskConfig, FlowConfig, EmbedderConfig, SearchKeyConfig
+from core.pydantic_models import AgentConfig, TaskConfig, EmbedderConfig, SearchKeyConfig
 from structsense import kickoff
 import os
 import tempfile
 import shutil
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from core.shared import upsert_ner_annotations
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,7 @@ router = APIRouter(tags=["Multi-agent Systems"])
              Required Files
 
              - agent_config_file: YAML file containing agent configuration
-             - task_config_file: YAML file containing task configuration
-             - flow_config_file: YAML file containing flow configuration
+             - task_config_file: YAML file containing task configuration 
              - embedder_config_file: YAML file containing embedder configuration
              - pdf_file: PDF file to process
 
@@ -114,7 +114,6 @@ async def run_structsense_with_pdf(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
         agent_config_file: UploadFile = File(..., description="YAML file containing agent configuration"),
         task_config_file: UploadFile = File(..., description="YAML file containing task configuration"),
-        flow_config_file: UploadFile = File(..., description="YAML file containing flow configuration"),
         embedder_config_file: UploadFile = File(..., description="YAML file containing embedder configuration"),
         knowledge_config_file: Optional[UploadFile] = File(None,
                                                            description="Optional YAML file containing knowledge configuration"),
@@ -134,7 +133,7 @@ async def run_structsense_with_pdf(
         OLLAMA_API_ENDPOINT: str = Form("http://localhost:11434", description="Ollama API endpoint"),
         OLLAMA_MODEL: str = Form("nomic-embed-text", description="Ollama model name"),
         GROBID_SERVER_URL_OR_EXTERNAL_SERVICE: str = Form("http://localhost:8070", description="Grobid server url"),
-        EXTERNAL_PDF_EXTRACTION_SERVICE: str = Form("False", description="Enable external PDF extraction service")
+        EXTERNAL_PDF_EXTRACTION_SERVICE: str = Form("False", description="Enable external PDF extraction service"),
 ):
     # Parse configuration files
     logger.info("=" * 50)
@@ -144,7 +143,6 @@ async def run_structsense_with_pdf(
         # Parse YAML files
         agent = parse_yaml_or_json(None, agent_config_file, AgentConfig)
         task = parse_yaml_or_json(None, task_config_file, TaskConfig)
-        flow = parse_yaml_or_json(None, flow_config_file, FlowConfig)
         embedder = parse_yaml_or_json(None, embedder_config_file, EmbedderConfig)
 
         # Parse optional knowledge config file
@@ -185,7 +183,7 @@ async def run_structsense_with_pdf(
     os.environ["GROBID_SERVER_URL_OR_EXTERNAL_SERVICE"] = GROBID_SERVER_URL_OR_EXTERNAL_SERVICE
     os.environ["EXTERNAL_PDF_EXTRACTION_SERVICE"] = EXTERNAL_PDF_EXTRACTION_SERVICE
 
-    logger.info("*"*100)  
+    logger.info("*"*100)
     logger.info(os.getenv("GROBID_SERVER_URL_OR_EXTERNAL_SERVICE"))
     logger.info(os.getenv("EXTERNAL_PDF_EXTRACTION_SERVICE"))
     logger.info("*" * 100)
@@ -200,17 +198,18 @@ async def run_structsense_with_pdf(
             return kickoff(
                 agentconfig=agent.model_dump(),
                 taskconfig=task.model_dump(),
-                flowconfig=flow.model_dump(),
                 embedderconfig=embedder.model_dump(),
                 input_source=temp_pdf_path,
                 knowledgeconfig=knowledge.model_dump() if knowledge else None
             )
 
+
         # Use ThreadPoolExecutor to run the kickoff function in a separate thread
         with ThreadPoolExecutor() as executor:
             result = await asyncio.get_event_loop().run_in_executor(executor, run_kickoff)
 
-        return {"result": result}
+        response_ingest = upsert_ner_annotations(result, user["email"])
+        return response_ingest
     except Exception as e:
         logger.error(f"StructSense kickoff error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Kickoff error: {str(e)}")
@@ -297,7 +296,6 @@ async def run_structsense_with_raw_text(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
         agent_config_file: UploadFile = File(..., description="YAML file containing agent configuration"),
         task_config_file: UploadFile = File(..., description="YAML file containing task configuration"),
-        flow_config_file: UploadFile = File(..., description="YAML file containing flow configuration"),
         embedder_config_file: UploadFile = File(..., description="YAML file containing embedder configuration"),
         knowledge_config_file: Optional[UploadFile] = File(None,
                                                            description="Optional YAML file containing knowledge configuration"),
@@ -325,7 +323,6 @@ async def run_structsense_with_raw_text(
         # Parse YAML files
         agent = parse_yaml_or_json(None, agent_config_file, AgentConfig)
         task = parse_yaml_or_json(None, task_config_file, TaskConfig)
-        flow = parse_yaml_or_json(None, flow_config_file, FlowConfig)
         embedder = parse_yaml_or_json(None, embedder_config_file, EmbedderConfig)
 
         # Parse optional knowledge config file
@@ -357,7 +354,6 @@ async def run_structsense_with_raw_text(
             return kickoff(
                 agentconfig=agent.model_dump(),
                 taskconfig=task.model_dump(),
-                flowconfig=flow.model_dump(),
                 embedderconfig=embedder.model_dump(),
                 input_source=input_text,
                 knowledgeconfig=knowledge.model_dump() if knowledge else None
@@ -367,8 +363,8 @@ async def run_structsense_with_raw_text(
         with ThreadPoolExecutor() as executor:
             result = await asyncio.get_event_loop().run_in_executor(executor, run_kickoff)
 
-
-        return {"result": result}
+        response_ingest = upsert_ner_annotations(result,  user["email"])
+        return response_ingest
     except Exception as e:
         logger.error(f"StructSense kickoff error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Kickoff error: {str(e)}")

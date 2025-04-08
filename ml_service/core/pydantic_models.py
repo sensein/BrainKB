@@ -20,58 +20,63 @@ from typing import List, Optional, Dict
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-# === Pydantic Models ===
+from typing import List, Optional, Dict
+from pydantic import BaseModel
 
+
+# === LLM Configuration ===
 class LLMConfig(BaseModel):
     model: str
     base_url: str
-    frequency_penalty: float
-    temperature: float
-    seed: int
-    api_key: str
+    seed: Optional[int] = None
+    frequency_penalty: Optional[float] = 0.0
+    temperature: Optional[float] = 0.0
+    api_key: Optional[str] = None
 
+
+# === Agent Definition ===
 class Agent(BaseModel):
-    id: str
-    output_variable: str
     role: str
     goal: str
     backstory: str
     llm: LLMConfig
 
-class AgentConfig(BaseModel):
-    agents: List[Agent]
 
+# === AgentConfig with named agents (e.g., extractor_agent) ===
+class AgentConfig(BaseModel):
+    extractor_agent: Agent
+    alignment_agent: Agent
+    judge_agent: Agent
+
+
+# === Task Definition ===
 class Task(BaseModel):
-    id: str
     description: str
     expected_output: str
     agent_id: str
 
+
+# === TaskConfig with named tasks (e.g., extraction_task) ===
 class TaskConfig(BaseModel):
-    tasks: List[Task]
+    extraction_task: Task
+    alignment_task: Task
+    judge_task: Task
 
-class FlowStep(BaseModel):
-    id: str
-    agent_key: str
-    task_key: str
-    inputs: Dict[str, str]
-    knowledge_source: Optional[str] = None
 
-class FlowConfig(BaseModel):
-    flow: List[FlowStep]
-
+# === (Optional) Supporting Classes for embedding and search config ===
 class ProviderConfig(BaseModel):
     api_base: str
     model: str
+
 
 class EmbedderInnerConfig(BaseModel):
     provider: str
     config: ProviderConfig
 
+
 class EmbedderConfig(BaseModel):
     embedder_config: EmbedderInnerConfig
 
+
 class SearchKeyConfig(BaseModel):
     search_key: List[str]
-
-

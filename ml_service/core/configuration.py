@@ -65,7 +65,13 @@ def load_environment(env_name="env"):
         "RABBITMQ_VHOST": os.getenv("RABBITMQ_VHOST","/"),
 
         #query service
-        "QUERY_SERVICE_BASE_URL": os.getenv("QUERY_SERVICE_BASE_URL", "localhost:8010")
+        "QUERY_SERVICE_BASE_URL": os.getenv("QUERY_SERVICE_BASE_URL", "localhost:8010"),
+
+        #mongodb
+        "MONGO_DB_URL": os.getenv("MONGO_DB_URL"),
+        "NER_DATABASE": os.getenv("NER_DATABASE","ner_database"),
+        "NER_COLLECTION": os.getenv("NER_COLLECTION","ner_collection")
+
     }
 
 

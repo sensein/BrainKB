@@ -29,6 +29,85 @@ from typing import List, Optional, Dict, Union
 
 logger = logging.getLogger(__name__)
 
+import requests
+from core.shared import load_environment  # adjust this import to your setup
+import json
+from pymongo import MongoClient, ReturnDocument
+from datetime import datetime, timezone
+def upsert_ner_annotations(input_data, user):
+    """
+    Upserts NER annotations into a MongoDB collection with versioning and history.
+
+    Args:
+        input_data (dict): Dictionary with key "judged_structured_information".
+        user (str): ID or email of the user performing the update.
+
+    Returns:
+        dict: Summary with counts of inserts and updates.
+    """
+    env = load_environment()
+    mongo_url = env.get("MONGO_DB_URL")
+    db_name = env.get("NER_DATABASE")
+    collection_name = env.get("NER_COLLECTION")
+
+    client = MongoClient(mongo_url)
+    db = client[db_name]
+    collection = db[collection_name]
+
+    judge_terms = input_data["judged_structured_information"]
+    now = datetime.now(timezone.utc)
+
+    inserted = 0
+    updated = 0
+
+    for _, annotations in judge_terms.items():
+        for ann in annotations:
+            ann.setdefault("doi", "")
+            ann.setdefault("paper_title", "")
+            ann.setdefault("paper_location", "")
+            ann["user_id"] = user
+
+            filter_criteria = {
+                "doi": ann["doi"],
+                "paper_title": ann["paper_title"],
+                "paper_location": ann["paper_location"],
+                "entity": ann["entity"]
+            }
+
+            existing_doc = collection.find_one(filter_criteria)
+            version = 1
+            if existing_doc:
+                version = existing_doc.get("version", 1) + 1
+                updated += 1
+            else:
+                inserted += 1
+
+            update_fields = {**ann, "updated_at": now, "version": version}
+            update_fields = {k: v for k, v in update_fields.items() if v is not None}
+
+            history_entry = {
+                "timestamp": now,
+                "updated_fields": {k: ann[k] for k in ann if k not in filter_criteria and ann[k] is not None},
+                "user_id": user
+            }
+
+            collection.find_one_and_update(
+                filter_criteria,
+                {
+                    "$set": update_fields,
+                    "$setOnInsert": {"created_at": now},
+                    "$push": {"history": history_entry}
+                },
+                upsert=True,
+                return_document=ReturnDocument.AFTER
+            )
+
+    return {
+        "Inserted": inserted,
+        "Updated": updated
+    }
+
+
 
 def parse_yaml_or_json(input_str: Optional[Union[str, dict]], file_or_model_type: Optional[Union[UploadFile, BaseModel]] = None, model_type: Optional[BaseModel] = None) -> BaseModel:
     logger.debug(f"parse_yaml_or_json called with: input_str={type(input_str)}, file_or_model_type={type(file_or_model_type)}, model_type={model_type}")
@@ -197,7 +276,6 @@ def check_if_url_wellformed(url:str):
         return True if url.startswith("http://") or  url.startswith("https://") else False
 
 
-import requests
 
 
 def named_graph_exists(named_graph_iri: str) -> dict:
