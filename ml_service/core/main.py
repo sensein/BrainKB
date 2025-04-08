@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 
 # logging
 from asgi_correlation_id import CorrelationIdMiddleware
@@ -10,8 +11,26 @@ from core.configure_logging import configure_logging
 from core.routers.index import router as index_router
 from core.routers.jwt_auth import router as jwt_router
 from core.routers.structsense import router as structsense_router
+from core.database import init_db_pool, get_db_pool
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    configure_logging()
+    logger.info("Starting FastAPI")
+    # Initialize database connection pool
+    await init_db_pool()
+    logger.info("Database connection pool initialized")
+    yield
+    # Shutdown
+    logger.info("Shutting down FastAPI")
+    pool = await get_db_pool()
+    if pool:
+        await pool.close()
+        logger.info("Database connection pool closed")
+
+app = FastAPI(lifespan=lifespan)
 logger = logging.getLogger(__name__)
 app.add_middleware(CorrelationIdMiddleware)
 
@@ -20,23 +39,6 @@ app.include_router(index_router, prefix="/api")
 app.include_router(jwt_router, prefix="/api", tags=["Security"])
 app.include_router(structsense_router, prefix="/api", tags=["Multi-agent Systems"])
 
-@app.on_event("startup")
-async def startup_event():
-    configure_logging()
-    logger.info("Starting FastAPI")
-    # Initialize database connection pool
-    from core.database import init_db_pool
-    await init_db_pool()
-    logger.info("Database connection pool initialized")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("Shutting down FastAPI")
-    from core.database import get_db_pool
-    pool = await get_db_pool()
-    if pool:
-        await pool.close()
-        logger.info("Database connection pool closed")
 
 
 # log all HTTP exception when raised
