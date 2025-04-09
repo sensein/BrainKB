@@ -54,6 +54,7 @@ def configure_logging() -> None:
                     "datefmt": "%Y-%m-%dT%H:%M:%S",
                     "format": "%(asctime)s %(msecs)03d %(levelname)s %(correlation_id)s %(name)s %(lineno)d %(message)s",
                 },
+            },
             "handlers": {
                 "default": {
                     "class": "rich.logging.RichHandler",
