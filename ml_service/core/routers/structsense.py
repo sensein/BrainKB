@@ -208,7 +208,7 @@ async def run_structsense_with_pdf(
         with ThreadPoolExecutor() as executor:
             result = await asyncio.get_event_loop().run_in_executor(executor, run_kickoff)
 
-        response_ingest = upsert_ner_annotations(result, user["email"])
+        response_ingest = result
         return response_ingest
     except Exception as e:
         logger.error(f"StructSense kickoff error: {str(e)}", exc_info=True)
@@ -363,7 +363,7 @@ async def run_structsense_with_raw_text(
         with ThreadPoolExecutor() as executor:
             result = await asyncio.get_event_loop().run_in_executor(executor, run_kickoff)
 
-        response_ingest = upsert_ner_annotations(result,  user["email"])
+        response_ingest = result
         return response_ingest
     except Exception as e:
         logger.error(f"StructSense kickoff error: {str(e)}", exc_info=True)
