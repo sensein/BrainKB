@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Multi-agent Systems"])
 
-@router.post("/multiagent/process/pdf/",
+@router.post("/multiagent/process/pdf",
              dependencies=[Depends(require_scopes(["read"]))],
              summary="Run multi-agent systems with PDF and configuration files",
              description="""
@@ -218,7 +218,7 @@ async def run_structsense_with_pdf(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-@router.post("/multiagent/process/raw-text/",
+@router.post("/multiagent/process/raw-text",
              dependencies=[Depends(require_scopes(["read"]))],
              summary="Run multi-agent systems with raw text and configuration files",
              description="""
