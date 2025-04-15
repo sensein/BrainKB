@@ -9,15 +9,15 @@
 # tort, or otherwise, arising from, out of, or in connection with the
 # software or the use or other dealings in the software.
 # -----------------------------------------------------------------------------
-
 # @Author  : Tek Raj Chhetri
 # @Email   : tekraj@mit.edu
 # @Web     : https://tekrajchhetri.com/
 # @File    : structsense.py
 # @Software: PyCharm
-
+from fastapi import Request
 from fastapi import APIRouter, File, UploadFile, HTTPException, Form, Depends
 from typing import Optional
+from fastapi.responses import JSONResponse
 import logging
 from typing import Annotated
 from core.models.user import LoginUserIn
@@ -364,7 +364,78 @@ async def run_structsense_with_raw_text(
             result = await asyncio.get_event_loop().run_in_executor(executor, run_kickoff)
 
         response_ingest = result
+        logger.info("#"*100)
+        logger.info("Final response: ", response_ingest)
+        logger.info("#" * 100)
         return response_ingest
     except Exception as e:
         logger.error(f"StructSense kickoff error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Kickoff error: {str(e)}")
+
+
+@router.post("/multiagent/result/save",
+             dependencies=[Depends(require_scopes(["write"]))],
+             summary="Save the results of the multi-agent model",
+             description="""
+             Saves the JSON data.
+             Response
+
+             Returns the result of the StructSense pipeline processing.
+             """,
+             responses={
+                 200: {
+                     "description": "Successful response",
+                     "content": {
+                         "application/json": {
+                             "example": {"result": "Data saved successfully"}
+                         }
+                     }
+                 },
+                 400: {
+                     "description": "Bad Request",
+                     "content": {
+                         "application/json": {
+                             "example": {"detail": "Required configuration file is missing"}
+                         }
+                     }
+                 },
+                 422: {
+                     "description": "Validation Error",
+                     "content": {
+                         "application/json": {
+                             "example": {"detail": "Error parsing configuration files: Invalid YAML format"}
+                         }
+                     }
+                 },
+                 500: {
+                     "description": "Server Error",
+                     "content": {
+                         "application/json": {
+                             "example": {"detail": "Kickoff error: An unexpected error occurred"}
+                         }
+                     }
+                 }
+             })
+
+async def save_ner_result(request: Request,
+                          user: Annotated[LoginUserIn, Depends(get_current_user)]
+                          ):
+    try:
+        data = await request.json()
+
+        entity_map = data.get("entities", {})
+        document_name = data.get("documentName")
+        processed_at = data.get("processedAt")
+
+        input_data = {
+            "judged_structured_information": entity_map,
+            "documentName": document_name,
+            "processedAt": processed_at
+        }
+
+        result = upsert_ner_annotations(input_data=input_data)
+        return JSONResponse(content=result, status_code=200)
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error: {str(e)}")
+

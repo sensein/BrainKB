@@ -34,78 +34,87 @@ from core.shared import load_environment  # adjust this import to your setup
 import json
 from pymongo import MongoClient, ReturnDocument
 from datetime import datetime, timezone
-def upsert_ner_annotations(input_data, user):
+def upsert_ner_annotations(input_data):
     """
     Upserts NER annotations into a MongoDB collection with versioning and history.
-
-    Args:
-        input_data (dict): Dictionary with key "judged_structured_information".
-        user (str): ID or email of the user performing the update.
-
-    Returns:
-        dict: Summary with counts of inserts and updates.
     """
+
     env = load_environment()
     mongo_url = env.get("MONGO_DB_URL")
     db_name = env.get("NER_DATABASE")
     collection_name = env.get("NER_COLLECTION")
-
     client = MongoClient(mongo_url)
-    db = client[db_name]
-    collection = db[collection_name]
 
-    judge_terms = input_data["judged_structured_information"]
-    now = datetime.now(timezone.utc)
+    try:
+        db = client[db_name]
+        collection = db[collection_name]
 
-    inserted = 0
-    updated = 0
+        judge_terms = input_data["judged_structured_information"]
+        document_name = input_data.get("documentName")
+        processed_at = input_data.get("processedAt")
 
-    for _, annotations in judge_terms.items():
-        for ann in annotations:
-            ann.setdefault("doi", "")
-            ann.setdefault("paper_title", "")
-            ann.setdefault("paper_location", "")
-            ann["user_id"] = user
+        now = datetime.now(timezone.utc)
 
-            filter_criteria = {
-                "doi": ann["doi"],
-                "paper_title": ann["paper_title"],
-                "paper_location": ann["paper_location"],
-                "entity": ann["entity"]
-            }
+        inserted = 0
+        updated = 0
 
-            existing_doc = collection.find_one(filter_criteria)
-            version = 1
-            if existing_doc:
-                version = existing_doc.get("version", 1) + 1
-                updated += 1
-            else:
-                inserted += 1
+        for _, annotations in judge_terms.items():
+            for ann in annotations:
+                ann.setdefault("doi", "")
+                ann.setdefault("paper_title", "")
+                ann.setdefault("paper_location", "")
 
-            update_fields = {**ann, "updated_at": now, "version": version}
-            update_fields = {k: v for k, v in update_fields.items() if v is not None}
+                # ✅ Attach as top-level fields with exact names
+                if document_name:
+                    ann["documentName"] = document_name
+                if processed_at:
+                    ann["processedAt"] = processed_at
 
-            history_entry = {
-                "timestamp": now,
-                "updated_fields": {k: ann[k] for k in ann if k not in filter_criteria and ann[k] is not None},
-                "user_id": user
-            }
+                filter_criteria = {
+                    "doi": ann["doi"],
+                    "paper_title": ann["paper_title"],
+                    "paper_location": ann["paper_location"],
+                    "entity": ann["entity"]
+                }
 
-            collection.find_one_and_update(
-                filter_criteria,
-                {
-                    "$set": update_fields,
-                    "$setOnInsert": {"created_at": now},
-                    "$push": {"history": history_entry}
-                },
-                upsert=True,
-                return_document=ReturnDocument.AFTER
-            )
+                existing_doc = collection.find_one(filter_criteria)
+                version = 1
+                if existing_doc:
+                    version = existing_doc.get("version", 1) + 1
+                    updated += 1
+                else:
+                    inserted += 1
 
-    return {
-        "Inserted": inserted,
-        "Updated": updated
-    }
+                update_fields = {**ann, "updated_at": now, "version": version}
+                update_fields = {k: v for k, v in update_fields.items() if v is not None}
+
+                history_entry = {
+                    "timestamp": now,
+                    "updated_fields": {
+                        k: ann[k]
+                        for k in ann
+                        if k not in filter_criteria and ann[k] is not None
+                    },
+                }
+
+                collection.find_one_and_update(
+                    filter_criteria,
+                    {
+                        "$set": update_fields,
+                        "$setOnInsert": {"created_at": now},
+                        "$push": {"history": history_entry}
+                    },
+                    upsert=True,
+                    return_document=ReturnDocument.AFTER
+                )
+
+
+        return {
+            "Inserted": inserted,
+            "Updated": updated
+        }
+    finally:
+        client.close()
 
 
 
