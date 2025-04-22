@@ -56,19 +56,23 @@ async def get_named_graphs():
 @router.get("query/xref-to-bkbit")
 async def get_bkbit_id(xref):
     query_bkbit_id = f"""
-        PREFIX biolink: <https://w3id.org/biolink/vocab/>
-        SELECT DISTINCT ?bkbit_id
-        WHERE {{
-            ?bkbit_id biolink:xref "{xref}".
-        }}
+    PREFIX biolink: <https://w3id.org/biolink/vocab/>
+    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+    SELECT DISTINCT ?bkbit_id
+    WHERE {{
+        ?bkbit_id biolink:xref "{xref}"^^xsd:anyURI .
+    }}
     """
+
     response = fetch_data_gdb(query_bkbit_id)
-    response_bkbit = {}
-    for bkbit_info in response["message"]["results"]["bindings"]:
-        response_bkbit[bkbit_info["bkbit_id"]["value"]] = {
-            "bkbit_id": bkbit_info["bkbit_id"]["value"]
-        }
-    return response_bkbit
+    return {
+        "xref": xref,
+        "matched_ids": [
+            binding["bkbit_id"]["value"]
+            for binding in response["message"]["results"]["bindings"]
+        ]
+    }
 
 
 @router.get("/query/sparql/", include_in_schema=False)
