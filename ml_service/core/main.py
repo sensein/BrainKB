@@ -13,6 +13,7 @@ from core.routers.jwt_auth import router as jwt_router
 from core.routers.structsense import router as structsense_router
 from core.database import init_db_pool, get_db_pool
 
+from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -32,6 +33,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 logger = logging.getLogger(__name__)
+
+origins = [
+    "https://beta.brainkb.org",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.add_middleware(CorrelationIdMiddleware)
 
 
