@@ -200,7 +200,8 @@ async def run_structsense_with_pdf(
                 taskconfig=task.model_dump(),
                 embedderconfig=embedder.model_dump(),
                 input_source=temp_pdf_path,
-                knowledgeconfig=knowledge.model_dump() if knowledge else None
+                knowledgeconfig=knowledge.model_dump() if knowledge else None,
+                enable_human_feedback=False
             )
 
 
