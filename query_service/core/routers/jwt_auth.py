@@ -25,7 +25,7 @@ async def register(user: UserIn, conn=Depends(connect_postgres)):
     )
 
 
-@router.post("/token", include_in_schema=False)
+@router.post("/token", include_in_schema=True)
 async def login(user: LoginUserIn, conn=Depends(connect_postgres)):
     user = await authenticate_user(user.email, user.password, conn)
     scopes = await get_scopes_by_user(user_id=user["id"])
