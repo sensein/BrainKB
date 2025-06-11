@@ -33,7 +33,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/insert/knowledge-graph-triples/",
+@router.post("/insert/knowledge-graph-triples",
              include_in_schema=True
              )
 async def insert_knowledge_graph_triples(
