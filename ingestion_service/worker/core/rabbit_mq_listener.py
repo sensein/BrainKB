@@ -30,6 +30,9 @@ rabbitmq_url = load_environment()["RABBITMQ_URL"]
 rabbitmq_port = load_environment()["RABBITMQ_PORT"]
 rabbitmq_vhost = load_environment()["RABBITMQ_VHOST"]
 ingest_url = load_environment()["INGEST_URL"]
+jwt_password = load_environment()["JWT_LOGIN_PASSWORD"]
+bearer_token_url = load_environment()["JWT_BEARER_TOKEN_URL"]
+jwt_username = load_environment()["JWT_LOGIN_EMAIL"]
 
 logger = logging.getLogger(__name__)
 def connect_to_rabbitmq():
@@ -63,8 +66,20 @@ def callback(ch, method, properties, body):
         if isinstance(kg_data_for_req, dict):
             kg_data_for_req = json.dumps(kg_data_for_req)
         logger.info(f"###### Sending data to QueryService to insert into the database - {kg_data_for_req}  ######")
+        credentials={
+            "email": jwt_username,
+            "password": jwt_password
+        }
 
-        req = requests.post(ingest_url, data=kg_data_for_req, headers={"Content-Type": "application/json"})
+        login_response =  requests.post(bearer_token_url, json=credentials)
+
+        login_response.raise_for_status()
+
+        access_token = login_response.json().get("access_token")
+    
+        req = requests.post(ingest_url, data=kg_data_for_req, headers={"Content-Type": "application/json",
+                                                                       "Authorization": f"Bearer {access_token}"
+                                                                       })
 
         logger.info(req.status_code, req.text)
         if req.status_code == 200 and json.loads(req.text)["status"] == "success": 
