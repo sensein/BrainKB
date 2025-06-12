@@ -60,7 +60,7 @@ async def insert_knowledge_graph_triples(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred processing the request",
         )
-@router.post("/register-named-graph/")
+@router.post("/register-named-graph")
 async def create_named_graph(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
         request: NamedGraphSchema
