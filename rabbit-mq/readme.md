@@ -93,7 +93,7 @@ docker-compose -f docker-compose-rabbitmq-monitoring.yml up -d
 
 ### 🔌 Step 1: Add Prometheus as a Data Source
 
-1. Navigate to **Data Sources** → **Add data source** and select **Prometheus**.  
+1. Navigate to **Connections** → **Data Sources** → **Add data source** and select **Prometheus**.  
    ![](select-data-source.png)
 
 2. In the Prometheus configuration screen, set the **Prometheus server URL** to your server address (e.g., `http://localhost:9090`).  
