@@ -95,7 +95,6 @@ Attach the provenance information about the ingestion activity. Saying, we recei
             bican:000015fd3d6a449b47e75651210a6cc74fca918255232c8af9e46d077034c84d a bican:GeneAnnotation ;
                 rdfs:label "LOC106504536" ;
                 schema1:identifier "106504536" ;
-                prov:wasInformedBy <https://identifiers.org/brain-bican/vocab/provenance/e4db1e0b-98ff-497c-88b1-afb4a6d7ee14> ; #this links to the new provenance information
                 bican:molecular_type "protein_coding" ;
                 bican:referenced_in bican:d5c45501b3b8e5d8b5b5ba0f4d72750d8548515c1b00c23473a03a213f15360a ;
                 biolink:category bican:GeneAnnotation ;
@@ -107,7 +106,6 @@ Attach the provenance information about the ingestion activity. Saying, we recei
             bican:00027255beed5c235eaedf534ac72ffc67ed597821a5b5c0f35709d5eb93bd47 a bican:GeneAnnotation ;
                 rdfs:label "LRRC40" ;
                 schema1:identifier "100515841" ;
-                prov:wasInformedBy <https://identifiers.org/brain-bican/vocab/provenance/e4db1e0b-98ff-497c-88b1-afb4a6d7ee14> ;
                 bican:molecular_type "protein_coding" ;
                 bican:referenced_in bican:d5c45501b3b8e5d8b5b5ba0f4d72750d8548515c1b00c23473a03a213f15360a ;
                 biolink:category bican:GeneAnnotation ;
@@ -180,7 +178,8 @@ Attach the provenance information about the ingestion activity. Saying, we recei
         # Attach provenance to original triples
         for entity in original_graph.subjects():
             if isinstance(entity, URIRef):
-                prov_graph.add((entity, PROV.wasInformedBy, prov_entity)) #updates the triple to say that particular triple was ingested by some activity, which in our case is the ingestion activity
+                # disabled triple update, now it's just the referencing to the existing triple
+                # prov_graph.add((entity, PROV.wasInformedBy, prov_entity)) #updates the triple to say that particular triple was ingested by some activity, which in our case is the ingestion activity
                 prov_graph.add((ingestion_activity, PROV.wasAssociatedWith, entity))
 
         #  add a Dublin Core provenance statement -- this is the new addition to say it's ingested by user
