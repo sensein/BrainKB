@@ -67,16 +67,14 @@ async def insert_knowledge_graph_triples(
 async def insert_json_to_knowledge_graph(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
     files: Annotated[list[UploadFile], File(...)],
-    named_graph_iri: Annotated[str, Form(...)],
-    base_uri: Annotated[str, Form(...)] = "http://example.org/resource/"
+    named_graph_iri: Annotated[str, Form(...)]
 ):
     """
     Upload and insert multiple JSON files as knowledge graph triples
     
     Args:
         files: List of uploaded JSON files
-        named_graph_iri: The URI for the named graph
-        base_uri: Base URI for generating resource URIs
+        named_graph_iri: The URI for the named graph (also used as base URI for resource generation)
     """
     try:
         if not files:
@@ -122,11 +120,11 @@ async def insert_json_to_knowledge_graph(
                     failed_files += 1
                     continue
                 
-                # Convert JSON to TTL format
+                # Convert JSON to TTL format using named_graph_iri as base URI
                 try:
                     ttl_data = convert_json_to_ttl(
                         json_data=json_data,
-                        base_uri=base_uri
+                        base_uri=named_graph_iri
                     )
                     logger.info(f"Successfully converted JSON to TTL for {file.filename}")
                 except Exception as e:
@@ -173,7 +171,6 @@ async def insert_json_to_knowledge_graph(
         return {
             "message": f"Processed {len(files)} JSON files. {successful_files} successful, {failed_files} failed.",
             "named_graph_iri": named_graph_iri,
-            "base_uri": base_uri,
             "total_files": len(files),
             "successful_files": successful_files,
             "failed_files": failed_files,
