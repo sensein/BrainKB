@@ -330,7 +330,7 @@ def generate_uri(base_uri, value=None):
 def json_to_kg(json_data, base_uri="http://example.org/resource/"):
     """Convert JSON data to RDF graph"""
     graph = Graph()
-    KG = Namespace("http://example.org/kg#")
+    KG = Namespace(base_uri)
     graph.bind("kg", KG)
 
     def process_node(node, subject):
