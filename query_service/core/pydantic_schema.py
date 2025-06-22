@@ -27,9 +27,3 @@ class InputKGTripleSchema(BaseModel):
 class NamedGraphSchema(BaseModel):
     named_graph_url: HttpUrl
     description: str
-
-
-class InputJSONToKGSchema(BaseModel):
-    named_graph_iri: str
-    json_data: Dict[str, Any]
-    base_uri: str = "http://brainkb.org/"

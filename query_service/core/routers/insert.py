@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request, HTTPException, status, UploadFile, File,
 from core.graph_database_connection_manager import insert_data_gdb
 import json
 import logging
-from core.pydantic_schema import InputKGTripleSchema, NamedGraphSchema, InputJSONToKGSchema
+from core.pydantic_schema import InputKGTripleSchema, NamedGraphSchema
 from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
@@ -61,37 +61,134 @@ async def insert_knowledge_graph_triples(
             detail="An error occurred processing the request",
         )
         
-@router.post("/insert/resource/json-to-kg",
+@router.post("/insert/files/structured-resource-json-to-kg",
              include_in_schema=True
              )
 async def insert_json_to_knowledge_graph(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
-    request: InputJSONToKGSchema
+    files: Annotated[list[UploadFile], File(...)],
+    named_graph_iri: Annotated[str, Form(...)],
+    base_uri: Annotated[str, Form(...)] = "http://example.org/resource/"
 ):
+    """
+    Upload and insert multiple JSON files as knowledge graph triples
+    
+    Args:
+        files: List of uploaded JSON files
+        named_graph_iri: The URI for the named graph
+        base_uri: Base URI for generating resource URIs
+    """
     try:
-        logger.info(f"Received JSON data for conversion: {request.json_data}")
+        if not files:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one JSON file must be uploaded"
+            )
         
-        # Convert JSON to TTL format
-        ttl_data = convert_json_to_ttl(
-            json_data=request.json_data,
-            base_uri=request.base_uri
-        )
+        # Process each file
+        results = []
+        total_size = 0
+        successful_files = 0
+        failed_files = 0
         
-        # Convert TTL to named graph format
-        named_graph_ttl = convert_ttl_to_named_graph(
-            ttl_str=ttl_data,
-            named_graph_uri=request.named_graph_iri
-        )
+        for file in files:
+            try:
+                # Validate file extension
+                file_extension = file.filename.split('.')[-1].lower()
+                if file_extension not in ["json"]:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"File {file.filename} extension must be .json for JSON files"
+                    )
+                
+                # Read file content
+                file_content = await file.read()
+                file_content_str = file_content.decode('utf-8')
+                total_size += len(file_content)
+                
+                logger.info(f"Processing JSON file: {file.filename}, size: {len(file_content)} bytes")
+                
+                # Parse JSON content
+                try:
+                    json_data = json.loads(file_content_str)
+                    logger.info(f"Successfully parsed JSON for {file.filename}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse JSON for {file.filename}: {str(e)}")
+                    results.append({
+                        "filename": file.filename,
+                        "status": "failed",
+                        "error": f"Invalid JSON format: {str(e)}"
+                    })
+                    failed_files += 1
+                    continue
+                
+                # Convert JSON to TTL format
+                try:
+                    ttl_data = convert_json_to_ttl(
+                        json_data=json_data,
+                        base_uri=base_uri
+                    )
+                    logger.info(f"Successfully converted JSON to TTL for {file.filename}")
+                except Exception as e:
+                    logger.error(f"Failed to convert JSON to TTL for {file.filename}: {str(e)}")
+                    results.append({
+                        "filename": file.filename,
+                        "status": "failed",
+                        "error": f"JSON to TTL conversion failed: {str(e)}"
+                    })
+                    failed_files += 1
+                    continue
+                
+                # Convert TTL to named graph format
+                named_graph_ttl = convert_ttl_to_named_graph(
+                    ttl_str=ttl_data,
+                    named_graph_uri=named_graph_iri
+                )
+                
+                # Insert into graph database
+                response = insert_data_gdb(named_graph_ttl)
+                
+                logger.info(f"Successfully inserted JSON file {file.filename} into knowledge graph")
+                results.append({
+                    "filename": file.filename,
+                    "status": "success",
+                    "file_size": len(file_content),
+                    "response": response
+                })
+                successful_files += 1
+                
+            except HTTPException:
+                # Re-raise HTTP exceptions as-is
+                raise
+            except Exception as e:
+                logger.error(f"An error occurred processing JSON file {file.filename}", exc_info=True)
+                results.append({
+                    "filename": file.filename,
+                    "status": "failed",
+                    "error": str(e)
+                })
+                failed_files += 1
         
-        # Insert into graph database
-        response = insert_data_gdb(named_graph_ttl)
-        return response
+        # Return summary response
+        return {
+            "message": f"Processed {len(files)} JSON files. {successful_files} successful, {failed_files} failed.",
+            "named_graph_iri": named_graph_iri,
+            "base_uri": base_uri,
+            "total_files": len(files),
+            "successful_files": successful_files,
+            "failed_files": failed_files,
+            "total_size": total_size,
+            "results": results
+        }
 
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
-        logger.error("An error occurred during JSON to knowledge graph conversion", exc_info=True)
+        logger.error("An error occurred during JSON file processing", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred processing the request: {str(e)}",
+            detail=f"An error occurred processing the JSON files: {str(e)}",
         )
 
 @router.post("/insert/files/knowledge-graph-triples",
