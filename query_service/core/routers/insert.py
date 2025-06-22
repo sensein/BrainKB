@@ -61,7 +61,7 @@ async def insert_knowledge_graph_triples(
             detail="An error occurred processing the request",
         )
         
-@router.post("/insert/json-to-knowledge-graphs",
+@router.post("/insert/resource/json-to-kg",
              include_in_schema=True
              )
 async def insert_json_to_knowledge_graph(
