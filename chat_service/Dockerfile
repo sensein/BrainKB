@@ -21,11 +21,11 @@ RUN mkdir -p /app/core && \
     chmod -R 755 /app/core
 
 # Expose the port the app runs on
-EXPOSE 8007
+EXPOSE 8011
 
 # Command to run the application with optimized settings
 CMD [ "gunicorn", "core.main:app", \
-      "--bind", "0.0.0.0:8007", \
+      "--bind", "0.0.0.0:8011", \
       "--workers", "4", \
       "--worker-class", "uvicorn.workers.UvicornWorker", \
       "--threads", "4", \
