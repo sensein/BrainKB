@@ -10,9 +10,8 @@ from fastapi.exceptions import HTTPException
 from core.configure_logging import configure_logging
 from core.routers.index import router as index_router
 from core.routers.jwt_auth import router as jwt_router
-from core.routers.structsense import router as structsense_router
 from core.database import init_db_pool, get_db_pool
-
+from core.routers.chat import router as chat_router
 from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
@@ -36,6 +35,9 @@ logger = logging.getLogger(__name__)
 
 origins = [
     "https://beta.brainkb.org",
+    "localhost:3000",
+    "http://localhost:3000",
+    "http://127.0.0.1:300",
 ]
 
 app.add_middleware(
@@ -51,7 +53,7 @@ app.add_middleware(CorrelationIdMiddleware)
 
 app.include_router(index_router, prefix="/api")
 app.include_router(jwt_router, prefix="/api", tags=["Security"])
-app.include_router(structsense_router, prefix="/api", tags=["Multi-agent Systems"])
+app.include_router(chat_router, prefix="/api", tags=["Chat"])
 
 
 

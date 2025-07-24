@@ -16,17 +16,12 @@
 # @File    : shared.py
 # @Software: PyCharm
 
-
-import json
-from rdflib import Graph
-import requests
-import logging
-import uuid
+from typing import Optional, Dict, Any
 from datetime import datetime
-from typing import Optional
-logger = logging.getLogger(__name__)
+import uuid
 
 chat_sessions = {}
+
 
 def get_or_create_session(session_id: Optional[str] = None) -> str:
     """Get existing session ID or create a new one"""
@@ -51,7 +46,7 @@ def update_session_history(session_id: str, user_message: str, assistant_message
             "last_updated": datetime.now().isoformat()
         }
 
-    # Add user message
+    # user message
     chat_sessions[session_id]["messages"].append({
         "role": "user",
         "content": user_message,
