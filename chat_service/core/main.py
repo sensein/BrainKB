@@ -11,6 +11,7 @@ from core.configure_logging import configure_logging
 from core.routers.index import router as index_router
 from core.routers.jwt_auth import router as jwt_router
 from core.database import init_db_pool, get_db_pool
+from core.postgres_cache import init_postgres_cache_pool, close_postgres_cache_pool
 from core.routers.chat import router as chat_router
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -22,6 +23,13 @@ async def lifespan(app: FastAPI):
     # Initialize database connection pool
     await init_db_pool()
     logger.info("Database connection pool initialized")
+    # Initialize PostgreSQL cache connection pool
+    try:
+        await init_postgres_cache_pool()
+        logger.info("PostgreSQL cache connection pool initialized")
+    except Exception as e:
+        logger.warning(f"PostgreSQL cache initialization failed: {str(e)}")
+        logger.warning("Application will continue without caching functionality")
     yield
     # Shutdown
     logger.info("Shutting down FastAPI")
@@ -29,6 +37,9 @@ async def lifespan(app: FastAPI):
     if pool:
         await pool.close()
         logger.info("Database connection pool closed")
+    # Close PostgreSQL cache connection pool
+    await close_postgres_cache_pool()
+    logger.info("PostgreSQL cache connection pool closed")
 
 app = FastAPI(lifespan=lifespan)
 logger = logging.getLogger(__name__)
@@ -52,8 +63,10 @@ app.add_middleware(CorrelationIdMiddleware)
 
 
 app.include_router(index_router, prefix="/api")
-app.include_router(jwt_router, prefix="/api", tags=["Security"])
-app.include_router(chat_router, prefix="/api", tags=["Chat"])
+app.include_router(jwt_router, prefix="/api", tags=["Security Endpoints"])
+app.include_router(chat_router, prefix="/api", tags=["Chat Service Endpoints"])
+
+
 
 
 
