@@ -33,6 +33,8 @@ class PageContext(BaseModel):
     description: Optional[str] = None
     keywords: Optional[List[str]] = None
     entities: Optional[List[str]] = None
+    version: Optional[str] = "1.0"
+    last_updated: Optional[str] = None
 
 class ChatRequest(BaseModel):
     message: str
@@ -49,3 +51,4 @@ class ChatResponse(BaseModel):
     timestamp: str
     context_used: Dict[str, Any]
     session_id: str
+    metadata: Optional[Dict[str, Any]] = None
