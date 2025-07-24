@@ -27,6 +27,7 @@ from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
 from core.shared import get_or_create_session, update_session_history, chat_sessions
 from core.pydantic_models import ChatMessage, PageContext, ChatRequest, ChatResponse
+from core.postgres_cache import get_cache_instance
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -61,8 +62,38 @@ async def chat(
 
         logger.info(f"Context info: {context_info}")
 
-        # Generate response based on message, context, and chat history
-        response_content = generate_response(request, session_history)
+        # Initialize cache
+        try:
+            cache = await get_cache_instance()
+            
+            # Create context for cache key generation (shared across users)
+            cache_context = {
+                "page_context": request.pageContext.dict() if request.pageContext else None,
+                "page_content": request.pageContent,
+                "selected_content": request.selectedPageContent,
+                "chat_history": session_history[-5:] if session_history else []  # Last 5 messages for context
+            }
+            
+            # Generate cache key (shared across users for better cache efficiency)
+            cache_key = cache.generate_cache_key(request.message, cache_context)
+            
+            # Try to get cached response
+            cached_entry = await cache.get(cache_key)
+            if cached_entry:
+                logger.info(f"Cache hit for key: {cache_key[:20]}...")
+                response_content = cached_entry.cache_value
+            else:
+                logger.info(f"Cache miss for key: {cache_key[:20]}...")
+                # Generate response based on message, context, and chat history
+                response_content = generate_response(request, session_history)
+                
+                # Cache the response (TTL: 1 hour)
+                await cache.set(cache_key, response_content, ttl=3600)
+                logger.info(f"Cached response for key: {cache_key[:20]}...")
+        except Exception as e:
+            logger.warning(f"Cache operations failed: {str(e)}")
+            # Generate response without caching
+            response_content = generate_response(request, session_history)
 
         # Update session with new messages
         update_session_history(session_id, request.message, response_content)
@@ -254,3 +285,73 @@ async def delete_chat_session(session_id: str):
         return {"message": f"Session {session_id} deleted"}
     else:
         raise HTTPException(status_code=404, detail="Session not found")
+
+
+@router.get("/chat/cache/stats")
+async def get_cache_stats():
+    """
+    Get cache statistics
+    """
+    try:
+        cache = await get_cache_instance()
+        stats = await cache.get_cache_stats()
+        return {
+            "cache_stats": stats,
+            "message": "Cache statistics retrieved successfully"
+        }
+    except Exception as e:
+        logger.error(f"Error getting cache stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting cache stats: {str(e)}")
+
+
+@router.delete("/chat/cache/clear")
+async def clear_cache():
+    """
+    Clear all cache entries
+    """
+    try:
+        cache = await get_cache_instance()
+        # Get all cache keys and delete them
+        # For now, we'll clear expired entries as a safe operation
+        deleted_count = await cache.clear_expired()
+        return {
+            "message": f"Cleared {deleted_count} expired cache entries",
+            "deleted_count": deleted_count
+        }
+    except Exception as e:
+        logger.error(f"Error clearing cache: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error clearing cache: {str(e)}")
+
+
+@router.delete("/chat/cache/clear-expired")
+async def clear_expired_cache():
+    """
+    Clear only expired cache entries
+    """
+    try:
+        cache = await get_cache_instance()
+        deleted_count = await cache.clear_expired()
+        return {
+            "message": f"Cleared {deleted_count} expired cache entries",
+            "deleted_count": deleted_count
+        }
+    except Exception as e:
+        logger.error(f"Error clearing expired cache: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error clearing expired cache: {str(e)}")
+
+
+@router.get("/chat/cache/status")
+async def get_cache_status():
+    """
+    Check cache status and health
+    """
+    try:
+        cache = await get_cache_instance()
+        status = await cache.check_cache_status()
+        return {
+            "cache_status": status,
+            "message": "Cache status retrieved successfully"
+        }
+    except Exception as e:
+        logger.error(f"Error getting cache status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting cache status: {str(e)}")
