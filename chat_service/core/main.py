@@ -62,7 +62,7 @@ app.add_middleware(
 app.add_middleware(CorrelationIdMiddleware)
 
 
-app.include_router(index_router, prefix="/api")
+app.include_router(index_router)
 app.include_router(jwt_router, prefix="/api", tags=["Security Endpoints"])
 app.include_router(chat_router, prefix="/api", tags=["Chat Service Endpoints"])
 
