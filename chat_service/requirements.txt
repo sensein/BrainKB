@@ -23,4 +23,8 @@ passlib[bcrypt]==1.7.4
 
 python-dotenv==1.0.0
 
+# Database
+asyncpg==0.29.0
 
+# Caching
+redis==5.0.1
