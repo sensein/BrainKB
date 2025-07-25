@@ -199,11 +199,27 @@ class PostgresChatCache:
             async with self.pool.acquire() as conn:
                 query = "DELETE FROM chat_cache WHERE cache_key = $1"
                 result = await conn.execute(query, cache_key)
-                return result != "DELETE 0"
+                deleted = result != "DELETE 0"
+                if deleted:
+                    logger.info(f"Deleted cache entry: {cache_key[:20]}...")
+                return deleted
                 
         except Exception as e:
             logger.error(f"Error deleting cache entry: {str(e)}")
             return False
+
+    async def delete_by_pattern(self, pattern: str) -> int:
+        """Delete cache entries matching a pattern"""
+        try:
+            async with self.pool.acquire() as conn:
+                query = "DELETE FROM chat_cache WHERE cache_key ILIKE $1"
+                result = await conn.execute(query, f"%{pattern}%")
+                deleted_count = int(result.split()[-1]) if result.startswith("DELETE") else 0
+                logger.info(f"Deleted {deleted_count} cache entries matching pattern: {pattern}")
+                return deleted_count
+        except Exception as e:
+            logger.error(f"Error deleting cache entries by pattern: {str(e)}")
+            return 0
     
     async def clear_expired(self) -> int:
         """Clear expired cache entries and return count of deleted entries"""
@@ -391,7 +407,10 @@ class PostgresChatCache:
                 if row:
                     # Calculate age and TTL remaining
                     created_at = row['created_at']
-                    current_time = datetime.utcnow()
+                    # Ensure both times are timezone-aware
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    current_time = datetime.now(timezone.utc)
                     age_seconds = (current_time - created_at).total_seconds()
                     ttl_remaining = max(0, row['ttl'] - age_seconds)
                     
@@ -411,6 +430,56 @@ class PostgresChatCache:
             logger.error(f"Error getting cache details: {str(e)}")
             return None
     
+    async def clear_all(self) -> int:
+        """Clear all cache entries"""
+        try:
+            async with self.pool.acquire() as conn:
+                # First count the entries
+                count_query = "SELECT COUNT(*) FROM chat_cache"
+                total_entries = await conn.fetchval(count_query)
+                
+                # Then delete all entries
+                delete_query = "DELETE FROM chat_cache"
+                await conn.execute(delete_query)
+                
+                logger.info(f"Cleared all {total_entries} cache entries")
+                return total_entries
+        except Exception as e:
+            logger.error(f"Error clearing all cache: {str(e)}")
+            return 0
+
+    async def get_sample_entries(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Get sample cache entries for debugging"""
+        try:
+            async with self.pool.acquire() as conn:
+                query = """
+                SELECT cache_key, LEFT(cache_value, 100) as cache_value_preview, 
+                       created_at, accessed_at, hit_count, ttl
+                FROM chat_cache 
+                ORDER BY created_at DESC 
+                LIMIT $1
+                """
+                rows = await conn.fetch(query, limit)
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Error getting sample entries: {str(e)}")
+            return []
+
+    async def get_cache_keys(self, limit: int = 10) -> List[str]:
+        """Get list of cache keys for debugging"""
+        try:
+            async with self.pool.acquire() as conn:
+                query = """
+                SELECT cache_key FROM chat_cache 
+                ORDER BY created_at DESC 
+                LIMIT $1
+                """
+                rows = await conn.fetch(query, limit)
+                return [row['cache_key'] for row in rows]
+        except Exception as e:
+            logger.error(f"Error getting cache keys: {str(e)}")
+            return []
+
     async def check_cache_status(self) -> Dict[str, Any]:
         """Check if cache is working properly"""
         try:
