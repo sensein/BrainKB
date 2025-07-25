@@ -45,6 +45,7 @@ class ChatRequest(BaseModel):
     selectedPageContent: Optional[str] = None
     chatHistory: Optional[List[ChatMessage]] = None
     timestamp: Optional[str] = None
+    streaming: Optional[bool] = None  # Frontend streaming preference
 
 class ChatResponse(BaseModel):
     content: str
