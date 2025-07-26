@@ -19,6 +19,12 @@
 from typing import Optional, Dict, Any
 from datetime import datetime
 import uuid
+import logging
+import requests
+import asyncio
+from core.configuration import config
+
+logger = logging.getLogger(__name__)
 
 chat_sessions = {}
 
@@ -2833,3 +2839,313 @@ def anatomical_structure():
         "version": null
     }
     """
+
+
+def clean_response_content(content: str) -> str:
+    """
+    Clean up response content to remove duplicates and artifacts especially in the streaming response.
+    """
+    if not content:
+        return content
+
+    content = content.strip()
+
+    # First, handle the specific pattern you're seeing - repeated "Certainly! Here's an analysis..."
+    if "Certainly! Here's an analysis" in content:
+        # Find the first occurrence and everything after it
+        first_occurrence = content.find("Certainly! Here's an analysis")
+        if first_occurrence >= 0:
+            # Take everything from the first occurrence onwards
+            content = content[first_occurrence:]
+
+            # Now remove any subsequent repetitions
+            parts = content.split("Certainly! Here's an analysis")
+            if len(parts) > 1:
+                # Take only the first part (which includes the first occurrence)
+                content = "Certainly! Here's an analysis" + parts[1]
+
+    # Split into lines and remove duplicates
+    lines = content.split('\n')
+    cleaned_lines = []
+    seen_lines = set()
+
+    for line in lines:
+        line = line.strip()
+        if line and line not in seen_lines:
+            cleaned_lines.append(line)
+            seen_lines.add(line)
+
+    # Join lines back together
+    cleaned_content = '\n'.join(cleaned_lines)
+
+    # Remove obvious duplicate patterns (like repeated sentences)
+    sentences = cleaned_content.split('. ')
+    unique_sentences = []
+    seen_sentences = set()
+
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if sentence and sentence not in seen_sentences:
+            unique_sentences.append(sentence)
+            seen_sentences.add(sentence)
+
+    cleaned_content = '. '.join(unique_sentences)
+
+    # Additional aggressive cleaning for repeated content blocks
+    # Look for repeated paragraphs or sections
+    paragraphs = cleaned_content.split('\n\n')
+    unique_paragraphs = []
+    seen_paragraphs = set()
+
+    for paragraph in paragraphs:
+        paragraph = paragraph.strip()
+        if paragraph and paragraph not in seen_paragraphs:
+            unique_paragraphs.append(paragraph)
+            seen_paragraphs.add(paragraph)
+
+    cleaned_content = '\n\n'.join(unique_paragraphs)
+
+    # Remove any trailing incomplete sentences
+    if cleaned_content.endswith('...'):
+        cleaned_content = cleaned_content[:-3].strip()
+
+    # Final check: if the content is still too long, take only the first reasonable chunk
+    if len(cleaned_content) > 2000:  # If still very long, there might be hidden duplicates
+        # Try to find a natural break point
+        sentences = cleaned_content.split('. ')
+        if len(sentences) > 10:
+            # Take first 10 sentences
+            cleaned_content = '. '.join(sentences[:10]) + '.'
+
+    return cleaned_content
+
+
+async def call_llm_api(system_prompt: str, user_prompt: str) -> str:
+    """
+    Call the OpenRouter API to generate a response /perform task.
+    """
+    try:
+        # Get OpenRouter settings from centralized configuration
+        openrouter_settings = config.get_openrouter_settings()
+        
+        # OpenRouter API configuration
+        api_url = openrouter_settings["api_url"]
+        api_key = openrouter_settings["api_key"]
+        model = openrouter_settings["model"]
+        service_name = openrouter_settings["service_name"]
+        service_url = openrouter_settings["service_url"]
+        
+        logger.debug(f"API Key found: {'Yes' if api_key else 'No'}")
+        logger.debug(f"API Key length: {len(api_key) if api_key else 0}")
+
+        if not api_key:
+            logger.error("OPENROUTER_API_KEY not found in environment variables")
+            return "I apologize, but the LLM service is not properly configured. Please check your API key settings."
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": service_url,
+            "X-Title": service_name
+        }
+
+        data = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "max_tokens": 1500,
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "stream": False  # Set to False for regular JSON response
+        }
+
+        response = requests.post(api_url, headers=headers, json=data, timeout=30)
+        logger.debug("#" * 100)
+        logger.debug(f"Response Status: {response.status_code}")
+        logger.debug(f"Response Headers: {dict(response.headers)}")
+        logger.debug(f"Response Text (full): {response.text}")
+        logger.debug(f"Response Content: {response.content}")
+        logger.debug("#" * 100)
+
+        if response.status_code == 200:
+            try:
+                result = response.json()
+                if 'choices' in result and len(result['choices']) > 0:
+                    content = result['choices'][0]['message']['content']
+                    if content:
+                        # clean the content so that it can be rendered properly in chat box
+                        content = clean_response_content(content)
+
+                    return content
+                else:
+                    logger.error(f"Unexpected response format: {result}")
+                    return "I apologize, but I received an unexpected response format from the LLM service."
+            except Exception as e:
+                logger.error(f"Error parsing JSON response: {str(e)}")
+                logger.debug(f"Raw response: {response.text}")
+                return "I apologize, but I couldn't parse the response from the LLM service."
+        else:
+            logger.error(f"OpenRouter API error: {response.status_code} - {response.text}")
+            return f"I apologize, but there was an error communicating with the LLM service (Status: {response.status_code}). Please try again later."
+
+    except requests.exceptions.Timeout:
+        logger.error("OpenRouter API request timed out")
+        return "I apologize, but the request timed out. Please try again with a shorter question or try later."
+    except requests.exceptions.RequestException as e:
+        logger.error(f"OpenRouter API request failed: {str(e)}")
+        return "I apologize, but there was a network error. Please check your connection and try again."
+    except Exception as e:
+        logger.error(f"Error calling OpenRouter API: {str(e)}")
+        return "I apologize, but I encountered an unexpected error. Please try again in a moment."
+
+
+QUERY_OPTIONS = [
+    {
+        "description": "This query gets the count of the rapid release data.",
+        "query": """
+            SELECT (COUNT(DISTINCT ?s) AS ?datasetCount)
+            WHERE {
+              GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
+                ?s ?p ?o .
+              }
+            }
+            """
+    },
+{
+        "description": "This query selects the rapid release data from the database. It selects 1000 data points from the rapid release",
+        "query": """
+        SELECT ?s ?p ?o
+        WHERE {
+          GRAPH <https://www.portal.brain-bican.org/grapidrelease> {
+            ?s ?p ?o .
+          }
+        } Limit 1000
+        """
+    },
+    # more queries to be added
+]
+
+async def select_query_via_llm_user_question(user_question: str) -> str:
+    """
+    Selects the most relevant SPARQL query for a given user question using LLM.
+
+    Args:
+        user_question (str): The natural language question from the user.
+
+    Returns:
+        str: The selected SPARQL query string.
+
+    Raises:
+        ValueError: If the LLM response is invalid or out of bounds.
+    """
+    descriptions = "\n".join(
+        [f"{i + 1}. {q['description']}" for i, q in enumerate(QUERY_OPTIONS)]
+    )
+
+    system_prompt = (
+        "You are a helpful assistant that selects the most relevant SPARQL query "
+        "based on a user's natural language question."
+    )
+
+    user_prompt = f"""
+Given the user's question, choose the most appropriate SPARQL query description
+from the numbered list below.
+
+User Question:
+"{user_question}"
+
+Query Descriptions:
+{descriptions}
+
+Respond with only the number corresponding to the best-matching query (e.g., "3").
+Do not include any explanation or additional text.
+"""
+
+    try:
+        llm_response = (await call_llm_api(system_prompt, user_prompt)).strip()
+        index = int(llm_response) - 1
+        if 0 <= index < len(QUERY_OPTIONS):
+            return QUERY_OPTIONS[index]["query"]
+        else:
+            return None
+    except Exception as e:
+        return None
+
+
+def get_data_from_graph_db(sparql_query: str) -> str:
+    """
+    Retrieve the data from the graph database
+    """
+    try:
+        jwt_username = config.jwt_login_username
+        jwt_password = config.jwt_login_password
+        bearer_token_url = config.jwt_bearer_token_url
+        logger.info("Authenticating with JWT")
+        credentials = {
+            "email": jwt_username,
+            "password": jwt_password
+        }
+
+        login_response = requests.post(bearer_token_url, json=credentials)
+        login_response.raise_for_status()
+        logger.debug("JWT authentication successful")
+
+        access_token = login_response.json().get("access_token")
+        logger.info("Sending SPARQL query to graph database")
+        params = {
+            "sparql_query": sparql_query
+        }
+        req = requests.get(
+            config.query_url,
+            params=params,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {access_token}"
+            }
+        )
+        
+        req.raise_for_status()
+        logger.debug("Graph database query successful")
+        
+        # Parse and format the response
+        response_data = req.json()
+        
+        # Check if the response contains results
+        if 'results' in response_data and 'bindings' in response_data['results']:
+            bindings = response_data['results']['bindings']
+            print("$-"*100)
+            print(bindings)
+            print("$-" * 100)
+            
+            if not bindings:
+                return "No data found for the given query."
+            
+            # Format the results for display
+            formatted_results = []
+            for i, binding in enumerate(bindings, 1):
+                row_data = []
+                for var_name, var_value in binding.items():
+                    if 'value' in var_value:
+                        row_data.append(f"{var_name}: {var_value['value']}")
+                
+                if row_data:
+                    formatted_results.append(f"Row {i}: {' | '.join(row_data)}")
+            
+            if formatted_results:
+                return f"Query Results:\n\n" + "\n\n".join(formatted_results)
+            else:
+                return "Query executed successfully but no data was returned."
+
+        
+        else:
+            # Handle other response formats
+            return f"Query Results: {response_data}"
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request error in get_data_from_graph_db: {str(e)}")
+        return f"Error connecting to graph database: {str(e)}"
+    except Exception as e:
+        logger.error(f"Error in get_data_from_graph_db: {str(e)}")
+        return f"Error retrieving data from graph database: {str(e)}"
