@@ -20,21 +20,22 @@ import logging
 import asyncpg
 from fastapi import HTTPException
 
-from core.configuration import load_environment
+from core.configuration import config
 
 logger = logging.getLogger(__name__)
 
-DB_SETTINGS = {
-    "user": load_environment()["JWT_POSTGRES_DATABASE_USER"],
-    "password": load_environment()["JWT_POSTGRES_DATABASE_PASSWORD"],
-    "database": load_environment()["JWT_POSTGRES_DATABASE_NAME"],
-    "host": load_environment()["JWT_POSTGRES_DATABASE_HOST_URL"],
-    "port": load_environment()["JWT_POSTGRES_DATABASE_PORT"],
+# Database settings
+database_settings = {
+    "user": config.postgres_user,
+    "password": config.postgres_password,
+    "database": config.postgres_database,
+    "host": config.postgres_host,
+    "port": config.postgres_port,
 }
 
-table_name_user = load_environment()["JWT_POSTGRES_TABLE_USER"]
-table_name_scope = load_environment()["JWT_POSTGRES_TABLE_SCOPE"]
-table_relation = load_environment()["JWT_POSTGRES_TABLE_USER_SCOPE_REL"]
+table_name_user = config.postgres_table_user
+table_name_scope = config.postgres_table_scope
+table_relation = config.postgres_table_user_scope_rel
 
 # Global connection pool
 pool = None
@@ -47,7 +48,7 @@ async def init_db_pool():
         pool = await asyncpg.create_pool(
             min_size=10,
             max_size=100,
-            **DB_SETTINGS
+            **database_settings
         )
         logger.info("Database connection pool initialized")
         return pool
