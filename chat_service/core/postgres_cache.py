@@ -18,7 +18,7 @@
 import logging
 import asyncpg
 from fastapi import HTTPException
-from core.configuration import load_environment
+from core.configuration import config
 from core.models.postgres_cache import PostgresChatCache
 
 logger = logging.getLogger(__name__)
@@ -27,21 +27,8 @@ logger = logging.getLogger(__name__)
 postgres_cache_pool = None
 
 def get_postgres_cache_settings():
-    """Get PostgreSQL cache database settings from environment"""
-    env = load_environment()
-    return {
-        "host": env["JWT_POSTGRES_DATABASE_HOST_URL"],
-        "port": env["JWT_POSTGRES_DATABASE_PORT"],
-        "user": env["JWT_POSTGRES_DATABASE_USER"],
-        "password": env["JWT_POSTGRES_DATABASE_PASSWORD"],
-        "database": env["JWT_POSTGRES_DATABASE_NAME"],
-        "min_size": 10,
-        "max_size": 100,
-        "command_timeout": 60,
-        "server_settings": {
-            "application_name": "chat_cache_service"
-        }
-    }
+    """Get PostgreSQL cache database settings from centralized configuration"""
+    return config.get_postgres_settings()
 
 async def init_postgres_cache_pool():
     """Initialize the PostgreSQL cache connection pool"""
