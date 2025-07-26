@@ -26,13 +26,13 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import ExpiredSignatureError, JWTError, jwt
 from passlib.context import CryptContext
 
-from core.configuration import load_environment
+from core.configuration import config
 from core.database import get_user
 
 logger = logging.getLogger(__name__)
 
-SECRET_KEY = load_environment()["JWT_SECRET_KEY"]
-ALGORITHM = load_environment()["JWT_ALGORITHM"]
+SECRET_KEY = config.jwt_secret_key
+ALGORITHM = config.jwt_algorithm
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 pwd_context = CryptContext(schemes=["bcrypt"])
 
