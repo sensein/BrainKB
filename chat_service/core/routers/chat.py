@@ -19,17 +19,19 @@ from fastapi import APIRouter, File, UploadFile, HTTPException, Form, Depends
 from typing import Optional
 import asyncio
 import logging
+import re
 from typing import Annotated, List, Dict, Any
 from fastapi.responses import StreamingResponse
 import json
 from datetime import datetime, timezone
-import os
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
-from core.shared import get_or_create_session, update_session_history, chat_sessions
+from core.shared import (get_or_create_session, update_session_history, chat_sessions, call_llm_api,
+                         clean_response_content, select_query_via_llm_user_question, get_data_from_graph_db)
 from core.pydantic_models import ChatMessage, PageContext, ChatRequest, ChatResponse
 from core.postgres_cache import get_cache_instance
-import requests
+from core.configuration import config
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -45,46 +47,47 @@ async def chat(
     2. 'X-Streaming' header (from frontend config)
     3. 'streaming' field in request body (from frontend config)
     """
+
     try:
         # Auto-detect streaming preference from multiple sources
         auto_stream = False
-        
+
         # Check for streaming header
         if req and req.headers.get("X-Streaming"):
             auto_stream = req.headers.get("X-Streaming").lower() == "true"
-            print(f"🔍 Detected streaming from header: {auto_stream}")
-        
+            logger.debug(f"🔍 Detected streaming from header: {auto_stream}")
+
         # Check for streaming in request body (if it exists)
         if hasattr(request, 'streaming') and request.streaming is not None:
             auto_stream = request.streaming
-            print(f"🔍 Detected streaming from request body: {auto_stream}")
-        
+            logger.debug(f"🔍 Detected streaming from request body: {auto_stream}")
+
         # Check for Accept header indicating streaming
         if req and req.headers.get("accept") == "text/event-stream":
             auto_stream = True
-            print(f"🔍 Detected streaming from Accept header: {auto_stream}")
-        
+            logger.debug(f"🔍 Detected streaming from Accept header: {auto_stream}")
+
         # Use explicit stream parameter if provided, otherwise use auto-detected
         final_stream = stream if stream is not None else auto_stream
-        
+
         # Log query parameter detection
         if stream is not None:
-            print(f"🔍 Detected streaming from query parameter: {stream}")
-        
+            logger.debug(f"🔍 Detected streaming from query parameter: {stream}")
+
         # Log all headers for debugging
         if req:
-            print(f"🔍 Request headers: {dict(req.headers)}")
-            print(f"🔍 Query params: {dict(req.query_params)}")
-        
+            logger.debug(f"🔍 Request headers: {dict(req.headers)}")
+            logger.debug(f"🔍 Query params: {dict(req.query_params)}")
+
         # Log request body for debugging
-        print(f"🔍 Request body streaming field: {getattr(request, 'streaming', 'NOT_FOUND')}")
-        print(f"🔍 Request body type: {type(request)}")
-        print(f"🔍 Request body dir: {[attr for attr in dir(request) if not attr.startswith('_')]}")
-        
-        print("*"*100)
-        print(f"Received chat request: {request.message[:100]}...")
-        print(f"Stream detection: explicit={stream}, auto={auto_stream}, final={final_stream}")
-        print("*" * 100)
+        logger.debug(f"🔍 Request body streaming field: {getattr(request, 'streaming', 'NOT_FOUND')}")
+        logger.debug(f"🔍 Request body type: {type(request)}")
+        logger.debug(f"🔍 Request body dir: {[attr for attr in dir(request) if not attr.startswith('_')]}")
+
+        logger.info("*"*100)
+        logger.info(f"Received chat request: {request.message[:100]}...")
+        logger.info(f"Stream detection: explicit={stream}, auto={auto_stream}, final={final_stream}")
+        logger.info("*" * 100)
 
         # Get or create session
         session_id = get_or_create_session(request.session_id)
@@ -103,48 +106,64 @@ async def chat(
 
         logger.info(f"Context info: {context_info}")
 
-        # Initialize cache
-        try:
-            cache = await get_cache_instance()
+
+        template_query = await select_query_via_llm_user_question(request.message)
+        if template_query is not None:
+            """
+            before checking the cache and further processing we first wanted to check the query template. 
+            The query template consists or is expected to consist some of the top queries that people requests for.
+            """
+            print("#"*100)
+            print(f"fetched sparql query: {template_query}")
+            print("#"*100)
+            data = get_data_from_graph_db(template_query)
+            response_content = await handle_template_query(data)
+            return response_content
+        else:
+            response_content = None
             
-            # Create context for cache key generation (shared across users)
-            cache_context = {
-                "page_context": request.pageContext.dict() if request.pageContext else None,
-                "page_content": request.pageContent,
-                "selected_content": request.selectedPageContent,
-                "chat_history": session_history[-5:] if session_history else []  # Last 5 messages for context
-            }
-            
-            # Generate cache key (shared across users for better cache efficiency)
-            cache_key = cache.generate_cache_key(request.message, cache_context)
-            
-            # Try to get cached response (unless force_fresh is True)
-            cached_entry = None if force_fresh else await cache.get(cache_key)
-            if cached_entry and not force_fresh:
-                logger.info(f"Cache hit for key: {cache_key[:20]}...")
-                print(f"🔍 CACHE HIT - Using cached response")
-                response_content = cached_entry.cache_value
-            else:
-                if force_fresh:
-                    logger.info(f"Force fresh response requested")
-                    print(f"🔄 FORCE FRESH - Calling LLM despite cache")
+            # Initialize cache
+            try:
+                cache = await get_cache_instance()
+
+                # Create context for cache key generation (shared across users)
+                cache_context = {
+                    "page_context": request.pageContext.dict() if request.pageContext else None,
+                    "page_content": request.pageContent,
+                    "selected_content": request.selectedPageContent,
+                    "chat_history": session_history[-5:] if session_history else []  # Last 5 messages for context
+                }
+
+                # Generate cache key (shared across users for better cache efficiency)
+                cache_key = cache.generate_cache_key(request.message, cache_context)
+
+                # Try to get cached response (unless force_fresh is True)
+                cached_entry = None if force_fresh else await cache.get(cache_key)
+                if cached_entry and not force_fresh:
+                    logger.info(f"Cache hit for key: {cache_key[:20]}...")
+                    logger.debug(f"🔍 CACHE HIT - Using cached response")
+                    response_content = cached_entry.cache_value
                 else:
-                    logger.info(f"Cache miss for key: {cache_key[:20]}...")
-                    print(f"🆕 CACHE MISS - Calling LLM for fresh response")
-                # Generate response based on message, context, and chat history
-                response_content = await generate_response(request, session_history)
-                print(f"✅ LLM Response Generated: {len(response_content)} characters")
-                print(f"📝 Response Preview: {response_content[:200]}...")
-                
-                # Ensure response content is not empty and clean
-                if not response_content or response_content.strip() == "":
-                    response_content = "I apologize, but I couldn't generate a response. Please try again."
-                    print("⚠️ Empty response detected, using fallback message")
-                else:
-                    # Clean up response content using the dedicated function
-                    response_content = clean_response_content(response_content)
-                    print(f"✅ Cleaned response content: {len(response_content)} characters")
-                
+                    if force_fresh:
+                        logger.info(f"Force fresh response requested")
+                        logger.debug(f"🔄 FORCE FRESH - Calling LLM despite cache")
+                    else:
+                        logger.info(f"Cache miss for key: {cache_key[:20]}...")
+                        logger.debug(f"🆕 CACHE MISS - Calling LLM for fresh response")
+                    # Generate response based on message, context, and chat history
+                    response_content = await generate_response(request, session_history)
+                    logger.info(f"✅ LLM Response Generated: {len(response_content)} characters")
+                    logger.debug(f"📝 Response Preview: {response_content[:200]}...")
+
+                    # Ensure response content is not empty and clean
+                    if not response_content or response_content.strip() == "":
+                        response_content = "I apologize, but I couldn't generate a response. Please try again."
+
+                    else:
+                        # Clean up response content using the dedicated function
+                        response_content = clean_response_content(response_content)
+
+
                 # Prepare cache metadata with freshness info
                 cache_metadata = {
                     "response_length": len(response_content),
@@ -155,10 +174,10 @@ async def chat(
                     "cached_at": datetime.now().isoformat(),
                     "cache_type": "contextual_response",
                     "llm_provider": "openrouter",
-                    "llm_model": os.getenv('OPENROUTER_MODEL', 'openai/gpt-4'),
+                    "llm_model": config.openrouter_model,
                     "freshness": {
                         "created_at": datetime.now().isoformat(),
-                        "ttl_seconds": 3600,
+                        "ttl_seconds": config.cache_ttl_seconds,
                         "is_fresh": True,
                         "last_updated": datetime.now().isoformat(),
                         "update_count": 1
@@ -170,41 +189,48 @@ async def chat(
                         "session_context_hash": hash(str(session_history[-5:])) if session_history else None
                     }
                 }
-                
+
                 # Cache the response with metadata (TTL: 1 hour)
-                await cache.set(cache_key, response_content, ttl=3600, metadata=cache_metadata)
+                await cache.set(cache_key, response_content, ttl=config.cache_ttl_seconds, metadata=cache_metadata)
                 logger.info(f"Cached response for key: {cache_key[:20]}...")
-        except Exception as e:
-            logger.warning(f"Cache operations failed: {str(e)}")
-            # Generate response without caching
-            response_content = await generate_response(request, session_history)
+            except Exception as e:
+                logger.warning(f"Cache operations failed: {str(e)}")
+                # Generate response without caching
+                try:
+                    response_content = await generate_response(request, session_history)
+                    # Clean the response
+                    if response_content:
+                        response_content = clean_response_content(response_content)
+                except Exception as gen_error:
+                    logger.error(f"Failed to generate response: {str(gen_error)}")
+                    response_content = "I apologize, but I encountered an error while processing your request. Please try again."
 
         # Update session with new messages
         update_session_history(session_id, request.message, response_content)
 
-        print(f"🎯 RESPONSE TYPE: {'STREAMING' if final_stream else 'REGULAR'}")
+        logger.info(f"🎯 RESPONSE TYPE: {'STREAMING' if final_stream else 'REGULAR'}")
         
+        # Safety check: ensure response_content is not None
+        if response_content is None:
+            logger.error("Response content is None - this should not happen")
+            response_content = "I apologize, but I encountered an error while processing your request. Please try again."
+
         if final_stream:
             # Return streaming response
-            print(f"🎯 Starting streaming response...")
+            logger.info(f"🎯 Starting streaming response...")
             async def generate_stream():
                 """Generate streaming response"""
                 try:
-                    print(f"🎯 Streaming: Sending connection message")
+                    logger.info(f"🎯 Streaming: Sending connection message")
                     # Send initial connection message
                     yield f"data: {json.dumps({'type': 'connection', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
 
-                    # Simulate streaming response by breaking it into chunks
-                    print(f"🎯 Streaming: Response content length: {len(response_content)}")
-                    print(f"🎯 Streaming: Response preview: {response_content[:100]}...")
-                    
                     # Clean the response content first to remove any duplicates
                     clean_content = clean_response_content(response_content)
-                    print(f"🎯 Streaming: Clean content length: {len(clean_content)}")
-                    
+
                     # Additional check: if the content is still problematic, try a more aggressive approach
                     if len(clean_content) > 1500 or "Certainly! Here's an analysis" in clean_content:
-                        print("⚠️ Content still seems problematic, applying aggressive cleaning...")
+                        logger.warning("⚠️ Content still seems problematic, applying aggressive cleaning...")
                         # Try to extract just the first meaningful section
                         if "Certainly! Here's an analysis" in clean_content:
                             # Find the first occurrence and take everything up to the next major section
@@ -218,17 +244,14 @@ async def chat(
                                 marker_idx = remaining.find(marker, 100)  # Start looking after first 100 chars
                                 if marker_idx > 0 and marker_idx < end_idx:
                                     end_idx = marker_idx
-                            
+
                             clean_content = remaining[:end_idx].strip()
-                            print(f"🎯 Streaming: Aggressively cleaned content length: {len(clean_content)}")
-                    
+                            logger.info(f"🎯 Streaming: Aggressively cleaned content length: {len(clean_content)}")
+
                     # Split response into sentences for better streaming
-                    import re
                     sentences = re.split(r'(?<=[.!?])\s+', clean_content)
                     sentences = [s.strip() for s in sentences if s.strip()]  # Remove empty sentences
-                    
-                    print(f"🎯 Streaming: Found {len(sentences)} sentences")
-                    
+
                     # Stream the content sentence by sentence
                     accumulated_content = ""
                     last_sent_content = ""  # Track last sent content to avoid duplicates
@@ -238,18 +261,18 @@ async def chat(
                             accumulated_content += " " + sentence
                         else:
                             accumulated_content = sentence
-                        
+
                         # Send partial response every 2 sentences or at the end
                         if i % 2 == 0 or i == len(sentences) - 1:
-                            print(f"🎯 Streaming: Sending partial response {i+1}/{len(sentences)} sentences")
-                            print(f"🎯 Streaming: Partial content: {accumulated_content[:100]}...")
-                            
+                            logger.info(f"🎯 Streaming: Sending partial response {i+1}/{len(sentences)} sentences")
+                            logger.debug(f"🎯 Streaming: Partial content: {accumulated_content[:100]}...")
+
                             # Only send if we have meaningful content, it's not the complete response yet, and it's different from last sent
-                            if (accumulated_content and 
-                                len(accumulated_content) > 10 and 
+                            if (accumulated_content and
+                                len(accumulated_content) > 10 and
                                 accumulated_content != last_sent_content and
                                 accumulated_content != clean_content):
-                                
+
                                 yield f"data: {json.dumps({'type': 'partial', 'content': accumulated_content, 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
                                 last_sent_content = accumulated_content
                                 await asyncio.sleep(0.3)  # Slightly longer delay for better readability
@@ -307,11 +330,11 @@ async def chat(
                                     created_time = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
                                 else:
                                     created_time = datetime.fromisoformat(created_at)
-                                
+
                                 current_time = datetime.now(timezone.utc)
                                 age_seconds = (current_time - created_time).total_seconds()
                                 ttl_remaining = max(0, ttl - age_seconds)
-                                
+
                                 stream_metadata["freshness"]["cache_age_seconds"] = age_seconds
                                 stream_metadata["freshness"]["ttl_remaining"] = ttl_remaining
                                 stream_metadata["cache_status"]["is_stale"] = ttl_remaining <= 0
@@ -320,15 +343,15 @@ async def chat(
                                 logger.warning(f"Error calculating cache age for streaming: {str(e)}")
                                 stream_metadata["freshness"]["cache_age_seconds"] = None
                                 stream_metadata["freshness"]["ttl_remaining"] = None
-                    
+
                     # Final validation: if content is still too problematic, send a simplified version
                     if len(clean_content) > 2000:
-                        print("⚠️ Content still too long, sending simplified version...")
+                        logger.warning("⚠️ Content still too long, sending simplified version...")
                         # Take just the first few sentences
                         sentences = clean_content.split('. ')
                         if len(sentences) > 5:
                             clean_content = '. '.join(sentences[:5]) + '.'
-                    
+
                     # Send final complete message with metadata
                     yield f"data: {json.dumps({'type': 'complete', 'content': clean_content, 'session_id': session_id, 'timestamp': datetime.now().isoformat(), 'metadata': stream_metadata})}\n\n"
 
@@ -337,7 +360,7 @@ async def chat(
 
                 except Exception as e:
                     logger.error(f"Error in streaming response: {str(e)}")
-                    print(f"🎯 Streaming: Error occurred: {str(e)}")
+                    logger.debug(f"🎯 Streaming: Error occurred: {str(e)}")
                     yield f"data: {json.dumps({'type': 'error', 'error': str(e), 'timestamp': datetime.now().isoformat()})}\n\n"
 
             return StreamingResponse(
@@ -405,11 +428,11 @@ async def chat(
                             created_time = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
                         else:
                             created_time = datetime.fromisoformat(created_at)
-                        
+
                         current_time = datetime.now(timezone.utc)
                         age_seconds = (current_time - created_time).total_seconds()
                         ttl_remaining = max(0, ttl - age_seconds)
-                        
+
                         metadata["freshness"]["cache_age_seconds"] = age_seconds
                         metadata["freshness"]["ttl_remaining"] = ttl_remaining
                         metadata["cache_status"]["is_stale"] = ttl_remaining <= 0
@@ -419,18 +442,6 @@ async def chat(
                         metadata["freshness"]["cache_age_seconds"] = None
                         metadata["freshness"]["ttl_remaining"] = None
 
-            # Return regular response
-            response = ChatResponse(
-                content=response_content,
-                timestamp=datetime.now().isoformat(),
-                context_used=context_info,
-                session_id=session_id,
-                metadata=metadata
-            )
-
-            logger.info(f"Generated response: {response_content[:100]}...")
-            print(f"🎯 FINAL RESPONSE TO USER: {response_content[:300]}...")
-            
             # Return just the content for frontend compatibility
             return {
                 "content": response_content,
@@ -443,83 +454,48 @@ async def chat(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-def clean_response_content(content: str) -> str:
+
+async def handle_template_query(data) -> str:
     """
-    Clean up response content to remove duplicates and artifacts
+    Format the data in order to display in a chat
     """
-    if not content:
-        return content
-    
-    content = content.strip()
-    
-    # First, handle the specific pattern you're seeing - repeated "Certainly! Here's an analysis..."
-    if "Certainly! Here's an analysis" in content:
-        # Find the first occurrence and everything after it
-        first_occurrence = content.find("Certainly! Here's an analysis")
-        if first_occurrence >= 0:
-            # Take everything from the first occurrence onwards
-            content = content[first_occurrence:]
+    try:
+        # Prepare the prompt for the LLM with template query
+        system_prompt = """ou are BrainKB Assistant — an AI-powered chat service specialized in data formatting, pattern discovery, and knowledge navigation.
+
+            Your capabilities include:
             
-            # Now remove any subsequent repetitions
-            parts = content.split("Certainly! Here's an analysis")
-            if len(parts) > 1:
-                # Take only the first part (which includes the first occurrence)
-                content = "Certainly! Here's an analysis" + parts[1]
-    
-    # Split into lines and remove duplicates
-    lines = content.split('\n')
-    cleaned_lines = []
-    seen_lines = set()
-    
-    for line in lines:
-        line = line.strip()
-        if line and line not in seen_lines:
-            cleaned_lines.append(line)
-            seen_lines.add(line)
-    
-    # Join lines back together
-    cleaned_content = '\n'.join(cleaned_lines)
-    
-    # Remove obvious duplicate patterns (like repeated sentences)
-    sentences = cleaned_content.split('. ')
-    unique_sentences = []
-    seen_sentences = set()
-    
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if sentence and sentence not in seen_sentences:
-            unique_sentences.append(sentence)
-            seen_sentences.add(sentence)
-    
-    cleaned_content = '. '.join(unique_sentences)
-    
-    # Additional aggressive cleaning for repeated content blocks
-    # Look for repeated paragraphs or sections
-    paragraphs = cleaned_content.split('\n\n')
-    unique_paragraphs = []
-    seen_paragraphs = set()
-    
-    for paragraph in paragraphs:
-        paragraph = paragraph.strip()
-        if paragraph and paragraph not in seen_paragraphs:
-            unique_paragraphs.append(paragraph)
-            seen_paragraphs.add(paragraph)
-    
-    cleaned_content = '\n\n'.join(unique_paragraphs)
-    
-    # Remove any trailing incomplete sentences
-    if cleaned_content.endswith('...'):
-        cleaned_content = cleaned_content[:-3].strip()
-    
-    # Final check: if the content is still too long, take only the first reasonable chunk
-    if len(cleaned_content) > 2000:  # If still very long, there might be hidden duplicates
-        # Try to find a natural break point
-        sentences = cleaned_content.split('. ')
-        if len(sentences) > 10:
-            # Take first 10 sentences
-            cleaned_content = '. '.join(sentences[:10]) + '.'
-    
-    return cleaned_content
+            Reading and intelligently formatting data for clear and concise chat presentation
+            
+            Identifying data patterns, relationships, and connections
+            
+            Extracting and providing insights from both content and context
+            
+            Answering questions about entities, relationships, schemas, and data structures
+            
+            Helping users navigate, interpret, and understand complex datasets or knowledge graphs
+            
+            For any given data, your primary goals are:
+            
+            Format it in a way that is easy to understand in a chat environment
+            
+            Highlight key insights, patterns, and anomalies
+            
+            Enable smooth exploration of the data’s structure and meaning
+            
+            Stay accurate, concise, and user-friendly in your responses.
+            
+            Important: Only give insights based on the data and do not generate anything on your own."""
+
+
+        user_prompt = f"""Data: {data}"""
+        llm_response = await call_llm_api(system_prompt, user_prompt)
+        cleaned_response = clean_response_content(llm_response)
+        return cleaned_response
+
+    except Exception as e:
+        logger.error(f"Error handling template query: {str(e)}")
+        return f"I apologize, but I encountered an error while processing your template query. Please try again or rephrase your question. Error: {str(e)}"
 
 
 async def generate_response(request: ChatRequest, chat_history: List[Dict[str, Any]]) -> str:
@@ -527,9 +503,9 @@ async def generate_response(request: ChatRequest, chat_history: List[Dict[str, A
     Generate a contextual response using an LLM based on the message, available context, and chat history
     """
     try:
-        print("*"*100)
-        print("Generating--llm")
-        print("*" * 100)
+        logger.info("*"*100)
+        logger.info("Generating--llm")
+        logger.info("*" * 100)
 
         # Prepare context for the LLM
         context_parts = []
@@ -561,6 +537,11 @@ async def generate_response(request: ChatRequest, chat_history: List[Dict[str, A
         # Build the full context
         full_context = "\n\n".join(context_parts) if context_parts else "No additional context available."
 
+
+        logger.debug("##"*100)
+        logger.debug(request.message)
+        logger.debug("##" * 100)
+
         # Prepare the prompt for the LLM
         system_prompt = """You are BrainKB Assistant, an AI-powered chat service specialized in knowledge graph analysis and data exploration. 
 
@@ -581,19 +562,19 @@ User Message: {request.message}
 Please provide a helpful response based on the user's message and the available context. If the user is asking about knowledge graphs, entities, relationships, or data analysis, focus on those topics. Be conversational but informative."""
 
         # Call the LLM API (you can replace this with your preferred LLM service)
-        print("About to call LLM API...")
+        logger.debug("About to call LLM API...")
         llm_response = await call_llm_api(system_prompt, user_prompt)
-        print(f"LLM Response received: {llm_response[:200]}...")
+        logger.debug(f"LLM Response received: {llm_response[:200]}...")
 
         # Clean the response to remove any duplicates or artifacts
         cleaned_response = clean_response_content(llm_response)
-        print(f"Cleaned response: {cleaned_response[:200]}...")
+        logger.debug(f"Cleaned response: {cleaned_response[:200]}...")
         
         # Log if there was significant cleaning
         if len(cleaned_response) != len(llm_response):
-            print(f"⚠️ Response was cleaned: {len(llm_response)} -> {len(cleaned_response)} characters")
-            print(f"Original preview: {llm_response[:100]}...")
-            print(f"Cleaned preview: {cleaned_response[:100]}...")
+            logger.info(f"⚠️ Response was cleaned: {len(llm_response)} -> {len(cleaned_response)} characters")
+            logger.info(f"Original preview: {llm_response[:100]}...")
+            logger.info(f"Cleaned preview: {cleaned_response[:100]}...")
 
         return cleaned_response
 
@@ -603,94 +584,6 @@ Please provide a helpful response based on the user's message and the available 
         return f"I apologize, but I encountered an error while processing your request. Please try again or rephrase your question. Error: {str(e)}"
 
 
-async def call_llm_api(system_prompt: str, user_prompt: str) -> str:
-    """
-    Call the OpenRouter API to generate a response
-    OpenRouter provides access to multiple LLM models through a single API
-    """
-    try:
-        import os
-        
-        # OpenRouter API configuration
-        api_url = "https://openrouter.ai/api/v1/chat/completions"
-        api_key = os.getenv('OPENROUTER_API_KEY')
-        print(f"API Key found: {'Yes' if api_key else 'No'}")
-        print(f"API Key length: {len(api_key) if api_key else 0}")
-        
-        if not api_key:
-            logger.error("OPENROUTER_API_KEY not found in environment variables")
-            return "I apologize, but the LLM service is not properly configured. Please check your API key settings."
-        
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://brainkb.com",  # Your application URL
-            "X-Title": "BrainKB Chat Service"  # Your application name
-        }
-        
-        # You can choose different models available through OpenRouter
-        # Popular options: gpt-4, gpt-3.5-turbo, claude-3-sonnet, claude-3-haiku, etc.
-        model = os.getenv('OPENROUTER_MODEL', 'openai/gpt-4')  # Default to GPT-4
-        print(f"Using model: {model}")
-        
-        data = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "max_tokens": 1500,
-            "temperature": 0.7,
-            "top_p": 0.9,
-            "stream": False  # Set to False for regular JSON response
-        }
-        
-        # Make the API call
-        print(f"Making request to: {api_url}")
-        print(f"Headers: {headers}")
-        print(f"Data: {data}")
-        
-        response = requests.post(api_url, headers=headers, json=data, timeout=30)
-        print("#"*100)
-        print(f"Response Status: {response.status_code}")
-        print(f"Response Headers: {dict(response.headers)}")
-        print(f"Response Text (full): {response.text}")
-        print(f"Response Content: {response.content}")
-        print("#" * 100)
-        
-        if response.status_code == 200:
-            try:
-                result = response.json()
-                print(f"Parsed JSON: {result}")
-                if 'choices' in result and len(result['choices']) > 0:
-                    content = result['choices'][0]['message']['content']
-                    print(f"Generated content: {content[:200]}...")
-                    
-                    # Clean up the content to remove any artifacts
-                    if content:
-                        content = clean_response_content(content)
-                    
-                    return content
-                else:
-                    logger.error(f"Unexpected response format: {result}")
-                    return "I apologize, but I received an unexpected response format from the LLM service."
-            except Exception as e:
-                logger.error(f"Error parsing JSON response: {str(e)}")
-                print(f"Raw response: {response.text}")
-                return "I apologize, but I couldn't parse the response from the LLM service."
-        else:
-            logger.error(f"OpenRouter API error: {response.status_code} - {response.text}")
-            return f"I apologize, but there was an error communicating with the LLM service (Status: {response.status_code}). Please try again later."
-
-    except requests.exceptions.Timeout:
-        logger.error("OpenRouter API request timed out")
-        return "I apologize, but the request timed out. Please try again with a shorter question or try later."
-    except requests.exceptions.RequestException as e:
-        logger.error(f"OpenRouter API request failed: {str(e)}")
-        return "I apologize, but there was a network error. Please check your connection and try again."
-    except Exception as e:
-        logger.error(f"Error calling OpenRouter API: {str(e)}")
-        return "I apologize, but I encountered an unexpected error. Please try again in a moment."
 
 
 @router.get("/chat/sessions")
@@ -890,100 +783,3 @@ async def get_cache_status():
     except Exception as e:
         logger.error(f"Error getting cache status: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting cache status: {str(e)}")
-
-
-@router.get("/test/stream")
-async def test_stream():
-    """
-    Simple test endpoint for streaming
-    """
-    async def generate_test_stream():
-        yield f"data: {json.dumps({'type': 'connection', 'message': 'Test connection established'})}\n\n"
-        await asyncio.sleep(0.1)
-        
-        for i in range(5):
-            yield f"data: {json.dumps({'type': 'partial', 'content': f'Test message {i+1}', 'progress': f'{i+1}/5'})}\n\n"
-            await asyncio.sleep(0.5)
-        
-        yield f"data: {json.dumps({'type': 'complete', 'content': 'Test streaming completed successfully!', 'final': True})}\n\n"
-    
-    return StreamingResponse(
-        generate_test_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Cache-Control"
-        }
-    )
-
-
-@router.get("/test/stream/duplicate")
-async def test_stream_duplicate():
-    """
-    Test endpoint that simulates the duplicate content issue
-    """
-    async def generate_test_stream():
-        yield f"data: {json.dumps({'type': 'connection', 'message': 'Test connection established'})}\n\n"
-        await asyncio.sleep(0.1)
-        
-        # Simulate the problematic content
-        problematic_content = "Certainly! Here's an analysis of the page content with a focus on knowledge graphs, entities, and relationships: 1.Certainly! Here's an analysis of the page content with a focus on knowledge graphs, entities, and relationships: 1. Entities Identified: Person Organization Location Barcoded Cell Sample Library Aliquot Library Pool Fastq File 2. Relationships and Data Structure: The content describes how biological samples (specifically, libraries and their aliquots) are tracked and analyzed: Library Aliquot is a sub-portion of a larger Library.Certainly! Here's an analysis of the page content with a focus on knowledge graphs, entities, and relationships: 1. Entities Identified: Person Organization Location Barcoded Cell Sample Library Aliquot Library Pool Fastq File 2. Relationships and Data Structure: The content describes how biological samples (specifically, libraries and their aliquots) are tracked and analyzed: Library Aliquot is a sub-portion of a larger Library."
-        
-        # Clean the content
-        cleaned_content = clean_response_content(problematic_content)
-        
-        # Stream the cleaned content
-        sentences = cleaned_content.split('. ')
-        accumulated_content = ""
-        last_sent_content = ""
-        
-        for i, sentence in enumerate(sentences):
-            if accumulated_content:
-                accumulated_content += " " + sentence
-            else:
-                accumulated_content = sentence
-            
-            if i % 2 == 0 or i == len(sentences) - 1:
-                if (accumulated_content and 
-                    len(accumulated_content) > 10 and 
-                    accumulated_content != last_sent_content and
-                    accumulated_content != cleaned_content):
-                    
-                    yield f"data: {json.dumps({'type': 'partial', 'content': accumulated_content})}\n\n"
-                    last_sent_content = accumulated_content
-                    await asyncio.sleep(0.3)
-        
-        yield f"data: {json.dumps({'type': 'complete', 'content': cleaned_content, 'final': True})}\n\n"
-    
-    return StreamingResponse(
-        generate_test_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Cache-Control"
-        }
-    )
-
-
-@router.post("/test/clean")
-async def test_clean_content(request: dict):
-    """
-    Test endpoint to test the cleaning function directly
-    """
-    content = request.get("content", "")
-    original_length = len(content)
-    
-    cleaned_content = clean_response_content(content)
-    cleaned_length = len(cleaned_content)
-    
-    return {
-        "original_length": original_length,
-        "cleaned_length": cleaned_length,
-        "original_content": content[:500] + "..." if len(content) > 500 else content,
-        "cleaned_content": cleaned_content[:500] + "..." if len(cleaned_content) > 500 else cleaned_content,
-        "reduction_percentage": round((original_length - cleaned_length) / original_length * 100, 2) if original_length > 0 else 0
-    }
