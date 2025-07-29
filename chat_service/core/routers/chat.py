@@ -27,7 +27,8 @@ from datetime import datetime, timezone
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
 from core.shared import (get_or_create_session, update_session_history, chat_sessions, call_llm_api,
-                         clean_response_content, select_query_via_llm_user_question, get_data_from_graph_db)
+                         clean_response_content, select_query_via_llm_user_question, get_data_from_graph_db,
+                         update_query_with_parameters, query_fixer)
 from core.pydantic_models import ChatMessage, PageContext, ChatRequest, ChatResponse
 from core.postgres_cache import get_cache_instance
 from core.configuration import config
@@ -106,18 +107,204 @@ async def chat(
 
         logger.info(f"Context info: {context_info}")
 
+        # Handle simple greetings and help requests
+        message_lower = request.message.lower().strip()
+        
+        # Greeting patterns
+        greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening", "greetings"]
+        help_patterns = ["help", "what can you do", "how can you help", "what are your capabilities"]
+        
+        # Check for greetings
+        if any(greeting in message_lower for greeting in greetings):
+            return """Hello! 👋 I'm your BrainKB assistant, designed to help you explore and analyze biological knowledge graphs and data.
+
+I can help you with:
+• Querying donor information and metadata
+• Exploring gene annotations and genome assemblies  
+• Analyzing biological relationships and pathways
+• Retrieving data from the BrainKB knowledge graph
+• Answering questions about biological entities
+
+Just ask me anything about the data, like:
+- "Give me donor details for DO-CYPH5324"
+- "Show me genome assemblies"
+- "What gene annotations are available?"
+- "Tell me about taxonomic entities"
+
+How can I assist you today?"""
+
+        # Check for help requests
+        elif any(pattern in message_lower for pattern in help_patterns):
+            return """I'm here to help you explore the BrainKB knowledge graph! 🧠
+
+**What I can do:**
+• **Donor Information**: Get detailed metadata about biological donors
+• **Gene Data**: Explore gene annotations and their relationships
+• **Genome Assemblies**: Find reference genome builds and annotations
+• **Taxonomic Data**: Discover organism and species information
+• **Rapid Release Data**: Access the latest biological datasets
+
+**Example queries you can try:**
+• "Give me donor details for DO-CYPH5324"
+• "Show me all genome assemblies"
+• "What gene annotations are available?"
+• "Tell me about taxonomic entities"
+• "Get rapid release data count"
+
+**Features:**
+• Intelligent query understanding and parameter extraction
+• Automatic error fixing for SPARQL queries
+• Streaming responses for real-time interaction
+• Context-aware follow-up question handling
+
+Just ask me anything about the biological data, and I'll help you find what you're looking for!"""
+
+        # Check if this is a follow-up question to previous template data
+        if session_id in chat_sessions and "template_data" in chat_sessions[session_id]:
+            template_data = chat_sessions[session_id]["template_data"]
+            
+            # Check if there's stored template data
+            if template_data and template_data.get("last_data"):
+                stored_data = template_data["last_data"]
+                user_message_lower = request.message.lower()
+                
+                # First, try LLM-based detection for more accurate results
+                try:
+                    follow_up_detection_prompt = f"""
+                    Determine if the user's message is asking about or referring to the previously fetched data.
+                    
+                    Previous Data Context:
+                    {stored_data[:500]}...
+                    
+                    User's Current Message:
+                    {request.message}
+                    
+                    Answer with only 'YES' if the user is asking about the previous data, or 'NO' if they are asking about something else entirely.
+                    """
+                    
+                    llm_follow_up_response = await call_llm_api(
+                        "You are a helpful assistant that determines if a user message is referring to previously provided data. Respond with only YES or NO.",
+                        follow_up_detection_prompt
+                    )
+                    
+                    is_follow_up = llm_follow_up_response.strip().upper() == "YES"
+                    
+                    if is_follow_up:
+                        logger.info("Detected follow-up question to previous template data")
+                        # Use the stored data for follow-up analysis
+                        stored_data = template_data["last_data"]
+                        response_content = await handle_template_query(stored_data, session_history)
+                        return response_content
+                        
+                except Exception as e:
+                    logger.warning(f"LLM follow-up detection failed: {str(e)}")
+                
+                # Fallback: Check for common follow-up patterns
+                follow_up_patterns = [
+                    'more', 'details', 'analysis', 'insights', 'explain', 'describe',
+                    'break down', 'summarize', 'overview', 'summary', 'what', 'how', 'why',
+                    'tell me more', 'can you explain', 'show me', 'give me', 'what else',
+                    'additional', 'further', 'deeper', 'expand', 'elaborate'
+                ]
+                
+                # Check if the message contains follow-up indicators
+                has_follow_up_indicator = any(pattern in user_message_lower for pattern in follow_up_patterns)
+                
+                if has_follow_up_indicator:
+                    logger.info("Detected follow-up request based on patterns")
+                    response_content = await handle_template_query(stored_data, session_history)
+                    return response_content
+                
+                # Additional check: if user mentions specific entities from the stored data
+                data_lower = stored_data.lower()
+                data_words = set(data_lower.split())
+                user_words = set(user_message_lower.split())
+                common_words = data_words.intersection(user_words)
+                
+                # Filter for meaningful common words (more than 3 characters, not common stop words)
+                stop_words = {'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these', 'those', 'a', 'an', 'as', 'so', 'if', 'then', 'else', 'when', 'where', 'why', 'how', 'what', 'which', 'who', 'whom', 'whose'}
+                meaningful_common_words = [word for word in common_words if len(word) > 3 and word not in stop_words]
+                
+                # If user mentions specific entities from the data, treat as follow-up
+                if len(meaningful_common_words) > 0:
+                    logger.info(f"Detected follow-up based on common terms: {meaningful_common_words}")
+                    response_content = await handle_template_query(stored_data, session_history)
+                    return response_content
 
         template_query = await select_query_via_llm_user_question(request.message)
         if template_query is not None:
             """
-            before checking the cache and further processing we first wanted to check the query template. 
+            Before checking the cache and further processing we first wanted to check the query template. 
             The query template consists or is expected to consist some of the top queries that people requests for.
             """
-            print("#"*100)
-            print(f"fetched sparql query: {template_query}")
-            print("#"*100)
-            data = get_data_from_graph_db(template_query)
-            response_content = await handle_template_query(data)
+            logger.info("#"*100)
+            logger.info(f"fetched sparql query: {template_query}")
+            logger.info("#"*100)
+            
+            # Update the query with parameters extracted from user message
+            updated_query = await update_query_with_parameters(request.message, template_query)
+            
+            # Only fix the query if it's different from the template (indicating parameters were added)
+            if updated_query != template_query:
+                logger.info("Query updated with parameters, checking for syntax issues...")
+                # Only call query_fixer if there's a specific error, not proactively
+                fixed_query = updated_query  # Start with the updated query
+                logger.info("#" * 100)
+                print(fixed_query)
+                logger.info("#" * 100)
+            else:
+                # No parameters were added, use the template query as-is
+                fixed_query = template_query
+                logger.info("Using template query as-is (no parameters added)")
+            
+            if fixed_query != template_query:
+                logger.info(f"Updated query with parameters: {fixed_query}")
+            
+            # First attempt: Fetch data from graph database using the updated query
+            try:
+                data = await get_data_from_graph_db(fixed_query)
+                print("^"*100)
+                print(data)
+                print("^" * 100)
+            except Exception as e:
+                logger.warning(f"First database query failed: {str(e)}")
+                
+                # Second attempt: Try to fix the query with error information and retry
+                logger.info("Attempting to fix query with error context and retry...")
+                error_fixed_query = await query_fixer(fixed_query, str(e))
+                
+                if error_fixed_query != fixed_query:
+                    logger.info("Query was fixed with error context, retrying database query...")
+                    try:
+                        data = await get_data_from_graph_db(error_fixed_query)
+                        print("^"*100)
+                        print("RETRY SUCCESS:")
+                        print(data)
+                        print("^" * 100)
+                    except Exception as retry_error:
+                        logger.error(f"Retry also failed: {str(retry_error)}")
+                        data = f"Database query failed after retry. Error: {str(retry_error)}"
+                else:
+                    logger.warning("Query fixer returned same query, using original error")
+                    data = f"Database query failed. Error: {str(e)}"
+            
+            # Store the fetched data in session context for follow-up questions
+            if session_id not in chat_sessions:
+                chat_sessions[session_id] = {
+                    "messages": [],
+                    "created_at": datetime.now().isoformat(),
+                    "last_updated": datetime.now().isoformat(),
+                    "template_data": {}
+                }
+            
+            # Store the current query and data in session context
+            chat_sessions[session_id]["template_data"] = {
+                "last_query": template_query,
+                "last_data": data
+            }
+            
+            # Pass chat history to handle_template_query for context
+            response_content = await handle_template_query(data, session_history)
             return response_content
         else:
             response_content = None
@@ -455,13 +642,23 @@ async def chat(
 
 
 
-async def handle_template_query(data) -> str:
+async def handle_template_query(data, chat_history: List[Dict[str, Any]] = None) -> str:
     """
-    Format the data in order to display in a chat
+    Format the data in order to display in a chat with context awareness for follow-up questions
     """
     try:
+        # Prepare context from chat history for follow-up questions
+        context_info = ""
+        if chat_history and len(chat_history) > 0:
+            # Get recent conversation context (last 3 exchanges)
+            recent_history = chat_history[-6:]  # Last 3 exchanges (6 messages: 3 user + 3 assistant)
+            context_info = "\n\nRecent Conversation Context:\n"
+            for msg in recent_history:
+                role = "User" if msg['role'] == 'user' else "Assistant"
+                context_info += f"{role}: {msg['content']}\n"
+        
         # Prepare the prompt for the LLM with template query
-        system_prompt = """ou are BrainKB Assistant — an AI-powered chat service specialized in data formatting, pattern discovery, and knowledge navigation.
+        system_prompt = """You are BrainKB Assistant — an AI-powered chat service specialized in data formatting, pattern discovery, and knowledge navigation.
 
             Your capabilities include:
             
@@ -481,14 +678,17 @@ async def handle_template_query(data) -> str:
             
             Highlight key insights, patterns, and anomalies
             
-            Enable smooth exploration of the data’s structure and meaning
+            Enable smooth exploration of the data's structure and meaning
             
             Stay accurate, concise, and user-friendly in your responses.
             
-            Important: Only give insights based on the data and do not generate anything on your own."""
+            Important: Only give insights based on the data and do not generate anything on your own.
+            
+            If this is a follow-up question, use the conversation context to provide more specific and relevant answers."""
 
-
-        user_prompt = f"""Data: {data}"""
+        user_prompt = f"""Data: {data}{context_info}"""
+        if "error" in user_prompt.lower() or "bad request" in user_prompt.lower():
+            return "Sorry, there's been some problem and that needs to be fixed from the developer side. Please try again later."
         llm_response = await call_llm_api(system_prompt, user_prompt)
         cleaned_response = clean_response_content(llm_response)
         return cleaned_response
@@ -552,7 +752,10 @@ Your capabilities include:
 - Answering questions about entities, relationships, and data structures
 - Helping users navigate and understand complex information
 
-Always provide helpful, accurate, and contextual responses. If you don't have enough information to provide a detailed answer, ask clarifying questions or suggest what additional context would be helpful."""
+Always provide helpful, accurate, and contextual responses. If you don't have enough information to provide a detailed answer, ask clarifying questions or suggest what additional context would be helpful.
+
+"""
+
 
         user_prompt = f"""Context Information:
 {full_context}
@@ -783,3 +986,77 @@ async def get_cache_status():
     except Exception as e:
         logger.error(f"Error getting cache status: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting cache status: {str(e)}")
+
+
+@router.get("/chat/template-debug/{session_id}")
+async def debug_template_data(session_id: str):
+    """
+    Debug endpoint to check template data storage for a session
+    """
+    try:
+        if session_id in chat_sessions:
+            session_data = chat_sessions[session_id]
+            template_data = session_data.get("template_data", {})
+            
+            return {
+                "session_id": session_id,
+                "has_template_data": bool(template_data),
+                "template_data": template_data,
+                "session_created": session_data.get("created_at"),
+                "last_updated": session_data.get("last_updated"),
+                "message_count": len(session_data.get("messages", [])),
+                "stored_query": template_data.get("last_query", "None"),
+                "has_stored_data": bool(template_data.get("last_data"))
+            }
+        else:
+            return {"error": "Session not found"}
+    except Exception as e:
+        logger.error(f"Error in debug_template_data: {str(e)}")
+        return {"error": str(e)}
+
+
+@router.post("/chat/test-parameter-extraction")
+async def test_parameter_extraction(request: ChatRequest):
+    """
+    Debug endpoint to test parameter extraction from user messages
+    """
+    try:
+        # Test the parameter extraction with a sample query
+        sample_query = """
+        PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
+        PREFIX NIMP: <http://example.org/NIMP/>
+        PREFIX biolink: <https://w3id.org/biolink/vocab/>
+        PREFIX prov: <http://www.w3.org/ns/prov#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        SELECT ?donor_id ?p ?o
+        WHERE {
+          GRAPH <https://www.brainkb.org/version01> {
+            BIND(<{{sayid}}> AS ?donor_id)
+            ?donor_id ?p ?o .
+          }
+        }
+        """
+        
+        updated_query = await update_query_with_parameters(request.message, sample_query)
+        
+        # Optionally test the actual data fetch
+        try:
+            data = await get_data_from_graph_db(updated_query)
+            data_fetch_success = True
+        except Exception as e:
+            data = f"Error fetching data: {str(e)}"
+            data_fetch_success = False
+        
+        return {
+            "original_message": request.message,
+            "original_query": sample_query,
+            "updated_query": updated_query,
+            "was_updated": sample_query != updated_query,
+            "data_fetch_success": data_fetch_success,
+            "data_preview": data[:200] + "..." if len(data) > 200 else data
+        }
+    except Exception as e:
+        logger.error(f"Error in test_parameter_extraction: {str(e)}")
+        return {"error": str(e)}
