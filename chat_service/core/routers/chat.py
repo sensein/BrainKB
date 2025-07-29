@@ -37,9 +37,9 @@ from core.configuration import config
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-@router.post("/chat")
+@router.post("/chat", dependencies=[Depends(require_scopes(["write"]))],)
 async def chat(
-        # user: Annotated[LoginUserIn, Depends(get_current_user)],
+        user: Annotated[LoginUserIn, Depends(get_current_user)],
                request: ChatRequest, stream: bool = False, force_fresh: bool = False, req: Request = None):
     """
     Unified chat endpoint that processes messages and returns responses
@@ -789,8 +789,8 @@ Please provide a helpful response based on the user's message and the available 
 
 
 
-@router.get("/chat/sessions")
-async def get_chat_sessions():
+@router.get("/chat/sessions",  dependencies=[Depends(require_scopes(["read"]))],)
+async def get_chat_sessions(user: Annotated[LoginUserIn, Depends(get_current_user)],):
     """
     Get all active chat sessions (for demo purposes)
     """
@@ -808,8 +808,9 @@ async def get_chat_sessions():
     }
 
 
-@router.get("/chat/sessions/{session_id}")
-async def get_chat_session(session_id: str):
+@router.get("/chat/sessions/{session_id}", dependencies=[Depends(require_scopes(["read"]))],)
+async def get_chat_session(user: Annotated[LoginUserIn, Depends(get_current_user)],
+                           session_id: str):
     """
     Get a specific chat session
     """
@@ -824,8 +825,10 @@ async def get_chat_session(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
 
 
-@router.delete("/chat/sessions/{session_id}")
-async def delete_chat_session(session_id: str):
+@router.delete("/chat/sessions/{session_id}",
+               dependencies=[Depends(require_scopes(["write"]))],)
+async def delete_chat_session(user: Annotated[LoginUserIn, Depends(get_current_user)],
+                              session_id: str):
     """
     Delete a specific chat session
     """
@@ -836,8 +839,10 @@ async def delete_chat_session(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
 
 
-@router.get("/chat/cache/stats")
-async def get_cache_stats():
+@router.get("/chat/cache/stats",
+            dependencies=[Depends(require_scopes(["read"]))],)
+async def get_cache_stats(user: Annotated[LoginUserIn, Depends(get_current_user)],
+                          ):
     """
     Get cache statistics
     """
@@ -853,8 +858,10 @@ async def get_cache_stats():
         raise HTTPException(status_code=500, detail=f"Error getting cache stats: {str(e)}")
 
 
-@router.delete("/chat/cache/clear")
-async def clear_cache():
+@router.delete("/chat/cache/clear",
+               dependencies=[Depends(require_scopes(["write"]))],)
+async def clear_cache(user: Annotated[LoginUserIn, Depends(get_current_user)],
+                      ):
     """
     Clear all cache entries
     """
@@ -884,38 +891,9 @@ async def clear_cache():
         raise HTTPException(status_code=500, detail=f"Error clearing cache: {str(e)}")
 
 
-@router.get("/chat/cache/debug")
-async def debug_cache():
-    """
-    Debug cache status and contents
-    """
-    try:
-        cache = await get_cache_instance()
-        stats = await cache.get_cache_stats()
-        
-        # Try to get some sample cache entries
-        sample_entries = await cache.get_sample_entries(5)
-        
-        # Get cache keys
-        cache_keys = await cache.get_cache_keys(10)
-        
-        # Get cache status
-        cache_status = await cache.check_cache_status()
-        
-        return {
-            "cache_stats": stats,
-            "sample_entries": sample_entries,
-            "cache_keys": cache_keys,
-            "cache_status": cache_status,
-            "message": "Cache debug information retrieved"
-        }
-    except Exception as e:
-        logger.error(f"Error getting cache debug info: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting cache debug info: {str(e)}")
-
-
-@router.delete("/chat/cache/clear-expired")
-async def clear_expired_cache():
+@router.delete("/chat/cache/clear-expired", dependencies=[Depends(require_scopes(["write"]))],)
+async def clear_expired_cache(user: Annotated[LoginUserIn, Depends(get_current_user)],
+                              ):
     """
     Clear only expired cache entries
     """
@@ -931,8 +909,9 @@ async def clear_expired_cache():
         raise HTTPException(status_code=500, detail=f"Error clearing expired cache: {str(e)}")
 
 
-@router.delete("/chat/cache/delete/{cache_key}")
-async def delete_cache_entry(cache_key: str):
+@router.delete("/chat/cache/delete/{cache_key}", dependencies=[Depends(require_scopes(["write"]))],)
+async def delete_cache_entry(user: Annotated[LoginUserIn, Depends(get_current_user)],
+                             cache_key: str):
     """
     Delete a specific cache entry
     """
@@ -954,8 +933,9 @@ async def delete_cache_entry(cache_key: str):
         raise HTTPException(status_code=500, detail=f"Error deleting cache entry: {str(e)}")
 
 
-@router.delete("/chat/cache/delete-pattern/{pattern}")
-async def delete_cache_by_pattern(pattern: str):
+@router.delete("/chat/cache/delete-pattern/{pattern}", dependencies=[Depends(require_scopes(["write"]))],)
+async def delete_cache_by_pattern(user: Annotated[LoginUserIn, Depends(get_current_user)],
+                                  pattern: str):
     """
     Delete cache entries matching a pattern
     """
@@ -971,8 +951,9 @@ async def delete_cache_by_pattern(pattern: str):
         raise HTTPException(status_code=500, detail=f"Error deleting cache by pattern: {str(e)}")
 
 
-@router.get("/chat/cache/status")
-async def get_cache_status():
+@router.get("/chat/cache/status", dependencies=[Depends(require_scopes(["read"]))],)
+async def get_cache_status(user: Annotated[LoginUserIn, Depends(get_current_user)],
+                           ):
     """
     Check cache status and health
     """
@@ -988,8 +969,9 @@ async def get_cache_status():
         raise HTTPException(status_code=500, detail=f"Error getting cache status: {str(e)}")
 
 
-@router.get("/chat/template-debug/{session_id}")
-async def debug_template_data(session_id: str):
+@router.get("/chat/template-debug/{session_id}", dependencies=[Depends(require_scopes(["write"]))],)
+async def debug_template_data(user: Annotated[LoginUserIn, Depends(get_current_user)],
+                              session_id: str):
     """
     Debug endpoint to check template data storage for a session
     """
@@ -1014,49 +996,3 @@ async def debug_template_data(session_id: str):
         logger.error(f"Error in debug_template_data: {str(e)}")
         return {"error": str(e)}
 
-
-@router.post("/chat/test-parameter-extraction")
-async def test_parameter_extraction(request: ChatRequest):
-    """
-    Debug endpoint to test parameter extraction from user messages
-    """
-    try:
-        # Test the parameter extraction with a sample query
-        sample_query = """
-        PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
-        PREFIX NIMP: <http://example.org/NIMP/>
-        PREFIX biolink: <https://w3id.org/biolink/vocab/>
-        PREFIX prov: <http://www.w3.org/ns/prov#>
-        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-
-        SELECT ?donor_id ?p ?o
-        WHERE {
-          GRAPH <https://www.brainkb.org/version01> {
-            BIND(<{{sayid}}> AS ?donor_id)
-            ?donor_id ?p ?o .
-          }
-        }
-        """
-        
-        updated_query = await update_query_with_parameters(request.message, sample_query)
-        
-        # Optionally test the actual data fetch
-        try:
-            data = await get_data_from_graph_db(updated_query)
-            data_fetch_success = True
-        except Exception as e:
-            data = f"Error fetching data: {str(e)}"
-            data_fetch_success = False
-        
-        return {
-            "original_message": request.message,
-            "original_query": sample_query,
-            "updated_query": updated_query,
-            "was_updated": sample_query != updated_query,
-            "data_fetch_success": data_fetch_success,
-            "data_preview": data[:200] + "..." if len(data) > 200 else data
-        }
-    except Exception as e:
-        logger.error(f"Error in test_parameter_extraction: {str(e)}")
-        return {"error": str(e)}
