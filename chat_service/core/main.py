@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 origins = [
     "https://beta.brainkb.org",
+    "https://sandbox.brainkb.org",
     "localhost:3000",
     "http://localhost:3000",
     "http://127.0.0.1:300",
