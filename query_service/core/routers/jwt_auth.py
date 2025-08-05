@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/register", status_code=201, include_in_schema=False)
+@router.post("/register", status_code=201)
 async def register(user: UserIn, conn=Depends(connect_postgres)):
     if await get_user(conn=conn, email=user.email):
         raise HTTPException(
