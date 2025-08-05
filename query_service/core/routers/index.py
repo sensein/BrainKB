@@ -174,7 +174,7 @@ async def root():
     </head>
     <body>
         <div class="container">
-            <h1>🚀 BrainKB Chat Service</h1>
+            <h1>🚀 BrainKB Query Service</h1>
 
             <div class="info-grid">
                 <div class="info-card">
