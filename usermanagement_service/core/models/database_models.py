@@ -84,8 +84,9 @@ class UserProfile(Base):
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name_prefix: Mapped[Optional[str]] = mapped_column(String(50))
+    name_suffix: Mapped[Optional[str]] = mapped_column(String(50))
     email: Mapped[str] = mapped_column(String(255), nullable=False)
-    organization: Mapped[Optional[str]] = mapped_column(String(255))
     orcid_id: Mapped[Optional[str]] = mapped_column(String(50))
     github: Mapped[Optional[str]] = mapped_column(String(100))
     linkedin: Mapped[Optional[str]] = mapped_column(String(500))
@@ -101,6 +102,8 @@ class UserProfile(Base):
     contributions = relationship("UserContribution", back_populates="profile", cascade="all, delete-orphan")
     roles = relationship("UserRole", foreign_keys="[UserRole.profile_id]", cascade="all, delete-orphan")
     countries = relationship("UserCountry", back_populates="profile", cascade="all, delete-orphan")
+    organizations = relationship("UserOrganization", back_populates="profile", cascade="all, delete-orphan")
+    education = relationship("UserEducation", back_populates="profile", cascade="all, delete-orphan")
     expertise_areas = relationship("UserExpertise", back_populates="profile", cascade="all, delete-orphan")
     
     # Constraints and Indexes
@@ -235,4 +238,99 @@ class UserExpertise(Base):
         Index('idx_user_expertise_profile_id', 'profile_id'),
         Index('idx_user_expertise_area', 'expertise_area'),
         Index('idx_user_expertise_level', 'level'),
-    ) 
+    )
+
+
+class UserOrganization(Base):
+    """User organization association table - Many-to-many relationship"""
+    __tablename__ = "Web_user_organization"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(Integer, ForeignKey("Web_user_profile.id", ondelete="CASCADE"), nullable=False)
+    organization: Mapped[str] = mapped_column(String(255), nullable=False)
+    position: Mapped[Optional[str]] = mapped_column(String(255))
+    department: Mapped[Optional[str]] = mapped_column(String(255))
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    start_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    end_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    profile = relationship("UserProfile", back_populates="organizations")
+    
+    # Constraints and Indexes
+    __table_args__ = (
+        UniqueConstraint('profile_id', 'organization', name='uq_profile_organization'),
+        Index('idx_user_organization_profile_id', 'profile_id'),
+        Index('idx_user_organization_name', 'organization'),
+        Index('idx_user_organization_primary', 'is_primary'),
+    )
+
+
+class UserEducation(Base):
+    """User education history table - Many-to-many relationship"""
+    __tablename__ = "Web_user_education"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(Integer, ForeignKey("Web_user_profile.id", ondelete="CASCADE"), nullable=False)
+    degree: Mapped[str] = mapped_column(String(100), nullable=False)
+    field_of_study: Mapped[str] = mapped_column(String(255), nullable=False)
+    institution: Mapped[str] = mapped_column(String(255), nullable=False)
+    graduation_year: Mapped[Optional[int]] = mapped_column(Integer)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    profile = relationship("UserProfile", back_populates="education")
+    
+    # Constraints and Indexes
+    __table_args__ = (
+        UniqueConstraint('profile_id', 'degree', 'institution', name='uq_profile_education'),
+        Index('idx_user_education_profile_id', 'profile_id'),
+        Index('idx_user_education_degree', 'degree'),
+        Index('idx_user_education_institution', 'institution'),
+        Index('idx_user_education_primary', 'is_primary'),
+    )
+
+
+class AvailableRole(Base):
+    """Available roles for the platform - Management table"""
+    __tablename__ = "Web_available_role"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    category: Mapped[Optional[str]] = mapped_column(String(50))  # Content, Quality, Knowledge, Community
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Constraints and Indexes
+    __table_args__ = (
+        Index('idx_available_role_name', 'name'),
+        Index('idx_available_role_category', 'category'),
+        Index('idx_available_role_active', 'is_active'),
+    )
+
+
+class AvailableCountry(Base):
+    """Available countries for user profiles - Management table"""
+    __tablename__ = "Web_available_country"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    code: Mapped[Optional[str]] = mapped_column(String(3))  # ISO 3166-1 alpha-3
+    code_2: Mapped[Optional[str]] = mapped_column(String(2))  # ISO 3166-1 alpha-2
+    region: Mapped[Optional[str]] = mapped_column(String(50))  # Continent/Region
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Constraints and Indexes
+    __table_args__ = (
+        Index('idx_available_country_name', 'name'),
+        Index('idx_available_country_code', 'code'),
+        Index('idx_available_country_code_2', 'code_2'),
+        Index('idx_available_country_region', 'region'),
+        Index('idx_available_country_active', 'is_active'),
+    )
