@@ -1,0 +1,2713 @@
+@prefix bican: <https://identifiers.org/brain-bican/vocab/> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix linkml: <https://w3id.org/linkml/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix pav: <http://purl.org/pav/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix schema1: <http://schema.org/> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+bican:AnnotationCollection a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "AnnotationCollection" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:genome_assemblies ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:annotations ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:genome_annotations ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom bican:GeneAnnotation ;
+            owl:onProperty bican:annotations ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom bican:GenomeAssembly ;
+            owl:onProperty bican:genome_assemblies ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom bican:GenomeAnnotation ;
+            owl:onProperty bican:genome_annotations ] ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+<https://w3id.org/biolink/vocab/frequency_value> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf linkml:String .
+
+<https://w3id.org/biolink/vocab/percentage_frequency_value> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf linkml:Double .
+
+<https://w3id.org/biolink/vocab/predicate_type> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf linkml:Uriorcurie .
+
+<https://w3id.org/biolink/vocab/quotient> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf linkml:Double .
+
+<https://w3id.org/biolink/vocab/symbol_type> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf linkml:String .
+
+<https://w3id.org/biolink/vocab/time_type> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf linkml:Time .
+
+<https://w3id.org/biolink/vocab/chemical_formula_value> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:onDataRange <https://w3id.org/biolink/vocab/chemical_formula_value> ;
+            owl:onProperty linkml:topValue ;
+            owl:qualifiedCardinality 1 ] .
+
+<https://w3id.org/biolink/vocab/related_to> a owl:ObjectProperty,
+        owl:SymmetricProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "related to" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:range <https://w3id.org/biolink/vocab/NamedThing> ;
+    skos:broadMatch <owl:topObjectProperty> ;
+    skos:definition "A relationship that is asserted between two named things" ;
+    skos:exactMatch <UMLS:related_to> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <BFO:0000054>,
+        <BTO:related_to>,
+        <CHEBI:is_conjugate_acid_of>,
+        <CHEBI:is_conjugate_base_of>,
+        <FMA:connected_to>,
+        <FMA:continuous_with>,
+        <FMA:homonym_of>,
+        <FMA:related_developmental_entity_of>,
+        <HMDB:disease>,
+        <HMDB:has_protein_association>,
+        <IAO:0000136>,
+        <MONDO:disease_shares_features_of>,
+        <NCIT:disease_may_have_associated_disease>,
+        <NCIT:human_disease_maps_to_eo_disease>,
+        <NCIT:is_abnormal_cell_of_disease>,
+        <NCIT:is_related_to_endogenous_product>,
+        <PATO:reciprocal_of>,
+        <SNOMED:has_associated_morphology>,
+        <SNOMED:has_associated_procedure>,
+        <SNOMED:has_direct_morphology>,
+        <SNOMED:has_disposition>,
+        <SNOMED:has_indirect_morphology>,
+        <SNOMED:has_modification>,
+        <SNOMED:has_procedure_morphology>,
+        <SNOMED:has_specimen_source_morphology>,
+        <SNOMED:inheres_in>,
+        <SNOMED:is_interpreted_by>,
+        <SNOMED:relative_to_part_of>,
+        <UBERON:synapsed_by>,
+        <UMLS:RO>,
+        <UMLS:RQ>,
+        <UMLS:class_code_classified_by>,
+        <UMLS:exhibited_by>,
+        <UMLS:has_context_binding>,
+        <UMLS:has_form>,
+        <UMLS:has_mapping_qualifier>,
+        <UMLS:larger_than>,
+        <UMLS:mapped_to>,
+        <UMLS:owning_section_of>,
+        <http://id.nlm.nih.gov/mesh/RO>,
+        <http://id.nlm.nih.gov/mesh/has_mapping_qualifier>,
+        <http://id.nlm.nih.gov/mesh/mapped_to>,
+        <http://loinc.org/rdf/has_answer>,
+        <http://loinc.org/rdf/has_challenge>,
+        <http://loinc.org/rdf/has_evaluation>,
+        <http://loinc.org/rdf/mapped_to>,
+        <http://loinc.org/rdf/mth_has_expanded_form>,
+        <http://purl.bioontology.org/ontology/HCPCS/mapped_to>,
+        <http://purl.bioontology.org/ontology/RXNORM/has_form>,
+        <http://purl.bioontology.org/ontology/RXNORM/reformulated_to>,
+        <http://purl.obolibrary.org/obo/GOREL_0002005>,
+        <http://purl.obolibrary.org/obo/GOREL_0012006>,
+        <http://purl.obolibrary.org/obo/RO_0000052>,
+        <http://purl.obolibrary.org/obo/RO_0000053>,
+        <http://purl.obolibrary.org/obo/RO_0002001>,
+        <http://purl.obolibrary.org/obo/RO_0002002>,
+        <http://purl.obolibrary.org/obo/RO_0002003>,
+        <http://purl.obolibrary.org/obo/RO_0002008>,
+        <http://purl.obolibrary.org/obo/RO_0002084>,
+        <http://purl.obolibrary.org/obo/RO_0002092>,
+        <http://purl.obolibrary.org/obo/RO_0002093>,
+        <http://purl.obolibrary.org/obo/RO_0002134>,
+        <http://purl.obolibrary.org/obo/RO_0002150>,
+        <http://purl.obolibrary.org/obo/RO_0002159>,
+        <http://purl.obolibrary.org/obo/RO_0002176>,
+        <http://purl.obolibrary.org/obo/RO_0002177>,
+        <http://purl.obolibrary.org/obo/RO_0002178>,
+        <http://purl.obolibrary.org/obo/RO_0002179>,
+        <http://purl.obolibrary.org/obo/RO_0002314>,
+        <http://purl.obolibrary.org/obo/RO_0002322>,
+        <http://purl.obolibrary.org/obo/RO_0002328>,
+        <http://purl.obolibrary.org/obo/RO_0002332>,
+        <http://purl.obolibrary.org/obo/RO_0002338>,
+        <http://purl.obolibrary.org/obo/RO_0002339>,
+        <http://purl.obolibrary.org/obo/RO_0002341>,
+        <http://purl.obolibrary.org/obo/RO_0002342>,
+        <http://purl.obolibrary.org/obo/RO_0002344>,
+        <http://purl.obolibrary.org/obo/RO_0002348>,
+        <http://purl.obolibrary.org/obo/RO_0002349>,
+        <http://purl.obolibrary.org/obo/RO_0002356>,
+        <http://purl.obolibrary.org/obo/RO_0002371>,
+        <http://purl.obolibrary.org/obo/RO_0002372>,
+        <http://purl.obolibrary.org/obo/RO_0002373>,
+        <http://purl.obolibrary.org/obo/RO_0002374>,
+        <http://purl.obolibrary.org/obo/RO_0002385>,
+        <http://purl.obolibrary.org/obo/RO_0002387>,
+        <http://purl.obolibrary.org/obo/RO_0002451>,
+        <http://purl.obolibrary.org/obo/RO_0002494>,
+        <http://purl.obolibrary.org/obo/RO_0002495>,
+        <http://purl.obolibrary.org/obo/RO_0002568>,
+        <http://purl.obolibrary.org/obo/RO_0002573>,
+        <http://purl.obolibrary.org/obo/RO_0004026>,
+        <http://purl.obolibrary.org/obo/RO_0004027>,
+        <http://purl.obolibrary.org/obo/RO_0009001>,
+        <http://purl.obolibrary.org/obo/RO_0009004>,
+        <http://purl.obolibrary.org/obo/core#connected_to>,
+        <http://purl.obolibrary.org/obo/core#innervated_by>,
+        <http://purl.obolibrary.org/obo/nbo#is_about>,
+        <http://purl.obolibrary.org/obo/uberon/core#protects>,
+        <http://www.ebi.ac.uk/efo/EFO_0006351>,
+        <https://skr3.nlm.nih.gov/SemMedDBcompared_with>,
+        <https://skr3.nlm.nih.gov/SemMedDBhigher_than>,
+        <https://skr3.nlm.nih.gov/SemMedDBlower_than>,
+        <https://www.ama-assn.org/practice-management/cpt/has_add_on_code>,
+        <https://www.ama-assn.org/practice-management/cpt/mapped_to> ;
+    bican:canonical_predicate true .
+
+<https://w3id.org/biolink/vocab/related_to_at_instance_level> a owl:ObjectProperty,
+        owl:SymmetricProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "related to at instance level" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:range <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/related_to> ;
+    skos:definition "Represents a relationship held between two instances of a data classes.  Much like an assertion component, in an ABox, these represent facts associated with the conceptual model." ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    bican:canonical_predicate true .
+
+linkml:topValue a owl:DatatypeProperty ;
+    rdfs:label "value" .
+
+<http://spdx.org/rdf/terms#checksumAlgorithm_md5> a owl:Class,
+        bican:DigestType ;
+    rdfs:label "spdx:checksumAlgorithm_md5" ;
+    rdfs:subClassOf bican:DigestType .
+
+<http://spdx.org/rdf/terms#checksumAlgorithm_sha1> a owl:Class,
+        bican:DigestType ;
+    rdfs:label "spdx:checksumAlgorithm_sha1" ;
+    rdfs:subClassOf bican:DigestType .
+
+<http://spdx.org/rdf/terms#checksumAlgorithm_sha256> a owl:Class,
+        bican:DigestType ;
+    rdfs:label "spdx:checksumAlgorithm_sha256" ;
+    rdfs:subClassOf bican:DigestType .
+
+<https://identifiers.org/brain-bican/vocab/AuthorityType#ENSEMBL> a owl:Class,
+        bican:AuthorityType ;
+    rdfs:label "ENSEMBL" ;
+    rdfs:subClassOf bican:AuthorityType .
+
+<https://identifiers.org/brain-bican/vocab/AuthorityType#NCBI> a owl:Class,
+        bican:AuthorityType ;
+    rdfs:label "NCBI" ;
+    rdfs:subClassOf bican:AuthorityType .
+
+<https://identifiers.org/brain-bican/vocab/BioType#noncoding> a owl:Class,
+        bican:BioType ;
+    rdfs:label "noncoding" ;
+    rdfs:subClassOf bican:BioType .
+
+<https://identifiers.org/brain-bican/vocab/BioType#protein_coding> a owl:Class,
+        bican:BioType ;
+    rdfs:label "protein_coding" ;
+    rdfs:subClassOf bican:BioType .
+
+bican:annotations a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "annotations" ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+bican:content_url a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "content_url" ;
+    skos:inScheme <https://identifiers.org/brain-bican/bican-core-schema> .
+
+bican:digest a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "digest" ;
+    rdfs:range [ owl:unionOf ( bican:Checksum linkml:String ) ] ;
+    skos:definition "Stores checksum information." ;
+    skos:inScheme <https://identifiers.org/brain-bican/bican-core-schema> .
+
+bican:genome_annotations a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "genome_annotations" ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+bican:genome_assemblies a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "genome_assemblies" ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+<https://w3id.org/biolink/vocab/Annotation> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "annotation" ;
+    skos:definition "Biolink Model root class for entity annotations." ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/Annotation> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/ChemicalEntityOrGeneOrGeneProduct> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "chemical entity or gene or gene product" ;
+    skos:definition "A union of chemical entities and children, and gene or gene product. This mixin is helpful to use when searching across chemical entities that must include genes and their children as chemical entities." ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/ChemicalEntityOrGeneOrGeneProduct> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/GeneOrGeneProduct> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "gene or gene product" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        <https://w3id.org/biolink/vocab/MacromolecularMachineMixin> ;
+    skos:definition "A union of gene loci or gene products. Frequently an identifier for one will be used as proxy for another" ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/GeneOrGeneProduct> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/MacromolecularMachineMixin> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "macromolecular machine mixin" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ] ;
+    skos:definition "A union of gene locus, gene product, and macromolecular complex. These are the basic units of function in a cell. They either carry out individual biological activities, or they encode molecules which do this." ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/MacromolecularMachineMixin> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/Occurrent> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "occurrent" ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/PhysicalEssenceOrOccurrent> ;
+    skos:definition "A processual entity." ;
+    skos:exactMatch <BFO:0000003>,
+        <https://w3id.org/biolink/vocab/Occurrent> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/SubjectOfInvestigation> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "subject of investigation" ;
+    skos:definition "An entity that has the role of being studied in an investigation, study, or experiment" ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/SubjectOfInvestigation> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/has_quantitative_value> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "has quantitative value" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/Attribute> ;
+    rdfs:range <https://w3id.org/biolink/vocab/QuantityValue> ;
+    skos:definition "connects an attribute to a value" ;
+    skos:exactMatch <http://qudt.org/1.1/schema/qudt#quantityValue> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <SNOMED:has_concentration_strength_numerator_value>,
+        <SNOMED:has_presentation_strength_denominator_value>,
+        <SNOMED:has_presentation_strength_numerator_value> .
+
+<https://w3id.org/biolink/vocab/unit> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf linkml:String .
+
+bican:GeneAnnotation a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "GeneAnnotation" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:source_id ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty bican:referenced_in ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty bican:source_id ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty bican:referenced_in ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom [ owl:unionOf ( bican:GenomeAnnotation linkml:String ) ] ;
+            owl:onProperty bican:referenced_in ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:molecular_type ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty bican:molecular_type ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty bican:source_id ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom [ a rdfs:Datatype ;
+                    owl:unionOf ( bican:BioType linkml:String ) ] ;
+            owl:onProperty bican:molecular_type ],
+        <https://w3id.org/biolink/vocab/Gene> ;
+    skos:definition "Represents a single gene. Includes metadata about the gene, such as its molecular type and the genome annotation it was referenced from." ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+bican:authority a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "authority" ;
+    rdfs:range bican:AuthorityType ;
+    skos:definition "The organization responsible for publishing the data." ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+bican:checksum_algorithm a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "checksum algorithm" ;
+    rdfs:range bican:DigestType ;
+    skos:definition "The type of cryptographic hash function used to calculate the checksum value." ;
+    skos:inScheme <https://identifiers.org/brain-bican/bican-core-schema> .
+
+bican:molecular_type a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "molecular_type" ;
+    rdfs:range [ a rdfs:Datatype ;
+            owl:unionOf ( bican:BioType linkml:String ) ] ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+bican:reference_assembly a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "reference_assembly" ;
+    skos:definition "The reference genome assembly that this genome annotation was created from." ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+bican:referenced_in a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "referenced_in" ;
+    skos:definition "The genome annotation that this gene was referenced from." ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+bican:revision_of a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "revision_of" ;
+    rdfs:range bican:VersionedNamedThing ;
+    skos:inScheme <https://identifiers.org/brain-bican/bican-core-schema> .
+
+bican:source_id a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "source_id" ;
+    skos:definition "The authority specific identifier." ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+bican:strain a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "strain" ;
+    skos:definition "The genetic variant or subtype of a species or organism." ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+bican:value a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "value" ;
+    skos:definition "The checksum value obtained from a specific cryotographic hash function." ;
+    skos:inScheme <https://identifiers.org/brain-bican/bican-core-schema> .
+
+<https://w3id.org/biolink/vocab/Activity> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "activity" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        <https://w3id.org/biolink/vocab/ActivityAndBehavior>,
+        <https://w3id.org/biolink/vocab/NamedThing> ;
+    skos:definition "An activity is something that occurs over a period of time and acts upon or with entities; it may include consuming, processing, transforming, modifying, relocating, using, or generating entities." ;
+    skos:exactMatch <NCIT:C43431>,
+        <http://purl.bioontology.org/ontology/STY/T052>,
+        prov:Activity,
+        <https://w3id.org/biolink/vocab/Activity> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <http://purl.bioontology.org/ontology/STY/T056>,
+        <http://purl.bioontology.org/ontology/STY/T057>,
+        <http://purl.bioontology.org/ontology/STY/T058>,
+        <http://purl.bioontology.org/ontology/STY/T062>,
+        <http://purl.bioontology.org/ontology/STY/T064>,
+        <http://purl.bioontology.org/ontology/STY/T065>,
+        <http://purl.bioontology.org/ontology/STY/T066> .
+
+<https://w3id.org/biolink/vocab/ActivityAndBehavior> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "activity and behavior" ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/Occurrent> ;
+    skos:definition "Activity or behavior of any independent integral living, organization or mechanical actor in the world" ;
+    skos:exactMatch <https://lhncbc.nlm.nih.gov/semanticnetwork/download/sg_archive/SemGroups-v04.txtACTI>,
+        <https://w3id.org/biolink/vocab/ActivityAndBehavior> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/GenomicEntity> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "genomic entity" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/biological_sequence> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_biological_sequence> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_biological_sequence> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_biological_sequence> ] ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/GenomicEntity> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <GENO:0000897>,
+        <http://purl.bioontology.org/ontology/STY/T028> .
+
+<https://w3id.org/biolink/vocab/MaterialSample> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "material sample" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        <https://w3id.org/biolink/vocab/PhysicalEntity>,
+        <https://w3id.org/biolink/vocab/SubjectOfInvestigation> ;
+    skos:altLabel "biosample",
+        "biospecimen",
+        "physical sample",
+        "sample" ;
+    skos:definition "A sample is a limited quantity of something (e.g. an individual or set of individuals from a population, or a portion of a substance) to be used for testing, analysis, inspection, investigation, demonstration, or trial use. [SIO]" ;
+    skos:exactMatch <OBI:0000747>,
+        <http://semanticscience.org/resource/SIO_001050>,
+        <https://w3id.org/biolink/vocab/MaterialSample> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/PhysicalEssenceOrOccurrent> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "physical essence or occurrent" ;
+    skos:definition "Either a physical or processual entity." ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/PhysicalEssenceOrOccurrent> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/Procedure> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "procedure" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        <https://w3id.org/biolink/vocab/ActivityAndBehavior>,
+        <https://w3id.org/biolink/vocab/NamedThing> ;
+    skos:definition "A series of actions conducted in a certain order or manner" ;
+    skos:exactMatch <https://datacommons.org/browser/MedicalProcedure>,
+        <https://lhncbc.nlm.nih.gov/semanticnetwork/download/sg_archive/SemGroups-v04.txtPROC>,
+        <https://w3id.org/biolink/vocab/Procedure> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <http://purl.bioontology.org/ontology/STY/T059>,
+        <http://purl.bioontology.org/ontology/STY/T060>,
+        <http://purl.bioontology.org/ontology/STY/T061>,
+        <http://purl.bioontology.org/ontology/STY/T063> .
+
+<https://w3id.org/biolink/vocab/TaxonomicRank> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "taxonomic rank" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        <https://w3id.org/biolink/vocab/OntologyClass> ;
+    skos:definition "A descriptor for the rank within a taxonomic classification. Example instance: TAXRANK:0000017 (kingdom)" ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/TaxonomicRank> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:mappingRelation <https://www.wikidata.org/entity/Q427626> .
+
+<https://w3id.org/biolink/vocab/attribute_name> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "attribute_name" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/Attribute> ;
+    rdfs:range <https://w3id.org/biolink/vocab/label_type> ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/name> ;
+    skos:altLabel "display name",
+        "label",
+        "title" ;
+    skos:definition "The human-readable 'attribute name' can be set to a string which reflects its context of interpretation, e.g. SEPIO evidence/provenance/confidence annotation or it can default to the name associated with the 'has attribute type' slot ontology term." ;
+    skos:exactMatch <https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md#Name>,
+        <https://github.com/geneontology/go-annotation/blob/master/specs/gpad-gpi-2-0.md#DB_Object_Name> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:mappingRelation <rdfs:label> ;
+    skos:narrowMatch dcterms:title,
+        <https://www.wikidata.org/prop/P1476> ;
+    skos:prefLabel "name" .
+
+<https://w3id.org/biolink/vocab/has_attribute_type> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "has attribute type" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/Attribute> ;
+    rdfs:range <https://w3id.org/biolink/vocab/OntologyClass> ;
+    skos:definition "connects an attribute to a class that describes it" ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <http://loinc.org/rdf/has_modality_type>,
+        <http://loinc.org/rdf/has_view_type> .
+
+<https://w3id.org/biolink/vocab/has_numeric_value> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "has numeric value" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/QuantityValue> ;
+    rdfs:range linkml:Double ;
+    skos:definition "connects a quantity value to a number" ;
+    skos:exactMatch <http://qudt.org/1.1/schema/qudt#quantityValue> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/has_qualitative_value> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "has qualitative value" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/Attribute> ;
+    rdfs:range <https://w3id.org/biolink/vocab/NamedThing> ;
+    skos:definition "connects an attribute to a value" ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/has_taxonomic_rank> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "has taxonomic rank" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:range <https://w3id.org/biolink/vocab/TaxonomicRank> ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:mappingRelation <https://www.wikidata.org/entity/P105> .
+
+<https://w3id.org/biolink/vocab/has_unit> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "has unit" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/QuantityValue> ;
+    rdfs:range <https://w3id.org/biolink/vocab/unit> ;
+    skos:closeMatch <http://purl.obolibrary.org/obo/uo#is_unit_of>,
+        <http://www.ebi.ac.uk/efo/EFO_0001697> ;
+    skos:definition "connects a quantity value to a unit" ;
+    skos:exactMatch <IAO:0000039>,
+        <http://qudt.org/1.1/schema/qudt#unit> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <SNOMED:has_concentration_strength_denominator_unit>,
+        <SNOMED:has_concentration_strength_numerator_unit>,
+        <SNOMED:has_presentation_strength_denominator_unit>,
+        <SNOMED:has_presentation_strength_numerator_unit>,
+        <SNOMED:has_unit_of_presentation> .
+
+<https://w3id.org/biolink/vocab/symbol> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "symbol" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:range linkml:String ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:definition "Symbol for a particular thing" ;
+    skos:exactMatch <https://github.com/geneontology/go-annotation/blob/master/specs/gpad-gpi-2-0.md#DB_Object_Symbol>,
+        <https://www.alliancegenome.org/symbol> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+bican:Checksum a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "checksum" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty bican:value ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom bican:DigestType ;
+            owl:onProperty bican:checksum_algorithm ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:value ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:checksum_algorithm ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty bican:value ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty bican:checksum_algorithm ],
+        <https://w3id.org/biolink/vocab/Entity> ;
+    skos:definition "Checksum values associated with digital entities." ;
+    skos:inScheme <https://identifiers.org/brain-bican/bican-core-schema> .
+
+bican:GenomeAnnotation a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "GenomeAnnotation" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/version> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/version> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:digest ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom bican:AuthorityType ;
+            owl:onProperty bican:authority ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:authority ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty bican:reference_assembly ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty bican:authority ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom [ owl:unionOf ( bican:Checksum linkml:String ) ] ;
+            owl:onProperty bican:digest ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty bican:reference_assembly ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/version> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty bican:content_url ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:content_url ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom [ owl:unionOf ( bican:GenomeAssembly linkml:String ) ] ;
+            owl:onProperty bican:reference_assembly ],
+        <https://w3id.org/biolink/vocab/Genome> ;
+    skos:definition "Represents a genome annotation. Includes metadata about the genome, such as its version and reference assembly." ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+bican:GenomeAssembly a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "GenomeAssembly" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty bican:strain ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty bican:strain ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/version> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/version> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/version> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:strain ],
+        <https://w3id.org/biolink/vocab/NamedThing>,
+        <https://w3id.org/biolink/vocab/ThingWithTaxon> ;
+    skos:definition "Represents a genome assembly. A genome assembly is a computational representation of a genome sequence." ;
+    skos:inScheme <https://identifiers.org/brain-bican/genome-annotation-schema> .
+
+bican:VersionedNamedThing a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "VersionedNamedThing" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty bican:revision_of ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom bican:VersionedNamedThing ;
+            owl:onProperty bican:revision_of ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:revision_of ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/version> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/version> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/version> ],
+        <https://w3id.org/biolink/vocab/NamedThing> ;
+    skos:definition "An iteration of the biolink:NamedThing class that stores metadata about the object's version." ;
+    skos:inScheme <https://identifiers.org/brain-bican/bican-core-schema> .
+
+<https://w3id.org/biolink/vocab/Dataset> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "dataset" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/format> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/license> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/license> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/license> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/creation_date> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Date ;
+            owl:onProperty <https://w3id.org/biolink/vocab/creation_date> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/format> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/rights> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/format> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/creation_date> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/rights> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/rights> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        <https://w3id.org/biolink/vocab/InformationContentEntity> ;
+    skos:definition "an item that refers to a collection of data from a data source." ;
+    skos:exactMatch <IAO:0000100>,
+        <dctypes:Dataset>,
+        schema1:dataset,
+        <https://datacommons.org/browser/Dataset>,
+        <https://w3id.org/biolink/vocab/Dataset> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/Gene> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "gene" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/biological_sequence> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_biological_sequence> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_biological_sequence> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/symbol> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/symbol> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_biological_sequence> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/symbol> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/OrganismTaxon> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        <https://w3id.org/biolink/vocab/BiologicalEntity>,
+        <https://w3id.org/biolink/vocab/ChemicalEntityOrGeneOrGeneProduct>,
+        <https://w3id.org/biolink/vocab/GeneOrGeneProduct>,
+        <https://w3id.org/biolink/vocab/GenomicEntity>,
+        <https://w3id.org/biolink/vocab/OntologyClass>,
+        <https://w3id.org/biolink/vocab/PhysicalEssence> ;
+    skos:broadMatch <NCIT:C45822> ;
+    skos:definition "A region (or regions) that includes all of the sequence elements necessary to encode a functional transcript. A gene locus may include regulatory regions, transcribed regions and/or other functional sequence regions." ;
+    skos:exactMatch <SO:0000704>,
+        <http://semanticscience.org/resource/SIO_010035>,
+        <https://datacommons.org/browser/Gene>,
+        <https://w3id.org/biolink/vocab/Gene>,
+        <https://www.wikidata.org/entity/Q7187> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <https://bioschemas.org/gene> .
+
+<https://w3id.org/biolink/vocab/Genome> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "genome" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/biological_sequence> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_biological_sequence> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/OrganismTaxon> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_biological_sequence> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_biological_sequence> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        <https://w3id.org/biolink/vocab/BiologicalEntity>,
+        <https://w3id.org/biolink/vocab/GenomicEntity>,
+        <https://w3id.org/biolink/vocab/OntologyClass>,
+        <https://w3id.org/biolink/vocab/PhysicalEssence> ;
+    skos:closeMatch <https://datacommons.org/browser/GenomeAssemblyUnit> ;
+    skos:definition "A genome is the sum of genetic material within a cell or virion." ;
+    skos:exactMatch <SO:0001026>,
+        <http://semanticscience.org/resource/SIO_000984>,
+        <https://w3id.org/biolink/vocab/Genome>,
+        <https://www.wikidata.org/entity/Q7020> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/PhysicalEntity> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "physical entity" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        <https://w3id.org/biolink/vocab/NamedThing>,
+        <https://w3id.org/biolink/vocab/PhysicalEssence> ;
+    skos:definition "An entity that has material reality (a.k.a. physical essence)." ;
+    skos:exactMatch <http://purl.bioontology.org/ontology/STY/T072>,
+        <https://w3id.org/biolink/vocab/PhysicalEntity> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <http://purl.bioontology.org/ontology/STY/T073> .
+
+<https://w3id.org/biolink/vocab/PhysicalEssence> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "physical essence" ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/PhysicalEssenceOrOccurrent> ;
+    skos:definition "Semantic mixin concept.  Pertains to entities that have physical properties such as mass, volume, or charge." ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/PhysicalEssence> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/biological_sequence> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf linkml:String .
+
+<https://w3id.org/biolink/vocab/BiologicalEntity> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "biological entity" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/OrganismTaxon> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon> ],
+        <https://w3id.org/biolink/vocab/NamedThing>,
+        <https://w3id.org/biolink/vocab/ThingWithTaxon> ;
+    skos:altLabel "bioentity" ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/BiologicalEntity> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <http://purl.bioontology.org/ontology/STY/T050>,
+        <http://purl.bioontology.org/ontology/STY/T129>,
+        <http://semanticscience.org/resource/SIO_010046>,
+        <https://www.wikidata.org/entity/Q28845870> .
+
+<https://w3id.org/biolink/vocab/QuantityValue> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "quantity value" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_numeric_value> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/unit> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_unit> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_unit> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_numeric_value> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Double ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_numeric_value> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_unit> ],
+        <https://w3id.org/biolink/vocab/Annotation> ;
+    skos:definition "A value of an attribute that is quantitative and measurable, expressed as a combination of a unit and a numeric value" ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/QuantityValue> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/ThingWithTaxon> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "thing with taxon" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon_label> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/OrganismTaxon> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/in_taxon> ] ;
+    skos:definition "A mixin that can be used on any entity that can be taxonomically classified. This includes individual organisms; genes, their products and other molecular entities; body parts; biological processes" ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/ThingWithTaxon> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+bican:AuthorityType a owl:Class,
+        linkml:EnumDefinition ;
+    owl:unionOf ( <https://identifiers.org/brain-bican/vocab/AuthorityType#ENSEMBL> <https://identifiers.org/brain-bican/vocab/AuthorityType#NCBI> ) ;
+    linkml:permissible_values <https://identifiers.org/brain-bican/vocab/AuthorityType#ENSEMBL>,
+        <https://identifiers.org/brain-bican/vocab/AuthorityType#NCBI> .
+
+bican:BioType a owl:Class,
+        linkml:EnumDefinition ;
+    owl:unionOf ( <https://identifiers.org/brain-bican/vocab/BioType#protein_coding> <https://identifiers.org/brain-bican/vocab/BioType#noncoding> ) ;
+    linkml:permissible_values <https://identifiers.org/brain-bican/vocab/BioType#noncoding>,
+        <https://identifiers.org/brain-bican/vocab/BioType#protein_coding> .
+
+<https://w3id.org/biolink/vocab/creation_date> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "creation date" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:range linkml:Date ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:altLabel "publication date" ;
+    skos:definition "date on which an entity was created. This can be applied to nodes or edges" ;
+    skos:exactMatch dcterms:createdOn,
+        <https://www.wikidata.org/prop/P577> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/format> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "format" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/InformationContentEntity> ;
+    rdfs:range linkml:String ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:exactMatch dcterms:format,
+        <https://www.wikidata.org/prop/P2701> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/license> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "license" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/InformationContentEntity> ;
+    rdfs:range linkml:String ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:exactMatch dcterms:license ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <https://www.wikidata.org/prop/P275> .
+
+<https://w3id.org/biolink/vocab/rights> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "rights" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/InformationContentEntity> ;
+    rdfs:range linkml:String ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:exactMatch dcterms:rights ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/InformationContentEntity> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "information content entity" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/license> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Date ;
+            owl:onProperty <https://w3id.org/biolink/vocab/creation_date> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/license> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/format> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/rights> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/rights> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/creation_date> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/rights> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/license> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/format> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/creation_date> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/format> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        <https://w3id.org/biolink/vocab/NamedThing> ;
+    skos:altLabel "information",
+        "information artefact",
+        "information entity" ;
+    skos:definition "a piece of information that typically describes some topic of discourse or is used as support." ;
+    skos:exactMatch <IAO:0000030>,
+        <https://w3id.org/biolink/vocab/InformationContentEntity> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <http://purl.bioontology.org/ontology/STY/T077>,
+        <http://purl.bioontology.org/ontology/STY/T078>,
+        <http://purl.bioontology.org/ontology/STY/T079>,
+        <http://purl.bioontology.org/ontology/STY/T080>,
+        <http://purl.bioontology.org/ontology/STY/T081>,
+        <http://purl.bioontology.org/ontology/STY/T082>,
+        <http://purl.bioontology.org/ontology/STY/T089>,
+        <http://purl.bioontology.org/ontology/STY/T102>,
+        <http://purl.bioontology.org/ontology/STY/T169>,
+        <http://purl.bioontology.org/ontology/STY/T171>,
+        <http://purl.bioontology.org/ontology/STY/T185>,
+        <https://lhncbc.nlm.nih.gov/semanticnetwork/download/sg_archive/SemGroups-v04.txtCONC> .
+
+<https://w3id.org/biolink/vocab/OntologyClass> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "ontology class" ;
+    rdfs:seeAlso <https://github.com/biolink/biolink-model/issues/486> ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ] ;
+    skos:definition "a concept or class in an ontology, vocabulary or thesaurus. Note that nodes in a biolink compatible KG can be considered both instances of biolink classes, and OWL classes in their own right. In general you should not need to use this class directly. Instead, use the appropriate biolink class. For example, for the GO concept of endocytosis (GO:0006897), use bl:BiologicalProcess as the type." ;
+    skos:exactMatch schema1:Class,
+        <https://w3id.org/biolink/vocab/OntologyClass>,
+        <owl:Class> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:note "Note that formally this is a metaclass. Instances of this class are instances in the graph, but can be the object of 'type' edges. For example, if we had a node in the graph representing a specific brain of a specific patient (e.g brain001), this could have a category of bl:Sample, and by typed more specifically with an ontology class UBERON:nnn, which has as category bl:AnatomicalEntity",
+        "This is modeled as a mixin. 'ontology class' should not be the primary type of a node in the KG. Instead you should use an informative bioloink category, such as AnatomicalEntity (for Uberon classes), ChemicalSubstance (for CHEBI or CHEMBL), etc" .
+
+bican:DigestType a owl:Class,
+        linkml:EnumDefinition ;
+    owl:unionOf ( <http://spdx.org/rdf/terms#checksumAlgorithm_sha1> <http://spdx.org/rdf/terms#checksumAlgorithm_md5> <http://spdx.org/rdf/terms#checksumAlgorithm_sha256> ) ;
+    linkml:permissible_values <http://spdx.org/rdf/terms#checksumAlgorithm_md5>,
+        <http://spdx.org/rdf/terms#checksumAlgorithm_sha1>,
+        <http://spdx.org/rdf/terms#checksumAlgorithm_sha256> .
+
+<https://w3id.org/biolink/vocab/OrganismTaxon> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "organism taxon" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_taxonomic_rank> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_taxonomic_rank> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/TaxonomicRank> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_taxonomic_rank> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        <https://w3id.org/biolink/vocab/NamedThing> ;
+    skos:altLabel "taxon",
+        "taxonomic classification" ;
+    skos:definition "A classification of a set of organisms. Example instances: NCBITaxon:9606 (Homo sapiens), NCBITaxon:2 (Bacteria). Can also be used to represent strains or subspecies." ;
+    skos:exactMatch <http://purl.bioontology.org/ontology/STY/T001>,
+        <https://bioschemas.org/Taxon>,
+        <https://w3id.org/biolink/vocab/OrganismTaxon>,
+        <https://www.wikidata.org/entity/Q16521> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <https://datacommons.org/browser/BiologicalSpecies> .
+
+<https://w3id.org/biolink/vocab/in_taxon> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "in taxon" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/ThingWithTaxon> ;
+    rdfs:range <https://w3id.org/biolink/vocab/OrganismTaxon> ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/related_to_at_instance_level> ;
+    skos:altLabel "gene found in organism",
+        "gene product has organism source",
+        "instance of",
+        "is organism source of gene product",
+        "organism has gene" ;
+    skos:definition "connects an entity to its taxonomic classification. Only certain kinds of entities can be taxonomically classified; see 'thing with taxon'" ;
+    skos:exactMatch <http://purl.obolibrary.org/obo/RO_0002162>,
+        <https://www.wikidata.org/prop/P703> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <http://purl.obolibrary.org/obo/RO_0002160> ;
+    bican:canonical_predicate true .
+
+<https://w3id.org/biolink/vocab/has_biological_sequence> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "has biological sequence" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:range <https://w3id.org/biolink/vocab/biological_sequence> ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:definition "connects a genomic feature to its sequence" ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/version> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "version" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/Dataset> ;
+    rdfs:range linkml:String ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:broadMatch pav:version,
+        <owl:versionInfo> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/Entity> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "entity" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ] ;
+    skos:definition "Root Biolink Model class for all things and informational relationships, real or imagined." ;
+    skos:exactMatch <https://w3id.org/biolink/vocab/Entity> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/in_taxon_label> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "in taxon label" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/ThingWithTaxon> ;
+    rdfs:range <https://w3id.org/biolink/vocab/label_type> ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:definition "The human readable scientific name for the taxon of the entity." ;
+    skos:exactMatch <https://www.wikidata.org/prop/P225> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    bican:denormalized true .
+
+<https://w3id.org/biolink/vocab/node_property> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "node property" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:range linkml:String ;
+    skos:definition "A grouping for any property that holds between a node and a value" ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://identifiers.org/brain-bican/genome-annotation-schema> a owl:Ontology ;
+    rdfs:label "genome-annotation-schema" ;
+    dcterms:title "Genome Annotation Schema" ;
+    skos:definition "The Genome Annotation Schema is designed to respresent all the genes from a given genome annotation." .
+
+<https://w3id.org/biolink/vocab/iri_type> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf linkml:Uriorcurie .
+
+<https://w3id.org/biolink/vocab/narrative_text> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf linkml:String .
+
+<https://w3id.org/biolink/vocab/Attribute> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "attribute" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/QuantityValue> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_quantitative_value> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/OntologyClass> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute_type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute_type> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_qualitative_value> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/NamedThing> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_qualitative_value> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/attribute_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/attribute_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_quantitative_value> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty bican:name ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/attribute_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty bican:name ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute_type> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty bican:name ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_qualitative_value> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        <https://w3id.org/biolink/vocab/NamedThing>,
+        <https://w3id.org/biolink/vocab/OntologyClass> ;
+    skos:definition "A property or characteristic of an entity. For example, an apple may have properties such as color, shape, age, crispiness. An environmental sample may have attributes such as depth, lat, long, material." ;
+    skos:exactMatch <http://semanticscience.org/resource/SIO_000614>,
+        <https://w3id.org/biolink/vocab/Attribute> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/provided_by> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "provided by" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:range linkml:String ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:definition "The value in this node property represents the knowledge provider that created or assembled the node and all of its attributes.  Used internally to represent how a particular node made its way into a knowledge provider or graph." ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/synonym> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "synonym" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:range <https://w3id.org/biolink/vocab/label_type> ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:altLabel "alias" ;
+    skos:definition "Alternate human-readable names for a thing" ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <IAO:0000136>,
+        <http://purl.bioontology.org/ontology/RXNORM/has_tradename>,
+        <http://www.ebi.ac.uk/ancestro/ancestro_0330>,
+        <https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md#Alias>,
+        <https://github.com/geneontology/go-annotation/blob/master/specs/gpad-gpi-2-0.md#DB_Object_Synonyms>,
+        <https://www.alliancegenome.org/synonyms>,
+        <skos:altLabel> .
+
+<https://w3id.org/biolink/vocab/xref> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "xref" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:range linkml:Uriorcurie ;
+    skos:altLabel "DbXref",
+        "Dbxref",
+        "dbxref",
+        "record_url",
+        "source_record_urls" ;
+    skos:definition "A database cross reference or alternative identifier for a NamedThing or edge between two NamedThings.  This property should point to a database record or webpage that supports the existence of the edge, or gives more detail about the edge. This property can be used on a node or edge to provide multiple URIs or CURIE cross references." ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md#Dbxref>,
+        <https://github.com/geneontology/go-annotation/blob/master/specs/gpad-gpi-2-0.md#DB_Xrefs> .
+
+<https://w3id.org/biolink/vocab/has_attribute> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "has attribute" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/Entity> ;
+    rdfs:range <https://w3id.org/biolink/vocab/Attribute> ;
+    skos:closeMatch <OBI:0001927> ;
+    skos:definition "connects any entity to an attribute" ;
+    skos:exactMatch <http://semanticscience.org/resource/SIO_000008> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:narrowMatch <DRUGBANK:category>,
+        <NCIT:R88>,
+        <NCIT:eo_disease_has_property_or_attribute>,
+        <NCIT:has_data_element>,
+        <NCIT:has_pharmaceutical_administration_method>,
+        <NCIT:has_pharmaceutical_basic_dose_form>,
+        <NCIT:has_pharmaceutical_intended_site>,
+        <NCIT:has_pharmaceutical_release_characteristics>,
+        <NCIT:has_pharmaceutical_state_of_matter>,
+        <NCIT:has_pharmaceutical_transformation>,
+        <NCIT:is_qualified_by>,
+        <NCIT:qualifier_applies_to>,
+        <NCIT:role_has_domain>,
+        <NCIT:role_has_range>,
+        <OMIM:has_inheritance_type>,
+        <SNOMED:has_access>,
+        <SNOMED:has_clinical_course>,
+        <SNOMED:has_count_of_base_of_active_ingredient>,
+        <SNOMED:has_dose_form_administration_method>,
+        <SNOMED:has_dose_form_release_characteristic>,
+        <SNOMED:has_dose_form_transformation>,
+        <SNOMED:has_finding_context>,
+        <SNOMED:has_finding_informer>,
+        <SNOMED:has_inherent_attribute>,
+        <SNOMED:has_intent>,
+        <SNOMED:has_interpretation>,
+        <SNOMED:has_laterality>,
+        <SNOMED:has_measurement_method>,
+        <SNOMED:has_method>,
+        <SNOMED:has_priority>,
+        <SNOMED:has_procedure_context>,
+        <SNOMED:has_process_duration>,
+        <SNOMED:has_property>,
+        <SNOMED:has_revision_status>,
+        <SNOMED:has_scale_type>,
+        <SNOMED:has_severity>,
+        <SNOMED:has_specimen>,
+        <SNOMED:has_state_of_matter>,
+        <SNOMED:has_subject_relationship_context>,
+        <SNOMED:has_surgical_approach>,
+        <SNOMED:has_technique>,
+        <SNOMED:has_temporal_context>,
+        <SNOMED:has_time_aspect>,
+        <SNOMED:has_units>,
+        <UMLS:has_structural_class>,
+        <UMLS:has_supported_concept_property>,
+        <UMLS:has_supported_concept_relationship>,
+        <UMLS:may_be_qualified_by>,
+        <http://loinc.org/rdf/has_action_guidance>,
+        <http://loinc.org/rdf/has_adjustment>,
+        <http://loinc.org/rdf/has_aggregation_view>,
+        <http://loinc.org/rdf/has_approach_guidance>,
+        <http://loinc.org/rdf/has_divisor>,
+        <http://loinc.org/rdf/has_exam>,
+        <http://loinc.org/rdf/has_method>,
+        <http://loinc.org/rdf/has_modality_subtype>,
+        <http://loinc.org/rdf/has_object_guidance>,
+        <http://loinc.org/rdf/has_scale>,
+        <http://loinc.org/rdf/has_suffix>,
+        <http://loinc.org/rdf/has_time_aspect>,
+        <http://loinc.org/rdf/has_time_modifier>,
+        <http://loinc.org/rdf/has_timing_of>,
+        <http://purl.obolibrary.org/obo/INO_0000154>,
+        <http://purl.obolibrary.org/obo/RO_0000053>,
+        <http://purl.obolibrary.org/obo/RO_0000086>,
+        <http://purl.obolibrary.org/obo/RO_0000087>,
+        <http://purl.org/oban/association_has_object_property>,
+        <http://purl.org/oban/association_has_subject_property>,
+        <http://www.ebi.ac.uk/ancestro/ancestro_0301>,
+        <http://www.ebi.ac.uk/ancestro/ancestro_0308>,
+        <http://www.ebi.ac.uk/efo/EFO_is_executed_in>,
+        <http://www.orpha.net/ORDO/Orphanet_C016>,
+        <http://www.orpha.net/ORDO/Orphanet_C017>,
+        <https://www.ama-assn.org/practice-management/cpt/has_possibly_included_panel_element> .
+
+<https://w3id.org/biolink/vocab/NamedThing> a owl:Class,
+        linkml:ClassDefinition ;
+    rdfs:label "named thing" ;
+    rdfs:subClassOf [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Boolean ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/narrative_text> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/label_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/synonym> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/full_name> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/xref> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/iri_type> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/description> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/id> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/type> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:Uriorcurie ;
+            owl:onProperty <https://w3id.org/biolink/vocab/category> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/iri> ],
+        [ a owl:Restriction ;
+            owl:maxCardinality 1 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/deprecated> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom <https://w3id.org/biolink/vocab/Attribute> ;
+            owl:onProperty <https://w3id.org/biolink/vocab/has_attribute> ],
+        [ a owl:Restriction ;
+            owl:minCardinality 0 ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        [ a owl:Restriction ;
+            owl:allValuesFrom linkml:String ;
+            owl:onProperty <https://w3id.org/biolink/vocab/provided_by> ],
+        <https://w3id.org/biolink/vocab/Entity> ;
+    skos:definition "a databased entity or concept/class" ;
+    skos:exactMatch <BFO:0000001>,
+        <http://purl.bioontology.org/ontology/STY/T071>,
+        <https://datacommons.org/browser/Thing>,
+        <https://lhncbc.nlm.nih.gov/semanticnetwork/download/sg_archive/SemGroups-v04.txtOBJC>,
+        <https://w3id.org/biolink/vocab/NamedThing>,
+        <https://www.wikidata.org/entity/Q35120> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/type> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "type" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/Entity> ;
+    rdfs:range linkml:String ;
+    skos:exactMatch <https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md#type>,
+        <https://github.com/geneontology/go-annotation/blob/master/specs/gpad-gpi-2-0.md#DB_Object_Type> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:mappingRelation <rdf:type> .
+
+<https://w3id.org/biolink/vocab/full_name> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "full name" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/NamedThing> ;
+    rdfs:range <https://w3id.org/biolink/vocab/label_type> ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/node_property> ;
+    skos:definition "a long-form human readable name for a thing" ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/deprecated> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "deprecated" ;
+    rdfs:range linkml:Boolean ;
+    skos:definition "A boolean flag indicating that an entity is no longer considered current or valid." ;
+    skos:exactMatch <oboInOwl:ObsoleteClass> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/description> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "description" ;
+    rdfs:range <https://w3id.org/biolink/vocab/narrative_text> ;
+    skos:altLabel "definition" ;
+    skos:definition "a human-readable description of an entity" ;
+    skos:exactMatch <IAO:0000115>,
+        <skos:definitions> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:mappingRelation dcterms:description ;
+    skos:narrowMatch <https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md#Description> .
+
+<https://w3id.org/biolink/vocab/iri> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "iri" ;
+    rdfs:range <https://w3id.org/biolink/vocab/iri_type> ;
+    skos:definition "An IRI for an entity. This is determined by the id using expansion rules." ;
+    skos:exactMatch <https://www.wikidata.org/prop/P854> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/name> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "name" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/Entity> ;
+    rdfs:range <https://w3id.org/biolink/vocab/label_type> ;
+    skos:altLabel "display name",
+        "label",
+        "title" ;
+    skos:definition "A human-readable name for an attribute or entity." ;
+    skos:exactMatch <https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md#Name>,
+        <https://github.com/geneontology/go-annotation/blob/master/specs/gpad-gpi-2-0.md#DB_Object_Name> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> ;
+    skos:mappingRelation <rdfs:label> ;
+    skos:narrowMatch dcterms:title,
+        <https://www.wikidata.org/prop/P1476> .
+
+<https://w3id.org/biolink/vocab/category> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "category" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/Entity> ;
+    rdfs:range linkml:Uriorcurie ;
+    rdfs:subPropertyOf <https://w3id.org/biolink/vocab/type> ;
+    skos:definition "Name of the high level ontology class in which this entity is categorized. Corresponds to the label for the biolink entity type class. In a neo4j database this MAY correspond to the neo4j label tag. In an RDF database it should be a biolink model class URI. This field is multi-valued. It should include values for ancestors of the biolink class; for example, a protein such as Shh would have category values `biolink:Protein`, `biolink:GeneProduct`, `biolink:MolecularEntity`. In an RDF database, nodes will typically have an rdf:type triples. This can be to the most specific biolink class, or potentially to a class more specific than something in biolink. For example, a sequence feature `f` may have a rdf:type assertion to a SO class such as TF_binding_site, which is more specific than anything in biolink. Here we would have categories {biolink:GenomicEntity, biolink:MolecularEntity, biolink:NamedThing}." ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/id> a owl:ObjectProperty,
+        linkml:SlotDefinition ;
+    rdfs:label "id" ;
+    rdfs:domain <https://w3id.org/biolink/vocab/Entity> ;
+    rdfs:range linkml:String ;
+    skos:definition "A unique identifier for an entity. Must be either a CURIE shorthand for a URI or a complete URI" ;
+    skos:exactMatch <https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md#ID>,
+        <https://github.com/geneontology/go-annotation/blob/master/specs/gpad-gpi-2-0.md#DB_Object_ID>,
+        <https://www.alliancegenome.org/primaryId> ;
+    skos:inScheme <https://w3id.org/biolink/bican-biolink-schema> .
+
+<https://w3id.org/biolink/vocab/label_type> a owl:Class,
+        linkml:TypeDefinition ;
+    rdfs:subClassOf linkml:String .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/Attribute> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/Attribute> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/Dataset> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/Dataset> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/InformationContentEntity> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/InformationContentEntity> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/OrganismTaxon> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/OrganismTaxon> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf bican:Checksum ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom bican:Checksum .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf bican:VersionedNamedThing ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom bican:VersionedNamedThing .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf bican:GeneAnnotation ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom bican:GeneAnnotation .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/Activity> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/Activity> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/BiologicalEntity> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/BiologicalEntity> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/Entity> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/Entity> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/Genome> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/Genome> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf bican:GenomeAnnotation ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom bican:GenomeAnnotation .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/Procedure> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/Procedure> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf bican:GenomeAssembly ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom bican:GenomeAssembly .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/PhysicalEntity> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/PhysicalEntity> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/NamedThing> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/NamedThing> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/MaterialSample> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/MaterialSample> .
+
+[] a owl:Restriction ;
+    rdfs:subClassOf <https://w3id.org/biolink/vocab/Gene> ;
+    owl:onProperty <https://w3id.org/biolink/vocab/category> ;
+    owl:someValuesFrom <https://w3id.org/biolink/vocab/Gene> .
+

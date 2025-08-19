@@ -16,12 +16,17 @@
 # @File    : shared.py
 # @Software: PyCharm
 
-from rdflib import Graph
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 from typing import List, Dict, Any
 import re
 import os
+
+from rdflib import Graph, URIRef, Literal, RDF, XSD , DCTERMS , PROV
+import datetime
+import uuid
+from rdflib import Namespace
+
 
 try:
     from yaml import CLoader as Loader
@@ -295,3 +300,144 @@ def clean_response_statistics(response: List[Dict[str, Any]]):
         return {"error": f"Validation error: {e}"}
     except Exception as e:
         return {"error": f"An unexpected error occurred: {e}"}
+
+
+def is_uri(value):
+    """Check if a value is a URI"""
+    return isinstance(value, str) and value.startswith(("http://", "https://"))
+
+
+def typed_literal(value):
+    """Return rdflib Literal with appropriate datatype"""
+    if isinstance(value, int):
+        return Literal(value, datatype=XSD.integer)
+    elif isinstance(value, float):
+        return Literal(value, datatype=XSD.float)
+    elif isinstance(value, bool):
+        return Literal(value, datatype=XSD.boolean)
+    return Literal(value)
+
+
+def generate_uri(base_uri, value=None):
+    """Generate a URI using a given ID value or a UUID"""
+    if value and is_uri(value):
+        return URIRef(value)
+    if value:
+        return URIRef(f"{base_uri}{value}")
+    return URIRef(f"{base_uri}{uuid.uuid4()}")
+
+
+def json_to_kg(json_data, base_uri="http://example.org/resource/"):
+    """Convert JSON data to RDF graph"""
+    graph = Graph()
+    KG = Namespace(base_uri)
+    graph.bind("kg", KG)
+
+    def process_node(node, subject):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                predicate = KG[key]
+                if isinstance(value, (str, int, float, bool)):
+                    obj = URIRef(value) if is_uri(value) else typed_literal(value)
+                    graph.add((subject, predicate, obj))
+
+                elif isinstance(value, dict):
+                    # Use URI if 'id' key exists, otherwise generate one
+                    obj_uri = generate_uri(base_uri, value.get("id"))
+                    graph.add((subject, predicate, obj_uri))
+                    process_node(value, obj_uri)
+
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, (str, int, float, bool)):
+                            obj = URIRef(item) if is_uri(item) else typed_literal(item)
+                            graph.add((subject, predicate, obj))
+
+                        elif isinstance(item, dict):
+                            # Use URI if 'id' exists, else generate one based on content or UUID
+                            obj_uri = generate_uri(base_uri, item.get("id") or item.get("specific_target"))
+                            graph.add((subject, predicate, obj_uri))
+                            process_node(item, obj_uri)
+        else:
+            graph.add((subject, KG.value, typed_literal(str(node))))
+
+    subject_uri = generate_uri(base_uri)
+    process_node(json_data, subject_uri)
+    return graph
+
+
+def convert_json_to_ttl(json_data, base_uri="http://brainkb.org/"):
+    """Convert JSON data to TTL format string"""
+    graph = json_to_kg(json_data, base_uri)
+    return graph.serialize(format="turtle")
+
+
+def convert_ttl_to_named_graph(ttl_str: str, named_graph_uri: str = "https://brainkb.org/test") -> str:
+    """
+    Converts a Turtle (TTL) file to a Named Graph format and returns it as a string.
+
+    :param ttl_str: A string containing Turtle (TTL) formatted RDF data.
+    :param named_graph_uri: URI of the named graph.
+    :return: A string containing the N-Quads formatted data.
+
+    Example:
+        Input ttl:
+            @prefix ex: <http://example.org/> .
+            ex:Alice ex:knows ex:Bob .
+        Output:
+            Graph <http://example.org/myGraph> {
+             <http://example.org/Alice> <http://example.org/knows> <http://example.org/Bob> .
+           }
+
+
+    """
+    g = Graph()
+    g.parse(data=ttl_str, format="turtle")
+    # format output to include `Graph <> {}` syntax
+    n3_named_graph_data = f"Graph <{named_graph_uri}> {{\n"
+    n3_named_graph_data += g.serialize(format="nt")  # Serialize as N-Triples (s p o .) for structured output
+    n3_named_graph_data += "}\n"
+
+    return n3_named_graph_data
+
+
+def named_graph_metadata(named_graph_url, description):
+    """
+        Generates metadata for a named graph using the PROV and DCTERMS ontologies.
+
+        This function creates an RDF graph containing metadata for a given named graph.
+        It includes:
+        - The named graph as a PROV entity.
+        - A timestamp indicating when the metadata was generated.
+        - A description of the named graph.
+
+        The generated RDF graph is then converted into a named graph format.
+
+        Args:
+            named_graph_url (str): The URL of the named graph for which metadata is created.
+            description (str): A textual description of the named graph.
+
+        Returns:
+            str: The serialized named graph metadata in Turtle format.
+
+        Dependencies:
+            - rdflib (for RDF graph manipulation)
+            - datetime (for timestamp generation)
+            - convert_ttl_to_named_graph (a function to convert RDF Turtle data into a named graph)
+
+        Example:
+            >>> metadata = named_graph_metadata("https://example.org/mygraph", "This is a sample named graph.")
+            >>> print(metadata)  # Outputs the RDF metadata as a named graph in ntriple format
+    """
+    g = Graph()
+    prov_entity = URIRef(named_graph_url)
+    created_At = datetime.datetime.utcnow().isoformat() + "Z"
+    g.add((prov_entity, RDF.type, PROV.Entity))
+    g.add((prov_entity,PROV.generatedAtTime, Literal(created_At, datatype=XSD.dateTime)))
+    g.add((prov_entity,DCTERMS.description, Literal(description, datatype=XSD.string)))
+    named_graph_metadata = convert_ttl_to_named_graph(
+        ttl_str=g.serialize(format='turtle'),
+        named_graph_uri="https://brainkb.org/metadata/named-graph"
+    )
+    return named_graph_metadata
+

@@ -22,7 +22,7 @@ from typing import List
 from fastapi.responses import JSONResponse
 from core.configure_rabbit_mq import publish_message
 import logging
-from core.file_validator import validate_file_extension, validate_mime_type
+from core.file_validator import validate_file_extension
 from core.file_validator import is_valid_jsonld
 import json
 from core.pydantic_schema import InputJSONSLdchema, InputJSONSchema, InputTextSchema
@@ -31,13 +31,15 @@ from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
 from core.shared import convert_to_turtle
+from core.shared import named_graph_exists
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
 @router.post("/ingest/raw-text",
-             dependencies=[Depends(require_scopes(["write"]))]
+             dependencies=[Depends(require_scopes(["write"]))],
+             include_in_schema=False
              )
 async def ingest_text(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -58,11 +60,12 @@ async def ingest_text(
         ], ):
     text_data = text.json()
     publish_message(text_data)
-    return JSONResponse(content={"message": "Text uploaded successfully"})
+    return JSONResponse(content={"message": "Text uploaded successfully to messaging server"})
 
 
 @router.post("/ingest/raw-json",
-             dependencies=[Depends(require_scopes(["write"]))]
+             dependencies=[Depends(require_scopes(["write"]))],
+             include_in_schema=False
              )
 async def ingest_json(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -74,6 +77,7 @@ async def ingest_json(
                         "user": "U123r",
                         "date_created": "2024-04-30T12:42:32.203447",
                         "date_modified": "2024-04-30T12:42:32.203451",
+                        "type": "raw-json",
                         "json_data": {
 
                             "neuroscience_disorders": [
@@ -106,21 +110,20 @@ async def ingest_json(
         ], ):
     try:
         main_model_schema = jsoninput.json()
-
         serialized_message_json = json.dumps(main_model_schema)
         encoded_message_json = serialized_message_json.encode('utf-8')
         publish_message(encoded_message_json)
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail="Invalid JSON" + str(e))
 
-    return JSONResponse(content={"message": "Data uploaded successfully"})
+    return JSONResponse(content={"message": "Data uploaded successfully to messaging server"})
 
 
 @router.post("/ingest/raw-jsonld",
-             # dependencies=[Depends(require_scopes(["write"]))]
+             dependencies=[Depends(require_scopes(["write"]))]
              )
 async def ingest_raw_jsonld(
-        # user: Annotated[LoginUserIn, Depends(get_current_user)],
+        user: Annotated[LoginUserIn, Depends(get_current_user)],
         jsonldinput:
         Annotated[
             InputJSONSLdchema,
@@ -128,41 +131,49 @@ async def ingest_raw_jsonld(
                 examples=[
                     {
                         "user": "testuser",
+                        "graph":"https://example.com/",
                         "kg_data": {
                             "@context": {
-                                "Person": "https://schema.org/Person",
-                                "name": "https://schema.org/name",
-                                "jobTitle": "https://schema.org/jobTitle",
-                                "worksFor": "https://schema.org/worksFor",
-                                "Organization": "https://schema.org/Organization",
-                                "email": "https://schema.org/email",
-                                "url": "https://schema.org/url",
-                                "address": "https://schema.org/address",
-                                "PostalAddress": "https://schema.org/PostalAddress",
-                                "streetAddress": "https://schema.org/streetAddress",
-                                "addressLocality": "https://schema.org/addressLocality",
-                                "addressRegion": "https://schema.org/addressRegion",
-                                "postalCode": "https://schema.org/postalCode",
-                                "addressCountry": "https://schema.org/addressCountry"
+                                "bican": "https://identifiers.org/brain-bican/vocab/",
+                                "biolink": "https://w3id.org/biolink/vocab/",
+                                "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+                                "schema1": "http://schema.org/",
+                                "NCBIGene": "http://identifiers.org/ncbigene/",
+                                "label": "rdfs:label",
+                                "identifier": "schema1:identifier",
+                                "molecular_type": "bican:molecular_type",
+                                "referenced_in": {
+                                    "@id": "bican:referenced_in",
+                                    "@type": "@id"
+                                },
+                                "category": {
+                                    "@id": "biolink:category",
+                                    "@type": "@id"
+                                },
+                                "in_taxon": {
+                                    "@id": "biolink:in_taxon",
+                                    "@type": "@id"
+                                },
+                                "in_taxon_label": "biolink:in_taxon_label",
+                                "symbol": "biolink:symbol",
+                                "xref": {
+                                    "@id": "biolink:xref",
+                                    "@type": "@id"
+                                }
                             },
-                            "@type": "Person",
-                            "name": "John Doe",
-                            "jobTitle": "Software Engineer",
-                            "worksFor": {
-                                "@type": "Organization",
-                                "name": "TechCorp"
-                            },
-                            "email": "john.doe@example.com",
-                            "url": "https://johndoe.com",
-                            "address": {
-                                "@type": "PostalAddress",
-                                "streetAddress": "123 Tech Street",
-                                "addressLocality": "Tech City",
-                                "addressRegion": "CA",
-                                "postalCode": "12345",
-                                "addressCountry": "US"
-                            }
+                            "@id": "bican:000015fd3d6a449b47e75651210a6cc74fca918255232c8af9e46d077034c84d",
+                            "@type": "bican:GeneAnnotation",
+                            "label": "LOC106504536",
+                            "identifier": "106504536",
+                            "molecular_type": "protein_coding",
+                            "referenced_in": "bican:d5c45501b3b8e5d8b5b5ba0f4d72750d8548515c1b00c23473a03a213f15360a",
+                            "category": "bican:GeneAnnotation",
+                            "in_taxon": "bican:7d54dfcbd21418ea26d9bfd51015414b6ad1d3760d09672afc2e1e4e6c7da1dd",
+                            "in_taxon_label": "Sus scrofa",
+                            "symbol": "LOC106504536",
+                            "xref": "NCBIGene:106504536"
                         }
+
                     }
                 ],
             ),
@@ -172,16 +183,24 @@ async def ingest_raw_jsonld(
         json_data = jsonldinput.json()
         if is_valid_jsonld(json_data):
             dict_procesable_jsonld = json.loads(json_data)
-            turtle_representation = convert_to_turtle(dict_procesable_jsonld.get("kg_data", {}))
-            if turtle_representation:
-                dict_procesable_jsonld["kg_data"] = turtle_representation
-            else:
-                logger.warning("Conversion to Turtle failed. Data remains unchanged.")
+            named_graph_iri = named_graph_exists(dict_procesable_jsonld.get("graph"))
 
-            serialized_message = json.dumps(dict_procesable_jsonld)
-            encoded_message = serialized_message.encode('utf-8')
-            publish_message(encoded_message)
-            return JSONResponse(content={"message": "Data uploaded successfully"})
+
+            if named_graph_iri["status"]==True:
+                turtle_representation = convert_to_turtle(dict_procesable_jsonld.get("kg_data", {}))
+                if turtle_representation:
+                    dict_procesable_jsonld["data_type"] = "ttl"
+                    dict_procesable_jsonld["named_graph"] = named_graph_iri["formatted_iri"]
+                    dict_procesable_jsonld["kg_data"] = turtle_representation
+                else:
+                    logger.warning("Conversion to Turtle failed. Data remains unchanged.")
+
+                serialized_message = json.dumps(dict_procesable_jsonld)
+                encoded_message = serialized_message.encode('utf-8')
+                publish_message(encoded_message)
+                return JSONResponse(content={"message": "Data uploaded successfully to messaging server"})
+            else:
+                return JSONResponse(content={"message": named_graph_iri["message"]})
         else:
             return JSONResponse(content={"message": "Invalid format data! Please provide correct JSON-LD data."})
 
@@ -199,6 +218,7 @@ async def ingest_raw_jsonld(
 async def ingest_kg_file(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
         posting_user: str = Form(...),
+        graph: str = Form(...),
         file: UploadFile = File(...)):
     """
     Handles ingestion of knowledge graph (KG) files in TTL or JSON-LD format.
@@ -212,6 +232,9 @@ async def ingest_kg_file(
             status_code=400,
             detail="Unsupported file extension. Supported extensions: TTL and JSONLD"
         )
+    named_graph_iri = named_graph_exists(graph)
+    if named_graph_iri["status"] != True:
+        return JSONResponse(content={"message": named_graph_iri["message"]})
 
     try:
         content = await file.read()
@@ -219,7 +242,8 @@ async def ingest_kg_file(
 
         if file_extension == "jsonld":
             logger.debug("Processing JSON-LD file")
-            dict_processable_jsonld = {"user": posting_user}
+            dict_processable_jsonld = {"user": posting_user, "data_type": "ttl",
+                                       "named_graph":named_graph_iri["formatted_iri"]}
             json_data = content.decode("utf-8")
 
             # Convert JSON-LD to Turtle format
@@ -228,11 +252,12 @@ async def ingest_kg_file(
                 dict_processable_jsonld["kg_data"] = turtle_representation
                 serialized_message = json.dumps(dict_processable_jsonld)
                 encoded_message = serialized_message.encode('utf-8')
+
                 publish_message(encoded_message)
                 logger.info("JSON-LD file ingested successfully")
                 return JSONResponse(
                     content={
-                        "message": "File uploaded successfully",
+                        "message": "File uploaded successfully to messaging server",
                         "user": posting_user,
                         "filename": file.filename,
                         "extension": file_extension
@@ -248,6 +273,8 @@ async def ingest_kg_file(
             logger.debug("Processing TTL file")
             formatted_ttl_data = {
                 "user": posting_user,
+                "data_type": "ttl",
+                "named_graph": named_graph_iri["formatted_iri"],
                 "kg_data": content.decode("utf-8")
             }
             serialized_message_ttl = json.dumps(formatted_ttl_data)
@@ -256,7 +283,7 @@ async def ingest_kg_file(
             logger.info("TTL file ingested successfully")
             return JSONResponse(
                 content={
-                    "message": "File uploaded successfully",
+                    "message": "File uploaded successfully to messaging server",
                     "user": posting_user,
                     "filename": file.filename,
                     "extension": file_extension
@@ -279,9 +306,14 @@ async def ingest_knowledge_graphs_batch(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
         files: List[UploadFile] = File(...),
         posting_user: str = Form(...),
+        graph: str = Form(...)
+
 ):
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
+    named_graph_iri = named_graph_exists(graph)
+    if named_graph_iri["status"] != True:
+        return JSONResponse(content={"message": named_graph_iri["message"]})
 
     # Validate all files are of the same type
     first_file_ext = files[0].filename.split('.')[-1].lower()
@@ -312,7 +344,9 @@ async def ingest_knowledge_graphs_batch(
                 if turtle_representation:
                     formatted_data = {
                         "user": posting_user,
-                        "kg_data": turtle_representation
+                        "kg_data": turtle_representation,
+                        "named_graph": named_graph_iri["formatted_iri"],
+                        "data_type": "ttl",
                     }
 
                     logger.info(f"Successfully converted JSON-LD to Turtle for file: {file.filename}")
@@ -324,7 +358,7 @@ async def ingest_knowledge_graphs_batch(
                     results.append({
                         "filename": file.filename,
                         "status": "success",
-                        "message": "File uploaded successfully with Turtle conversion"
+                        "message": "File uploaded successfully with Turtle conversion to messaging server"
                     })
                 else:
                     logger.warning(f"Failed to convert JSON-LD to Turtle for file: {file.filename}")
@@ -337,7 +371,9 @@ async def ingest_knowledge_graphs_batch(
                 # Directly process TTL files
                 formatted_data = {
                     "user": posting_user,
-                    "kg_data": content.decode("utf-8")
+                    "kg_data": content.decode("utf-8"),
+                    "named_graph": named_graph_iri["formatted_iri"],
+                    "data_type": "ttl",
                 }
                 serialized_message_ttl_batch = json.dumps(formatted_data)
                 encoded_message_ttl_batch = serialized_message_ttl_batch.encode('utf-8')
@@ -345,7 +381,7 @@ async def ingest_knowledge_graphs_batch(
                 results.append({
                     "filename": file.filename,
                     "status": "success",
-                    "message": "File uploaded successfully"
+                    "message": "File uploaded successfully to messaging server"
                 })
             else:
                 # This shouldn't occur due to earlier validation
@@ -378,7 +414,8 @@ async def ingest_knowledge_graphs_batch(
 
 
 @router.post("/upload/document", summary="Ingest a either TXT, JSON and PDF files",
-             dependencies=[Depends(require_scopes(["write"]))]
+             dependencies=[Depends(require_scopes(["write"]))],
+             include_in_schema=False
              )
 async def ingest_raw_file(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -403,18 +440,18 @@ async def ingest_raw_file(
     logger.info("Successful ingestion operation")
     return JSONResponse(
         content={
-            "message": "File uploaded successfully",
+            "message": "File uploaded successfully to messaging server",
             "user": posting_user,
             "filename": file.filename,
             "extension": file.filename.split('.')[-1].lower()
         })
 
 
-
 @router.post("/upload/documents",
              summary="Batch ingest multiple files (JSON, PDF and TXT)",
              status_code=status.HTTP_207_MULTI_STATUS,
-             dependencies=[Depends(require_scopes(["write"]))]
+             dependencies=[Depends(require_scopes(["write"]))],
+             include_in_schema=False
              )
 async def ingest_document_batch(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -431,8 +468,6 @@ async def ingest_document_batch(
             status_code=400,
             detail=f"All files in a batch must be of the same type. Expected: {first_file_ext}"
         )
-
-
 
     if not validate_file_extension(files[0].filename):
         raise HTTPException(
@@ -456,7 +491,7 @@ async def ingest_document_batch(
             results.append({
                 "filename": file.filename,
                 "status": "success",
-                "message": "File uploaded successfully"
+                "message": "File uploaded successfully to messaging server"
             })
 
         except Exception as e:
@@ -478,4 +513,3 @@ async def ingest_document_batch(
             "results": results
         }
     )
-

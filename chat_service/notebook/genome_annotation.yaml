@@ -1,0 +1,108 @@
+id: https://identifiers.org/brain-bican/genome-annotation-schema
+name: genome-annotation-schema
+title: Genome Annotation Schema
+description: |-
+  The Genome Annotation Schema is designed to respresent all the genes from a given genome annotation.
+  
+prefixes:
+  linkml: https://w3id.org/linkml/
+  bican: https://identifiers.org/brain-bican/vocab/
+  schema: http://schema.org/
+  ncbi: https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?mode=Info&id=
+  NCBIAssembly: https://www.ncbi.nlm.nih.gov/assembly/
+
+imports:
+  - linkml:types
+  - bican_biolink
+  - bican_core
+default_range: string
+default_prefix: bican
+
+classes:
+  GeneAnnotation:
+    is_a: gene
+    description: >-
+      Represents a single gene. Includes metadata about the gene, such as its molecular type and the genome annotation it was referenced from.
+    slots:
+      - molecular_type
+      - source_id
+    attributes:
+      referenced_in: 
+        description: The genome annotation that this gene was referenced from.
+        required: true
+        inlined: true
+        any_of:
+          - range: GenomeAnnotation
+          - range: string
+
+  GenomeAnnotation:
+    is_a: genome
+    description: >-
+      Represents a genome annotation. Includes metadata about the genome, such as its version and reference assembly.
+    slots:
+      - version
+      - digest
+      - content_url
+      - authority
+    attributes:
+      reference_assembly:
+        description: The reference genome assembly that this genome annotation was created from.
+        required: true
+        inlined: true
+        any_of:
+          - range: GenomeAssembly
+          - range: string
+
+  GenomeAssembly:
+    is_a: named thing
+    mixins:
+      - thing with taxon
+    description: >-
+      Represents a genome assembly. A genome assembly is a computational representation of a genome sequence.
+    slots:
+      - version
+      - strain
+
+  AnnotationCollection:
+    tree_root: true
+    attributes:
+      annotations:
+        multivalued: true
+        inlined_as_list: true
+        range: GeneAnnotation
+      genome_annotations:
+        multivalued: true
+        inlined_as_list: true
+        range: GenomeAnnotation
+      genome_assemblies:
+        multivalued: true
+        inlined_as_list: true
+        range: GenomeAssembly
+
+slots:
+  molecular_type:
+    any_of:
+      - range: BioType
+      - range: string
+
+  authority:
+    description: The organization responsible for publishing the data. 
+    range: AuthorityType
+
+  source_id:
+    description: The authority specific identifier. 
+    slot_uri: schema:identifier
+  
+  strain:
+    description: The genetic variant or subtype of a species or organism. 
+
+enums:
+  BioType:
+    permissible_values:
+      protein_coding:
+      noncoding:
+
+  AuthorityType: 
+    permissible_values:
+      ENSEMBL:
+      NCBI:

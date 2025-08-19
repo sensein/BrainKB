@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  app-dev-chat-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8011:8011"
+    env_file:
+      - .env.dev
+    environment:
+      - ENVIRONMENT=debug
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - .:/app
+    restart: on-failure
+    networks:
+      - webnet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8011/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  webnet:
+    driver: bridge

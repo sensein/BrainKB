@@ -62,7 +62,10 @@ def load_environment(env_name="env"):
         "RABBITMQ_PASSWORD": os.getenv("RABBITMQ_PASSWORD"),
         "RABBITMQ_URL": os.getenv("RABBITMQ_URL", "localhost"),
         "RABBITMQ_PORT": os.getenv("RABBITMQ_PORT", 5672),
-        "RABBITMQ_VHOST": os.getenv("RABBITMQ_VHOST","/")
+        "RABBITMQ_VHOST": os.getenv("RABBITMQ_VHOST","/"),
+
+        #query service
+        "QUERY_SERVICE_BASE_URL": os.getenv("QUERY_SERVICE_BASE_URL", "localhost:8010")
     }
 
 

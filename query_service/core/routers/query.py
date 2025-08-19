@@ -16,51 +16,45 @@
 # @File    : query.py
 # @Software: PyCharm
 
-from fastapi import APIRouter, Request, HTTPException, status
-from core.graph_database_connection_manager import (
-    fetch_data_gdb,
-    convert_to_turtle,
-    insert_data_gdb,
-)
-import json
+from fastapi import APIRouter
+from core.graph_database_connection_manager import  fetch_data_gdb
 import logging
-from core.pydantic_schema import InputJSONSLdchema
 from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
 from fastapi import Depends
-
+from pydantic import BaseModel, root_validator
+from typing import List
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/query/insert-jsonld", include_in_schema=False)
-async def insert_jsonld(
-    user: Annotated[LoginUserIn, Depends(get_current_user)], request: InputJSONSLdchema
-):
-    try:
-        data = json.loads(request.json())
-        logger.info(f"Received data: {data}")
+@router.get("/query/registered-named-graphs")
+async def get_named_graphs():
+    query_named_graph = """
+          PREFIX prov: <http://www.w3.org/ns/prov#>
+        PREFIX dcterms: <http://purl.org/dc/terms/>
+        Select distinct ?graph ?description ?registered_at
+        WHERE  {
+          GRAPH <https://brainkb.org/metadata/named-graph> {
+            ?graph dcterms:description ?description;
+               prov:generatedAtTime ?registered_at.
+          } 
+        }
+    """
+    response =  fetch_data_gdb(query_named_graph)
 
-        turtle_data = convert_to_turtle(data["kg_data"])
-        logger.info(f"Converted Turtle data: {turtle_data}")
-
-        response = insert_data_gdb(turtle_data)
-        return response
-    except json.JSONDecodeError as e:
-        logger.error("JSON decoding failed", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON format"
-        )
-    except Exception as e:
-        logger.error("An error occurred", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred processing the request",
-        )
+    response_graph = {}
+    for graphs_info in response["message"]["results"]["bindings"]:
+        response_graph[graphs_info["graph"]["value"]] = {
+            "graph": graphs_info["graph"]["value"],
+            "description": graphs_info["description"]["value"],
+            "registered_at": graphs_info["registered_at"]["value"]
+        }
+    return response_graph
 
 
-@router.get("/query/sparql/", include_in_schema=False)
+@router.get("/query/sparql/")
 async def sparql_query(
     user: Annotated[LoginUserIn, Depends(get_current_user)], sparql_query: str
 ):

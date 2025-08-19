@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  app-dev-ml-service-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8007:8007"
+    environment:
+      - ENVIRONMENT=debug
+    restart: on-failure
+    networks:
+      - webnet
+
+networks:
+  webnet:
+    driver: bridge
+
+

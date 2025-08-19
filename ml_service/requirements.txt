@@ -1,0 +1,26 @@
+fastapi==0.115.3
+uvicorn==0.29.0
+gunicorn==21.2.0
+#richlogging
+rich == 13.9.4
+#python-json-logger
+python-json-logger == 2.0.7
+pydantic-settings==2.5.2
+# to handle multiple user logging
+asgi-correlation-id ==4.3.4
+#logtailhanlder
+logtail-python == 0.2.10
+# to handle type annotation 'int | None' future
+eval-type-backport == 0.1.3
+pkonfig==2.0.0
+psycopg==3.1.18
+python-jose==3.3.0
+python-multipart===0.0.18
+passlib[bcrypt]==1.7.4
+asyncpg==0.29.0
+pymongo[srv]==4.12.0
+#structsense
+structsense==1.2.9
+
+
+

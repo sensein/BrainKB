@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  app-prod-chat-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8011:8011"
+    env_file:
+      - core/.env
+    environment:
+      - ENVIRONMENT=production
+      - ENV_STATE=production
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    networks:
+      - webnet
+    volumes:
+      - .:/app:delegated
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8011/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  webnet:
+    driver: bridge
