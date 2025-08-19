@@ -22,7 +22,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException
 
 from core.configuration import config
-from core.models.database_models import Base, User, UserProfile, UserActivity, UserContribution, UserRole
+from core.models.database_models import Base, JWTUser, UserProfile, UserActivity, UserContribution, UserRole, UserCountry, UserExpertise
 
 logger = logging.getLogger(__name__)
 
@@ -196,14 +196,14 @@ class UserBaseRepository:
             raise HTTPException(status_code=400, detail=str(e))
 
 
-class UserRepository(UserBaseRepository):
-    """User repository for user authentication operations"""
+class JWTUserRepository(UserBaseRepository):
+    """JWT User repository for JWT authentication operations"""
     
     def __init__(self):
-        super().__init__(User)
+        super().__init__(JWTUser)
     
-    async def get_by_email(self, session: AsyncSession, email: str) -> Optional[User]:
-        """Get user by email"""
+    async def get_by_email(self, session: AsyncSession, email: str) -> Optional[JWTUser]:
+        """Get JWT user by email"""
         try:
             result = await session.execute(
                 text('SELECT * FROM "Web_jwtuser" WHERE email = :email AND is_active = true'),
@@ -211,8 +211,8 @@ class UserRepository(UserBaseRepository):
             )
             row = result.fetchone()
             if row:
-                # Convert raw result to User object
-                user = User(
+                # Convert raw result to JWTUser object
+                jwt_user = JWTUser(
                     id=row.id,
                     full_name=row.full_name,
                     email=row.email,
@@ -221,60 +221,60 @@ class UserRepository(UserBaseRepository):
                     created_at=row.created_at,
                     updated_at=row.updated_at
                 )
-                return user
+                return jwt_user
             return None
         except SQLAlchemyError as e:
-            logger.error(f"Error getting user by email: {str(e)}")
+            logger.error(f"Error getting JWT user by email: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
     
-    async def create_user(self, session: AsyncSession, full_name: str, email: str, password: str) -> User:
-        """Create a new user"""
+    async def create_user(self, session: AsyncSession, full_name: str, email: str, password: str) -> JWTUser:
+        """Create a new JWT user"""
         try:
-            user = User(
+            jwt_user = JWTUser(
                 full_name=full_name,
                 email=email,
                 password=password,
                 is_active=False
             )
-            session.add(user)
+            session.add(jwt_user)
             await session.flush()
-            await session.refresh(user)
-            return user
+            await session.refresh(jwt_user)
+            return jwt_user
         except SQLAlchemyError as e:
             await session.rollback()
-            logger.error(f"Error creating user: {str(e)}")
+            logger.error(f"Error creating JWT user: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
     
     async def activate_user(self, session: AsyncSession, user_id: int) -> bool:
-        """Activate a user account"""
+        """Activate a JWT user account"""
         try:
-            user = await session.get(User, user_id)
-            if not user:
+            jwt_user = await session.get(JWTUser, user_id)
+            if not jwt_user:
                 return False
             
-            user.is_active = True
-            user.updated_at = datetime.utcnow()
+            jwt_user.is_active = True
+            jwt_user.updated_at = datetime.utcnow()
             await session.flush()
             return True
         except SQLAlchemyError as e:
             await session.rollback()
-            logger.error(f"Error activating user: {str(e)}")
+            logger.error(f"Error activating JWT user: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
     
     async def deactivate_user(self, session: AsyncSession, user_id: int) -> bool:
-        """Deactivate a user account"""
+        """Deactivate a JWT user account"""
         try:
-            user = await session.get(User, user_id)
-            if not user:
+            jwt_user = await session.get(JWTUser, user_id)
+            if not jwt_user:
                 return False
             
-            user.is_active = False
-            user.updated_at = datetime.utcnow()
+            jwt_user.is_active = False
+            jwt_user.updated_at = datetime.utcnow()
             await session.flush()
             return True
         except SQLAlchemyError as e:
             await session.rollback()
-            logger.error(f"Error deactivating user: {str(e)}")
+            logger.error(f"Error deactivating JWT user: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
     
     async def get_user_scopes(self, session: AsyncSession, user_id: int) -> List[str]:
@@ -303,17 +303,7 @@ class UserProfileRepository(UserBaseRepository):
     def __init__(self):
         super().__init__(UserProfile)
     
-    async def get_by_user_id(self, session: AsyncSession, user_id: int) -> Optional[UserProfile]:
-        """Get profile by user ID"""
-        try:
-            result = await session.execute(
-                text('SELECT * FROM "Web_user_profile" WHERE user_id = :user_id'),
-                {"user_id": user_id}
-            )
-            return result.fetchone()
-        except SQLAlchemyError as e:
-            logger.error(f"Error getting user profile: {str(e)}")
-            raise HTTPException(status_code=400, detail=str(e))
+
     
     async def get_by_email(self, session: AsyncSession, email: str) -> Optional[UserProfile]:
         """Get profile by email"""
@@ -339,11 +329,15 @@ class UserProfileRepository(UserBaseRepository):
             logger.error(f"Error getting user profile by ORCID ID: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
     
-    async def create_or_update_profile(self, session: AsyncSession, user_id: int, **profile_data) -> UserProfile:
+    async def create_or_update_profile(self, session: AsyncSession, **profile_data) -> UserProfile:
         """Create or update user profile"""
         try:
-            # Check if profile exists
-            existing_profile = await self.get_by_user_id(session, user_id)
+            # Check if profile exists by email
+            email = profile_data.get('email')
+            if not email:
+                raise HTTPException(status_code=400, detail="Email is required")
+            
+            existing_profile = await self.get_by_email(session, email)
             
             if existing_profile:
                 # Update existing profile
@@ -356,7 +350,6 @@ class UserProfileRepository(UserBaseRepository):
                 return existing_profile
             else:
                 # Create new profile
-                profile_data['user_id'] = user_id
                 profile = UserProfile(**profile_data)
                 session.add(profile)
                 await session.flush()
@@ -470,17 +463,17 @@ class UserContributionRepository(UserBaseRepository):
     def __init__(self):
         super().__init__(UserContribution)
     
-    async def get_user_contributions(self, session: AsyncSession, user_id: int, limit: int = 50, offset: int = 0) -> List[UserContribution]:
+    async def get_user_contributions(self, session: AsyncSession, profile_id: int, limit: int = 50, offset: int = 0) -> List[UserContribution]:
         """Get user contributions with pagination"""
         try:
             result = await session.execute(
                 text("""
                     SELECT * FROM "Web_user_contribution" 
-                    WHERE user_id = :user_id 
+                    WHERE profile_id = :profile_id 
                     ORDER BY created_at DESC 
                     LIMIT :limit OFFSET :offset
                 """),
-                {"user_id": user_id, "limit": limit, "offset": offset}
+                {"profile_id": profile_id, "limit": limit, "offset": offset}
             )
             return result.fetchall()
         except SQLAlchemyError as e:
@@ -545,25 +538,25 @@ class UserRoleRepository(UserBaseRepository):
     def __init__(self):
         super().__init__(UserRole)
     
-    async def get_user_roles(self, session: AsyncSession, user_id: int) -> List[str]:
+    async def get_user_roles(self, session: AsyncSession, profile_id: int) -> List[str]:
         """Get user roles"""
         try:
             result = await session.execute(
-                text('SELECT role FROM "Web_user_role" WHERE user_id = :user_id AND is_active = true'),
-                {"user_id": user_id}
+                text('SELECT role FROM "Web_user_role" WHERE profile_id = :profile_id AND is_active = true'),
+                {"profile_id": profile_id}
             )
             return [row.role for row in result.fetchall()]
         except SQLAlchemyError as e:
             logger.error(f"Error getting user roles: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
     
-    async def assign_role(self, session: AsyncSession, user_id: int, role: str, assigned_by: Optional[int] = None) -> UserRole:
+    async def assign_role(self, session: AsyncSession, profile_id: int, role: str, assigned_by: Optional[int] = None) -> UserRole:
         """Assign role to user"""
         try:
             # Check if role already exists
             existing_role = await session.execute(
-                text('SELECT * FROM "Web_user_role" WHERE user_id = :user_id AND role = :role'),
-                {"user_id": user_id, "role": role}
+                text('SELECT * FROM "Web_user_role" WHERE profile_id = :profile_id AND role = :role'),
+                {"profile_id": profile_id, "role": role}
             )
             
             if existing_role.fetchone():
@@ -572,10 +565,10 @@ class UserRoleRepository(UserBaseRepository):
                     text("""
                         UPDATE "Web_user_role" 
                         SET assigned_by = :assigned_by, assigned_at = :assigned_at, is_active = true, updated_at = :updated_at
-                        WHERE user_id = :user_id AND role = :role
+                        WHERE profile_id = :profile_id AND role = :role
                     """),
                     {
-                        "user_id": user_id,
+                        "profile_id": profile_id,
                         "role": role,
                         "assigned_by": assigned_by,
                         "assigned_at": datetime.utcnow(),
@@ -586,14 +579,14 @@ class UserRoleRepository(UserBaseRepository):
                 
                 # Get updated role
                 result = await session.execute(
-                    text('SELECT * FROM "Web_user_role" WHERE user_id = :user_id AND role = :role'),
-                    {"user_id": user_id, "role": role}
+                    text('SELECT * FROM "Web_user_role" WHERE profile_id = :profile_id AND role = :role'),
+                    {"profile_id": profile_id, "role": role}
                 )
                 return result.fetchone()
             else:
                 # Create new role assignment
                 user_role = UserRole(
-                    user_id=user_id,
+                    profile_id=profile_id,
                     role=role,
                     assigned_by=assigned_by,
                     is_active=True
@@ -607,16 +600,16 @@ class UserRoleRepository(UserBaseRepository):
             logger.error(f"Error assigning role: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
     
-    async def remove_role(self, session: AsyncSession, user_id: int, role: str) -> bool:
+    async def remove_role(self, session: AsyncSession, profile_id: int, role: str) -> bool:
         """Remove role from user"""
         try:
             result = await session.execute(
                 text("""
                     UPDATE "Web_user_role" 
                     SET is_active = false, updated_at = :updated_at
-                    WHERE user_id = :user_id AND role = :role
+                    WHERE profile_id = :profile_id AND role = :role
                 """),
-                {"user_id": user_id, "role": role, "updated_at": datetime.utcnow()}
+                {"profile_id": profile_id, "role": role, "updated_at": datetime.utcnow()}
             )
             await session.flush()
             return result.rowcount > 0
@@ -626,26 +619,180 @@ class UserRoleRepository(UserBaseRepository):
             raise HTTPException(status_code=400, detail=str(e))
     
     async def get_users_by_role(self, session: AsyncSession, role: str, limit: int = 50, offset: int = 0) -> List[int]:
-        """Get user IDs by role"""
+        """Get profile IDs by role"""
         try:
             result = await session.execute(
                 text("""
-                    SELECT user_id FROM "Web_user_role" 
+                    SELECT profile_id FROM "Web_user_role" 
                     WHERE role = :role AND is_active = true
                     ORDER BY assigned_at DESC 
                     LIMIT :limit OFFSET :offset
                 """),
                 {"role": role, "limit": limit, "offset": offset}
             )
-            return [row.user_id for row in result.fetchall()]
+            return [row.profile_id for row in result.fetchall()]
         except SQLAlchemyError as e:
             logger.error(f"Error getting users by role: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
 
 
-# User repository instances
-user_repo = UserRepository()
+class UserCountryRepository(UserBaseRepository):
+    """User country repository"""
+    
+    def __init__(self):
+        super().__init__(UserCountry)
+    
+    async def get_user_countries(self, session: AsyncSession, profile_id: int) -> List[UserCountry]:
+        """Get user countries"""
+        try:
+            result = await session.execute(
+                text('SELECT * FROM "Web_user_country" WHERE profile_id = :profile_id ORDER BY is_primary DESC, created_at ASC'),
+                {"profile_id": profile_id}
+            )
+            return result.fetchall()
+        except SQLAlchemyError as e:
+            logger.error(f"Error getting user countries: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    async def add_country(self, session: AsyncSession, profile_id: int, country: str, is_primary: bool = False) -> UserCountry:
+        """Add country to user"""
+        try:
+            # If this is primary, unset other primary countries
+            if is_primary:
+                await session.execute(
+                    text('UPDATE "Web_user_country" SET is_primary = false WHERE profile_id = :profile_id'),
+                    {"profile_id": profile_id}
+                )
+            
+            user_country = UserCountry(
+                profile_id=profile_id,
+                country=country,
+                is_primary=is_primary
+            )
+            session.add(user_country)
+            await session.flush()
+            await session.refresh(user_country)
+            return user_country
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Error adding country: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    async def remove_country(self, session: AsyncSession, profile_id: int, country: str) -> bool:
+        """Remove country from user"""
+        try:
+            result = await session.execute(
+                text('DELETE FROM "Web_user_country" WHERE profile_id = :profile_id AND country = :country'),
+                {"profile_id": profile_id, "country": country}
+            )
+            await session.flush()
+            return result.rowcount > 0
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Error removing country: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    async def set_primary_country(self, session: AsyncSession, profile_id: int, country: str) -> bool:
+        """Set primary country for user"""
+        try:
+            # Unset all primary countries
+            await session.execute(
+                text('UPDATE "Web_user_country" SET is_primary = false WHERE profile_id = :profile_id'),
+                {"profile_id": profile_id}
+            )
+            
+            # Set the specified country as primary
+            result = await session.execute(
+                text('UPDATE "Web_user_country" SET is_primary = true WHERE profile_id = :profile_id AND country = :country'),
+                {"profile_id": profile_id, "country": country}
+            )
+            await session.flush()
+            return result.rowcount > 0
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Error setting primary country: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+class UserExpertiseRepository(UserBaseRepository):
+    """User expertise repository"""
+    
+    def __init__(self):
+        super().__init__(UserExpertise)
+    
+    async def get_user_expertise(self, session: AsyncSession, profile_id: int) -> List[UserExpertise]:
+        """Get user expertise areas"""
+        try:
+            result = await session.execute(
+                text('SELECT * FROM "Web_user_expertise" WHERE profile_id = :profile_id ORDER BY created_at ASC'),
+                {"profile_id": profile_id}
+            )
+            return result.fetchall()
+        except SQLAlchemyError as e:
+            logger.error(f"Error getting user expertise: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    async def add_expertise(self, session: AsyncSession, profile_id: int, expertise_area: str, level: Optional[str] = None, years_experience: Optional[int] = None) -> UserExpertise:
+        """Add expertise area to user"""
+        try:
+            user_expertise = UserExpertise(
+                profile_id=profile_id,
+                expertise_area=expertise_area,
+                level=level,
+                years_experience=years_experience
+            )
+            session.add(user_expertise)
+            await session.flush()
+            await session.refresh(user_expertise)
+            return user_expertise
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Error adding expertise: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    async def remove_expertise(self, session: AsyncSession, profile_id: int, expertise_area: str) -> bool:
+        """Remove expertise area from user"""
+        try:
+            result = await session.execute(
+                text('DELETE FROM "Web_user_expertise" WHERE profile_id = :profile_id AND expertise_area = :expertise_area'),
+                {"profile_id": profile_id, "expertise_area": expertise_area}
+            )
+            await session.flush()
+            return result.rowcount > 0
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Error removing expertise: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    async def update_expertise(self, session: AsyncSession, profile_id: int, expertise_area: str, level: Optional[str] = None, years_experience: Optional[int] = None) -> bool:
+        """Update expertise area for user"""
+        try:
+            result = await session.execute(
+                text("""
+                    UPDATE "Web_user_expertise" 
+                    SET level = :level, years_experience = :years_experience
+                    WHERE profile_id = :profile_id AND expertise_area = :expertise_area
+                """),
+                {
+                    "profile_id": profile_id,
+                    "expertise_area": expertise_area,
+                    "level": level,
+                    "years_experience": years_experience
+                }
+            )
+            await session.flush()
+            return result.rowcount > 0
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Error updating expertise: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+# Repository instances
+jwt_user_repo = JWTUserRepository()
 user_profile_repo = UserProfileRepository()
 user_activity_repo = UserActivityRepository()
 user_contribution_repo = UserContributionRepository()
-user_role_repo = UserRoleRepository() 
+user_role_repo = UserRoleRepository()
+user_country_repo = UserCountryRepository()
+user_expertise_repo = UserExpertiseRepository() 

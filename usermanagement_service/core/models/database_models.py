@@ -23,8 +23,8 @@ from sqlalchemy.dialects.postgresql import INET, JSONB
 Base = declarative_base()
 
 
-class User(Base):
-    """User authentication table"""
+class JWTUser(Base):
+    """JWT User authentication table"""
     __tablename__ = "Web_jwtuser"
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -39,13 +39,13 @@ class User(Base):
     
     # Indexes
     __table_args__ = (
-        Index('idx_user_email', 'email'),
-        Index('idx_user_active', 'is_active'),
+        Index('idx_jwtuser_email', 'email'),
+        Index('idx_jwtuser_active', 'is_active'),
     )
 
 
-class Scope(Base):
-    """Permission scopes table"""
+class JWTScope(Base):
+    """JWT Permission scopes table"""
     __tablename__ = "Web_scope"
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -55,11 +55,11 @@ class Scope(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    user_scopes = relationship("UserScope", back_populates="scope")
+    jwt_user_scopes = relationship("JWTUserScope", back_populates="scope")
 
 
-class UserScope(Base):
-    """User-scope relationship table"""
+class JWTUserScope(Base):
+    """JWT User-scope relationship table"""
     __tablename__ = "Web_jwtuser_scopes"
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -67,14 +67,14 @@ class UserScope(Base):
     scope_id: Mapped[int] = mapped_column(Integer, ForeignKey("Web_scope.id", ondelete="CASCADE"), nullable=False)
     
     # Relationships
-    user = relationship("User", backref="user_scopes")
-    scope = relationship("Scope", back_populates="user_scopes")
+    jwt_user = relationship("JWTUser", backref="jwt_user_scopes")
+    scope = relationship("JWTScope", back_populates="jwt_user_scopes")
     
     # Constraints
     __table_args__ = (
-        UniqueConstraint('jwtuser_id', 'scope_id', name='uq_user_scope'),
-        Index('idx_user_scope_user', 'jwtuser_id'),
-        Index('idx_user_scope_scope', 'scope_id'),
+        UniqueConstraint('jwtuser_id', 'scope_id', name='uq_jwtuser_scope'),
+        Index('idx_jwtuser_scope_user', 'jwtuser_id'),
+        Index('idx_jwtuser_scope_scope', 'scope_id'),
     )
 
 
@@ -84,7 +84,6 @@ class UserProfile(Base):
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(String(100), default="Curator", nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     organization: Mapped[Optional[str]] = mapped_column(String(255))
     orcid_id: Mapped[Optional[str]] = mapped_column(String(50))
@@ -92,8 +91,6 @@ class UserProfile(Base):
     linkedin: Mapped[Optional[str]] = mapped_column(String(500))
     google_scholar: Mapped[Optional[str]] = mapped_column(String(100))
     website: Mapped[Optional[str]] = mapped_column(String(500))
-    area_of_expertise: Mapped[Optional[str]] = mapped_column(Text)
-    country: Mapped[Optional[str]] = mapped_column(String(100))
     conflict_of_interest_statement: Mapped[Optional[str]] = mapped_column(Text)
     biography: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -103,6 +100,8 @@ class UserProfile(Base):
     activities = relationship("UserActivity", back_populates="profile", cascade="all, delete-orphan")
     contributions = relationship("UserContribution", back_populates="profile", cascade="all, delete-orphan")
     roles = relationship("UserRole", foreign_keys="[UserRole.profile_id]", cascade="all, delete-orphan")
+    countries = relationship("UserCountry", back_populates="profile", cascade="all, delete-orphan")
+    expertise_areas = relationship("UserExpertise", back_populates="profile", cascade="all, delete-orphan")
     
     # Constraints and Indexes
     __table_args__ = (
@@ -110,7 +109,6 @@ class UserProfile(Base):
         UniqueConstraint('orcid_id', name='uq_user_profile_orcid_id'),
         Index('idx_user_profile_email', 'email'),
         Index('idx_user_profile_orcid_id', 'orcid_id'),
-        Index('idx_user_profile_role', 'role'),
     )
 
 
@@ -192,4 +190,49 @@ class UserRole(Base):
         Index('idx_user_role_active', 'is_active'),
         Index('idx_user_role_role', 'role'),
         Index('idx_user_role_profile_active', 'profile_id', 'is_active'),
+    )
+
+
+class UserCountry(Base):
+    """User country association table - Many-to-many relationship"""
+    __tablename__ = "Web_user_country"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(Integer, ForeignKey("Web_user_profile.id", ondelete="CASCADE"), nullable=False)
+    country: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    profile = relationship("UserProfile", back_populates="countries")
+    
+    # Constraints and Indexes
+    __table_args__ = (
+        UniqueConstraint('profile_id', 'country', name='uq_profile_country'),
+        Index('idx_user_country_profile_id', 'profile_id'),
+        Index('idx_user_country_country', 'country'),
+        Index('idx_user_country_primary', 'is_primary'),
+    )
+
+
+class UserExpertise(Base):
+    """User expertise area table - Many-to-many relationship"""
+    __tablename__ = "Web_user_expertise"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(Integer, ForeignKey("Web_user_profile.id", ondelete="CASCADE"), nullable=False)
+    expertise_area: Mapped[str] = mapped_column(String(255), nullable=False)
+    level: Mapped[Optional[str]] = mapped_column(String(50))  # e.g., "Beginner", "Intermediate", "Expert"
+    years_experience: Mapped[Optional[int]] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    profile = relationship("UserProfile", back_populates="expertise_areas")
+    
+    # Constraints and Indexes
+    __table_args__ = (
+        UniqueConstraint('profile_id', 'expertise_area', name='uq_profile_expertise'),
+        Index('idx_user_expertise_profile_id', 'profile_id'),
+        Index('idx_user_expertise_area', 'expertise_area'),
+        Index('idx_user_expertise_level', 'level'),
     ) 

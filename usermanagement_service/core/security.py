@@ -21,7 +21,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from core.configuration import config
-from core.database import user_repo
+from core.database import jwt_user_repo
 from core.models.user import LoginUserIn
 
 logger = logging.getLogger(__name__)
@@ -46,20 +46,20 @@ def get_password_hash(password: str) -> str:
 
 
 async def authenticate_user(email: str, password: str, session: AsyncSession) -> Optional[Any]:
-    """Authenticate a user by email and password"""
+    """Authenticate a JWT user by email and password"""
     try:
-        # Get user by email
-        user = await user_repo.get_by_email(session, email)
-        if not user:
+        # Get JWT user by email
+        jwt_user = await jwt_user_repo.get_by_email(session, email)
+        if not jwt_user:
             return None
         
         # Verify password
-        if not verify_password(password, user.password):
+        if not verify_password(password, jwt_user.password):
             return None
         
-        return user
+        return jwt_user
     except Exception as e:
-        logger.error(f"Error authenticating user {email}: {str(e)}")
+        logger.error(f"Error authenticating JWT user {email}: {str(e)}")
         return None
 
 
