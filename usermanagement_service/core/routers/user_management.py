@@ -424,3 +424,146 @@ jwt_user: Annotated[dict, Depends(get_current_user)],
         logger.error(f"Error updating profile for {email}: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
+
+# User Activity Endpoints
+@router.get("/activities", response_model=List[UserActivity])
+async def get_activities(
+        jwt_user: Annotated[dict, Depends(get_current_user)],
+        email: str = Query(..., description="User email"),
+        orcid_id: Optional[str] = Query(None, description="User ORCID ID (optional)"),
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+
+):
+    """
+    Get user activities by email or ORCID ID (optional)
+
+    Example call:
+     -> api/users/activities?email=<email>&limit=50&offset=0
+    Example outupt:
+    [
+    {
+        "id": 2,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile created/updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-19T16:47:06.076746"
+    }
+]
+
+------
+[
+    {
+        "id": 7,
+        "user_id": null,
+        "activity_type": "login",
+        "description": "string",
+        "meta_data": {
+            "additionalProp1": {}
+        },
+        "ip_address": "127.0.0.1",
+        "user_agent": "PostmanRuntime/7.45.0",
+        "created_at": "2025-08-20T15:12:41.586364"
+    },
+    {
+        "id": 6,
+        "user_id": null,
+        "activity_type": "login",
+        "description": "string",
+        "meta_data": {
+            "additionalProp1": {}
+        },
+        "ip_address": "127.0.0.1",
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+        "created_at": "2025-08-20T15:07:24.522163"
+    },
+    {
+        "id": 3,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile created/updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-19T17:03:53.243304"
+    }
+]
+    """
+    try:
+        async with user_db_manager.get_async_session() as session:
+            # Get profile by email or ORCID
+            profile = await user_profile_repo.get_by_email(session, email)
+            if not profile and orcid_id:
+                profile = await user_profile_repo.get_by_orcid_id(session, orcid_id)
+
+            if not profile:
+                raise HTTPException(status_code=404, detail="Profile not found")
+
+            activities = await user_activity_repo.get_user_activities(
+                session=session,
+                profile_id=profile.id,
+                limit=limit,
+                offset=offset
+            )
+
+            activities_list = []
+            for activity in activities:
+                activity_dict = convert_row_to_dict(activity)
+                if 'activity_type' in activity_dict and activity_dict['activity_type']:
+                    activity_dict['activity_type'] = ActivityType(activity_dict['activity_type'])
+                if 'ip_address' in activity_dict and activity_dict['ip_address']:
+                    activity_dict['ip_address'] = str(activity_dict['ip_address'])
+                activities_list.append(UserActivity(**activity_dict))
+            
+            return activities_list
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting activities for {email}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/activities/log", response_model=dict)
+async def log_activity(
+        jwt_user: Annotated[dict, Depends(get_current_user)],
+        activity: UserActivity,
+        request: Request,
+        email: str = Query(..., description="User email"),
+        orcid_id: Optional[str] = Query(None, description="User ORCID ID (optional)"),
+
+):
+    """Log user activity by email or ORCID ID"""
+    try:
+        async with user_db_manager.get_async_session() as session:
+            # Get profile by email or ORCID
+            profile = await user_profile_repo.get_by_email(session, email)
+            if not profile and orcid_id:
+                profile = await user_profile_repo.get_by_orcid_id(session, orcid_id)
+
+            if not profile:
+                raise HTTPException(status_code=404, detail="Profile not found")
+
+            # Get client IP and user agent
+            client_ip = request.client.host
+            user_agent = request.headers.get("user-agent", "")
+
+            # Log activity
+            activity_instance = await user_activity_repo.log_activity(
+                session=session,
+                profile_id=profile.id,
+                activity_type=activity.activity_type,
+                description=activity.description,
+                meta_data=activity.meta_data,
+                ip_address=client_ip,
+                user_agent=user_agent
+            )
+
+            return {"message": "Activity logged successfully", "activity_id": activity_instance.id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error logging activity for {email}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")

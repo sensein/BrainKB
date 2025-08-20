@@ -18,7 +18,6 @@ from core.models.user import ActivityType
 from core.security import verify_token
 from fastapi.middleware.cors import CORSMiddleware
 
-
 class ActivityLoggingMiddleware(BaseHTTPMiddleware):
     """Middleware to automatically log user activities"""
     
