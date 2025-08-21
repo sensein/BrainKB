@@ -349,32 +349,48 @@ async def create_profile(jwt_user: Annotated[dict, Depends(get_current_user)],
 
 @router.put("/profile", response_model=dict)
 async def update_profile(
-jwt_user: Annotated[dict, Depends(get_current_user)],
+    jwt_user: Annotated[dict, Depends(get_current_user)],
     profile_update: ProfileUpdateRequest,
-    email: str = Query(..., description="User email"),
-    orcid_id: Optional[str] = Query(None, description="User ORCID ID (optional)"),
-
 ):
     """Update user profile by email or ORCID ID (JWT protected)"""
     try:
+        # Add basic logging
+        logger.info("=== PUT /profile endpoint called ===")
+        logger.info(f"Profile update request type: {type(profile_update)}")
+        logger.info(f"Raw profile_update: {profile_update}")
+        
         # Remove None values
         update_data = {k: v for k, v in profile_update.dict().items() if v is not None}
+        
+        logger.info(f"Update data after removing None values: {update_data}")
         
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
         
         async with user_db_manager.get_async_session() as session:
+            # Extract email and orcid_id from the request body
+            email = update_data.get('email')
+            orcid_id = update_data.get('orcid_id')
+            
+            if not email and not orcid_id:
+                raise HTTPException(status_code=400, detail="Either email or orcid_id must be provided in the request body")
+            
             # Get profile by email or ORCID
-            profile = await user_profile_repo.get_by_email(session, email)
+            profile = None
+            if email:
+                profile = await user_profile_repo.get_by_email(session, email)
             if not profile and orcid_id:
                 profile = await user_profile_repo.get_by_orcid_id(session, orcid_id)
             
             if not profile:
                 raise HTTPException(status_code=404, detail="Profile not found")
             
-            # Extract countries and expertise_areas before updating profile
+            # Extract nested data before updating profile
             countries_data = update_data.pop('countries', None)
+            organizations_data = update_data.pop('organizations', None)
+            education_data = update_data.pop('education', None)
             expertise_data = update_data.pop('expertise_areas', None)
+            roles_data = update_data.pop('roles', None)
             
             # Update profile with new data
             for key, value in update_data.items():
@@ -386,27 +402,70 @@ jwt_user: Annotated[dict, Depends(get_current_user)],
             
             # Update countries if provided
             if countries_data is not None:
-                # Remove existing countries and add new ones
+                logger.info(f"Updating countries: {countries_data}")
                 await user_country_repo.remove_all_countries(session, profile.id)
                 for country_data in countries_data:
                     await user_country_repo.add_country(
                         session=session,
                         profile_id=profile.id,
-                        country=country_data.country,
-                        is_primary=country_data.is_primary
+                        country=country_data['country'],
+                        is_primary=country_data['is_primary']
+                    )
+            
+            # Update organizations if provided
+            if organizations_data is not None:
+                logger.info(f"Updating organizations: {organizations_data}")
+                await user_organization_repo.remove_all_organizations(session, profile.id)
+                for org_data in organizations_data:
+                    await user_organization_repo.add_organization(
+                        session=session,
+                        profile_id=profile.id,
+                        organization=org_data['organization'],
+                        position=org_data['position'],
+                        department=org_data.get('department'),
+                        is_primary=org_data['is_primary'],
+                        start_date=org_data.get('start_date'),
+                        end_date=org_data.get('end_date')
+                    )
+            
+            # Update education if provided
+            if education_data is not None:
+                logger.info(f"Updating education: {education_data}")
+                await user_education_repo.remove_all_education(session, profile.id)
+                for edu_data in education_data:
+                    await user_education_repo.add_education(
+                        session=session,
+                        profile_id=profile.id,
+                        degree=edu_data['degree'],
+                        field_of_study=edu_data['field_of_study'],
+                        institution=edu_data['institution'],
+                        graduation_year=edu_data['graduation_year'],
+                        is_primary=edu_data['is_primary']
                     )
             
             # Update expertise areas if provided
             if expertise_data is not None:
-                # Remove existing expertise areas and add new ones
+                logger.info(f"Updating expertise areas: {expertise_data}")
                 await user_expertise_repo.remove_all_expertise(session, profile.id)
-                for expertise_data in expertise_data:
+                for exp_data in expertise_data:
                     await user_expertise_repo.add_expertise(
                         session=session,
                         profile_id=profile.id,
-                        expertise_area=expertise_data.expertise_area,
-                        level=expertise_data.level,
-                        years_experience=expertise_data.years_experience
+                        expertise_area=exp_data['expertise_area'],
+                        level=exp_data['level'],
+                        years_experience=exp_data['years_experience']
+                    )
+            
+            # Update roles if provided
+            if roles_data is not None:
+                logger.info(f"Updating roles: {roles_data}")
+                await user_role_repo.remove_all_roles(session, profile.id)
+                for role_data in roles_data:
+                    await user_role_repo.assign_role(
+                        session=session,
+                        profile_id=profile.id,
+                        role=role_data['role'],
+                        is_active=role_data['is_active']
                     )
             
             # Log activity
@@ -416,6 +475,10 @@ jwt_user: Annotated[dict, Depends(get_current_user)],
                 activity_type=ActivityType.PROFILE_UPDATE,
                 description="Profile updated"
             )
+            
+            # Commit all changes
+            await session.commit()
+            logger.info("Profile update completed successfully")
             
             return {"message": "Profile updated successfully"}
     except HTTPException:

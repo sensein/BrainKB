@@ -300,8 +300,9 @@ class UserProfile(BaseModel):
 class ProfileUpdateRequest(BaseModel):
     """User profile update request model"""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
+    name_prefix: Optional[str] = Field(None, max_length=50)
+    name_suffix: Optional[str] = Field(None, max_length=50)
     email: Optional[EmailStr] = Field(None)
-    organization: Optional[str] = Field(None, max_length=255)
     orcid_id: Optional[str] = Field(None, max_length=50)
     github: Optional[str] = Field(None, max_length=100)
     linkedin: Optional[str] = Field(None, max_length=500)
@@ -311,7 +312,10 @@ class ProfileUpdateRequest(BaseModel):
     biography: Optional[str] = Field(None)
     # Many-to-many relationships
     countries: Optional[List[UserCountryInput]] = Field(None, description="User's associated countries")
+    organizations: Optional[List[UserOrganizationInput]] = Field(None, description="User's associated organizations")
+    education: Optional[List[UserEducationInput]] = Field(None, description="User's education history")
     expertise_areas: Optional[List[UserExpertiseInput]] = Field(None, description="User's areas of expertise")
+    roles: Optional[List[UserRoleInput]] = Field(None, description="User's assigned roles")
 
 
 # User Activity Models
