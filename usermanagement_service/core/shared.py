@@ -43,29 +43,3 @@ def convert_row_to_dict(row):
     else:
         logger.warning(f"Unknown row type in convert_row_to_dict: {type(row)} - {row}")
         return {}
-
-
-def compare_and_filter_changes(current_dict: dict, update_dict: dict) -> dict:
-    """Compare current and update dictionaries and return only changed fields"""
-    changes = {}
-    
-    for key, new_value in update_dict.items():
-        if key in current_dict:
-            current_value = current_dict[key]
-            # Handle None values properly - treat empty string and None as equivalent for prefix/suffix
-            if key in ['name_prefix', 'name_suffix']:
-                current_normalized = current_value if current_value else ""
-                new_normalized = new_value if new_value else ""
-                if current_normalized != new_normalized:
-                    changes[key] = new_value
-            elif current_value != new_value:
-                changes[key] = new_value
-        else:
-            # New field
-            changes[key] = new_value
-    
-    return changes
-
-
-# Simplified approach: always update nested data if provided
-# No complex comparison needed - just remove all and recreate
