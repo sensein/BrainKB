@@ -14,10 +14,12 @@ from datetime import datetime
 from typing import List, Optional, Annotated
 from fastapi import APIRouter, HTTPException, Depends, Request, Query
 import logging
-
+from sqlalchemy import text
+from datetime import datetime
+# import request
 from core.models.user import (
     # import some to be reused later
-    UserProfile, UserProfileInput, ProfileUpdateRequest, UserActivity, UserContribution, UserContributionInput,
+    UserProfile, UserProfileInput, ProfileUpdateRequest, UserActivity, UserActivityInput, UserContribution, UserContributionInput,
     UserRoleAssignment, UserStats, UserRole, UserRoleInput, ActivityType, ContributionType, ContributionStatus,
     UserCountry, UserCountryInput, UserOrganization, UserOrganizationInput, UserEducation, UserEducationInput,
     UserExpertise, UserExpertiseInput, AvailableRole, AvailableRoleInput, AvailableCountry, AvailableCountryInput
@@ -331,13 +333,18 @@ async def create_profile(jwt_user: Annotated[dict, Depends(get_current_user)],
                     expires_at=role_data.expires_at
                 )
 
-            # Log activity
+            # Log activity with enhanced information
             await user_activity_repo.log_activity(
                 session=session,
                 profile_id=profile_instance.id,
                 activity_type=ActivityType.PROFILE_UPDATE,
-                description="Profile created/updated"
+                description="Profile created/updated",
+                ip_address=None,
+                user_agent=None
             )
+
+            # Commit all changes
+            await session.commit()
 
             return {"message": "Profile created successfully", "profile_id": profile_instance.id}
     except HTTPException:
@@ -468,12 +475,14 @@ async def update_profile(
                         is_active=role_data['is_active']
                     )
             
-            # Log activity
+            # Log activity with enhanced information
             await user_activity_repo.log_activity(
                 session=session,
                 profile_id=profile.id,
                 activity_type=ActivityType.PROFILE_UPDATE,
-                description="Profile updated"
+                description="Profile updated",
+                ip_address=None,
+                user_agent=None
             )
             
             # Commit all changes
@@ -609,10 +618,6 @@ async def log_activity(
             if not profile:
                 raise HTTPException(status_code=404, detail="Profile not found")
 
-            # Get client IP and user agent
-            client_ip = request.client.host
-            user_agent = request.headers.get("user-agent", "")
-
             # Log activity
             activity_instance = await user_activity_repo.log_activity(
                 session=session,
@@ -620,9 +625,14 @@ async def log_activity(
                 activity_type=activity.activity_type,
                 description=activity.description,
                 meta_data=activity.meta_data,
-                ip_address=client_ip,
-                user_agent=user_agent
+                ip_address=activity.ip_address,
+                user_agent=activity.user_agent,
+                location=activity.location,
+                isp=activity.isp,
+                as_info=activity.as_info
             )
+
+            await session.commit()
 
             return {"message": "Activity logged successfully", "activity_id": activity_instance.id}
     except HTTPException:
@@ -646,16 +656,27 @@ async def get_activities(
 
     Example call:
      -> api/users/activities?email=<email>&limit=50&offset=0
-    Example outupt:
+    Example output:
     [
     {
         "id": 42,
-        "user_id": null,
+        "profile_id": 1,
         "activity_type": "profile_update",
         "description": "Profile updated",
         "meta_data": null,
-        "ip_address": null,
-        "user_agent": null,
+        "ip_address": "127.0.0.1",
+        "user_agent": "PostmanRuntime/7.45.0",
+        "location": {
+            "country": "BR",
+            "region": "Paraíba", 
+            "timezone": "-03:00"
+        },
+        "isp": "ULTRA NET SERVICOS EM INTERNET LTDA",
+        "as_info": {
+            "asn": 265240,
+            "name": "ULTRA NET SERVICOS EM INTERNET LTDA",
+            "route": "168.0.1.0/24"
+        },
         "created_at": "2025-08-21T21:41:22.541158"
     },
     {
@@ -993,4 +1014,52 @@ async def get_activities(
         raise
     except Exception as e:
         logger.error(f"Error getting activities for {email}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+
+# User Contribution Endpoints
+@router.post("/contributions", response_model=dict)
+async def create_contribution(
+        # jwt_user: Annotated[dict, Depends(get_current_user)],
+        contribution: UserContributionInput,
+        email: str = Query(..., description="User email"),
+        orcid_id: Optional[str] = Query(None, description="User ORCID ID (optional)"),
+
+):
+    """Create user contribution by email or ORCID ID (JWT protected)"""
+    try:
+        async with user_db_manager.get_async_session() as session:
+            # Get profile by email or ORCID
+            profile = await user_profile_repo.get_by_email(session, email)
+            if not profile and orcid_id:
+                profile = await user_profile_repo.get_by_orcid_id(session, orcid_id)
+
+            if not profile:
+                raise HTTPException(status_code=404, detail="Profile not found")
+
+            contribution_data = contribution.dict()
+            contribution_data["profile_id"] = profile.id
+
+            contribution_instance = await user_contribution_repo.create(
+                session=session,
+                **contribution_data
+            )
+
+
+            await user_activity_repo.log_activity(
+                session=session,
+                profile_id=profile.id,
+                activity_type=ActivityType.CONTENT_SUBMISSION,
+                description=f"Created {contribution.contribution_type} contribution: {contribution.title}"
+            )
+
+
+            await session.commit()
+
+            return {"message": "Contribution created successfully", "contribution_id": contribution_instance.id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating contribution for {email}: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")

@@ -126,6 +126,9 @@ class UserActivity(Base):
     meta_data: Mapped[Optional[dict]] = mapped_column(JSONB)
     ip_address: Mapped[Optional[str]] = mapped_column(INET)
     user_agent: Mapped[Optional[str]] = mapped_column(Text)
+    location: Mapped[Optional[dict]] = mapped_column(JSONB)  # Location info (country, region, timezone)
+    isp: Mapped[Optional[str]] = mapped_column(String(255))  # Internet Service Provider
+    as_info: Mapped[Optional[dict]] = mapped_column(JSONB)  # Autonomous System info
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     
     # Relationships

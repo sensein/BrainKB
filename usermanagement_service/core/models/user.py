@@ -326,17 +326,24 @@ class UserActivityInput(BaseModel):
     meta_data: Optional[Dict[str, Any]] = Field(None, description="Additional activity metadata")
     ip_address: Optional[str] = Field(None, description="User's IP address")
     user_agent: Optional[str] = Field(None, description="User's browser/client information")
+    # Additional flexible fields for location and network info
+    location: Optional[Dict[str, Any]] = Field(None, description="Location information (country, region, timezone)")
+    isp: Optional[str] = Field(None, description="Internet Service Provider")
+    as_info: Optional[Dict[str, Any]] = Field(None, description="Autonomous System information")
 
 
 class UserActivity(BaseModel):
     """User activity model (for responses)"""
     id: Optional[int] = None
-    user_id: Optional[int] = None
+    profile_id: Optional[int] = None  # Changed from user_id to profile_id to match database
     activity_type: ActivityType = Field(..., description="Type of activity")
     description: Optional[str] = Field(None, description="Activity description")
     meta_data: Optional[Dict[str, Any]] = Field(None, description="Additional activity metadata")
     ip_address: Optional[str] = Field(None, description="User's IP address")
     user_agent: Optional[str] = Field(None, description="User's browser/client information")
+    location: Optional[Dict[str, Any]] = Field(None, description="Location information")
+    isp: Optional[str] = Field(None, description="Internet Service Provider")
+    as_info: Optional[Dict[str, Any]] = Field(None, description="Autonomous System information")
     created_at: Optional[datetime] = None
 
 

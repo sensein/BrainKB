@@ -421,22 +421,58 @@ class UserActivityRepository(UserBaseRepository):
     
     async def log_activity(self, session: AsyncSession, profile_id: int, activity_type: ActivityType, 
                           description: Optional[str] = None, meta_data: Optional[Dict] = None,
-                          ip_address: Optional[str] = None, user_agent: Optional[str] = None) -> UserActivity:
+                          ip_address: Optional[str] = None, user_agent: Optional[str] = None,
+                          location: Optional[Dict] = None, isp: Optional[str] = None, 
+                          as_info: Optional[Dict] = None) -> UserActivity:
         """Log user activity"""
         try:
-            activity = UserActivity(
-                profile_id=profile_id,
-                activity_type=activity_type.value,
-                description=description,
-                meta_data=meta_data,
-                ip_address=ip_address,
-                user_agent=user_agent
-            )
-            session.add(activity)
-            await session.flush()
-            await session.refresh(activity)
-            return activity
-        except SQLAlchemyError as e:
+            from datetime import datetime
+            import json
+            
+            print(f"DEBUG: Starting log_activity for profile_id: {profile_id}")
+            
+            # Convert dictionaries to JSON strings for PostgreSQL JSONB fields
+            meta_data_json = json.dumps(meta_data) if meta_data else None
+            location_json = json.dumps(location) if location else None
+            as_info_json = json.dumps(as_info) if as_info else None
+            
+            print(f"DEBUG: JSON conversion completed")
+            
+            # Use direct SQL insert to avoid ORM issues
+            result = await session.execute(text("""
+                INSERT INTO "Web_user_activity" 
+                (profile_id, activity_type, description, meta_data, ip_address, user_agent, location, isp, as_info, created_at)
+                VALUES (:profile_id, :activity_type, :description, :meta_data, :ip_address, :user_agent, :location, :isp, :as_info, :created_at)
+                RETURNING id
+            """), {
+                'profile_id': profile_id,
+                'activity_type': activity_type.value,
+                'description': description,
+                'meta_data': meta_data_json,
+                'ip_address': ip_address,
+                'user_agent': user_agent,
+                'location': location_json,
+                'isp': isp,
+                'as_info': as_info_json,
+                'created_at': datetime.utcnow()
+            })
+            
+            print(f"DEBUG: SQL INSERT executed")
+            
+            activity_id = result.scalar()
+            print(f"DEBUG: Activity ID returned: {activity_id}")
+            
+            # Return a simple object with just the ID
+            class SimpleActivity:
+                def __init__(self, activity_id):
+                    self.id = activity_id
+            
+            result_obj = SimpleActivity(activity_id)
+            print(f"DEBUG: Returning SimpleActivity object with ID: {result_obj.id}")
+            
+            return result_obj
+        except Exception as e:
+            print(f"DEBUG: Exception in log_activity: {e}")
             await session.rollback()
             logger.error(f"Error logging activity: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
