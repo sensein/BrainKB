@@ -15,7 +15,7 @@ from datetime import datetime
 import logging
 from contextlib import asynccontextmanager
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
@@ -64,7 +64,7 @@ class UserDatabaseManager:
             pool_size=10,
             max_overflow=20,
             pool_pre_ping=True,
-            echo=False
+            echo=True  # Enable SQL logging to see what's happening
         )
         
         self.async_session_factory = async_sessionmaker(
@@ -102,7 +102,8 @@ class UserDatabaseManager:
         async with self.async_session_factory() as session:
             try:
                 yield session
-                await session.commit()
+                # Don't auto-commit - let the caller handle commits
+                # await session.commit()  # Removed auto-commit
             except Exception as e:
                 await session.rollback()
                 logger.error(f"User database session error: {str(e)}")
@@ -310,29 +311,9 @@ class UserProfileRepository(UserBaseRepository):
         """Get profile by email"""
         try:
             result = await session.execute(
-                text('SELECT * FROM "Web_user_profile" WHERE email = :email'),
-                {"email": email}
+                select(UserProfile).where(UserProfile.email == email)
             )
-            row = result.fetchone()
-            if row:
-                # Convert raw result to UserProfile ORM object
-                user_profile = UserProfile()
-                user_profile.id = row.id
-                user_profile.name = row.name
-                user_profile.name_prefix = row.name_prefix
-                user_profile.name_suffix = row.name_suffix
-                user_profile.email = row.email
-                user_profile.orcid_id = row.orcid_id
-                user_profile.github = row.github
-                user_profile.linkedin = row.linkedin
-                user_profile.google_scholar = row.google_scholar
-                user_profile.website = row.website
-                user_profile.conflict_of_interest_statement = row.conflict_of_interest_statement
-                user_profile.biography = row.biography
-                user_profile.created_at = row.created_at
-                user_profile.updated_at = row.updated_at
-                return user_profile
-            return None
+            return result.scalar_one_or_none()
         except SQLAlchemyError as e:
             logger.error(f"Error getting user profile by email: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
@@ -341,31 +322,24 @@ class UserProfileRepository(UserBaseRepository):
         """Get profile by ORCID ID"""
         try:
             result = await session.execute(
-                text('SELECT * FROM "Web_user_profile" WHERE orcid_id = :orcid_id'),
-                {"orcid_id": orcid_id}
+                select(UserProfile).where(UserProfile.orcid_id == orcid_id)
             )
-            row = result.fetchone()
-            if row:
-                # Convert raw result to UserProfile ORM object
-                user_profile = UserProfile()
-                user_profile.id = row.id
-                user_profile.name = row.name
-                user_profile.name_prefix = row.name_prefix
-                user_profile.name_suffix = row.name_suffix
-                user_profile.email = row.email
-                user_profile.orcid_id = row.orcid_id
-                user_profile.github = row.github
-                user_profile.linkedin = row.linkedin
-                user_profile.google_scholar = row.google_scholar
-                user_profile.website = row.website
-                user_profile.conflict_of_interest_statement = row.conflict_of_interest_statement
-                user_profile.biography = row.biography
-                user_profile.created_at = row.created_at
-                user_profile.updated_at = row.updated_at
-                return user_profile
-            return None
+            return result.scalar_one_or_none()
         except SQLAlchemyError as e:
             logger.error(f"Error getting user profile by ORCID ID: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+    
+    async def create_profile(self, session: AsyncSession, **profile_data) -> UserProfile:
+        """Create new user profile"""
+        try:
+            profile = UserProfile(**profile_data)
+            session.add(profile)
+            await session.flush()
+            await session.refresh(profile)
+            return profile
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Error creating user profile: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
     
     async def create_or_update_profile(self, session: AsyncSession, **profile_data) -> UserProfile:
@@ -586,22 +560,9 @@ class UserRoleRepository(UserBaseRepository):
         """Get user roles as UserRole objects"""
         try:
             result = await session.execute(
-                text('SELECT * FROM "Web_user_role" WHERE profile_id = :profile_id AND is_active = true ORDER BY assigned_at DESC'),
-                {"profile_id": profile_id}
+                select(UserRole).where(UserRole.profile_id == profile_id, UserRole.is_active == True).order_by(UserRole.assigned_at.desc())
             )
-            roles = []
-            for row in result.fetchall():
-                user_role = UserRole()
-                user_role.id = row.id
-                user_role.profile_id = row.profile_id
-                user_role.role = row.role
-                user_role.assigned_by = row.assigned_by
-                user_role.assigned_at = row.assigned_at
-                user_role.is_active = row.is_active
-                user_role.expires_at = row.expires_at
-                user_role.updated_at = row.updated_at
-                roles.append(user_role)
-            return roles
+            return result.scalars().all()
         except SQLAlchemyError as e:
             logger.error(f"Error getting user roles: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
@@ -689,6 +650,22 @@ class UserRoleRepository(UserBaseRepository):
             logger.error(f"Error removing role: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
     
+    async def remove_all_roles(self, session: AsyncSession, profile_id: int) -> bool:
+        """Remove all roles for user"""
+        try:
+            logger.info(f"Removing all roles for profile_id: {profile_id}")
+            result = await session.execute(
+                text('DELETE FROM "Web_user_role" WHERE profile_id = :profile_id'),
+                {"profile_id": profile_id}
+            )
+            await session.flush()
+            logger.info(f"Removed {result.rowcount} roles for profile_id: {profile_id}")
+            return result.rowcount > 0
+        except SQLAlchemyError as e:
+            await session.rollback()
+            logger.error(f"Error removing all roles: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+    
     async def get_users_by_role(self, session: AsyncSession, role: str, limit: int = 50, offset: int = 0) -> List[int]:
         """Get profile IDs by role"""
         try:
@@ -717,10 +694,9 @@ class UserCountryRepository(UserBaseRepository):
         """Get user countries"""
         try:
             result = await session.execute(
-                text('SELECT * FROM "Web_user_country" WHERE profile_id = :profile_id ORDER BY is_primary DESC, created_at ASC'),
-                {"profile_id": profile_id}
+                select(UserCountry).where(UserCountry.profile_id == profile_id).order_by(UserCountry.is_primary.desc(), UserCountry.created_at.asc())
             )
-            return result.fetchall()
+            return result.scalars().all()
         except SQLAlchemyError as e:
             logger.error(f"Error getting user countries: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
@@ -809,10 +785,9 @@ class UserExpertiseRepository(UserBaseRepository):
         """Get user expertise areas"""
         try:
             result = await session.execute(
-                text('SELECT * FROM "Web_user_expertise" WHERE profile_id = :profile_id ORDER BY created_at ASC'),
-                {"profile_id": profile_id}
+                select(UserExpertise).where(UserExpertise.profile_id == profile_id).order_by(UserExpertise.created_at.asc())
             )
-            return result.fetchall()
+            return result.scalars().all()
         except SQLAlchemyError as e:
             logger.error(f"Error getting user expertise: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
@@ -897,10 +872,9 @@ class UserOrganizationRepository(UserBaseRepository):
         """Get user organizations"""
         try:
             result = await session.execute(
-                text('SELECT * FROM "Web_user_organization" WHERE profile_id = :profile_id ORDER BY is_primary DESC, created_at ASC'),
-                {"profile_id": profile_id}
+                select(UserOrganization).where(UserOrganization.profile_id == profile_id).order_by(UserOrganization.is_primary.desc(), UserOrganization.created_at.asc())
             )
-            return result.fetchall()
+            return result.scalars().all()
         except SQLAlchemyError as e:
             logger.error(f"Error getting user organizations: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
@@ -908,6 +882,7 @@ class UserOrganizationRepository(UserBaseRepository):
     async def add_organization(self, session: AsyncSession, profile_id: int, organization: str, position: Optional[str] = None, department: Optional[str] = None, is_primary: bool = False, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> UserOrganization:
         """Add organization to user"""
         try:
+            logger.info(f"Adding organization '{organization}' for profile_id: {profile_id}")
             # If this is primary, unset other primary organizations
             if is_primary:
                 await session.execute(
@@ -927,6 +902,7 @@ class UserOrganizationRepository(UserBaseRepository):
             session.add(user_organization)
             await session.flush()
             await session.refresh(user_organization)
+            logger.info(f"Successfully added organization with ID: {user_organization.id}")
             return user_organization
         except SQLAlchemyError as e:
             await session.rollback()
@@ -950,11 +926,13 @@ class UserOrganizationRepository(UserBaseRepository):
     async def remove_all_organizations(self, session: AsyncSession, profile_id: int) -> bool:
         """Remove all organizations for user"""
         try:
+            logger.info(f"Removing all organizations for profile_id: {profile_id}")
             result = await session.execute(
                 text('DELETE FROM "Web_user_organization" WHERE profile_id = :profile_id'),
                 {"profile_id": profile_id}
             )
             await session.flush()
+            logger.info(f"Removed {result.rowcount} organizations for profile_id: {profile_id}")
             return result.rowcount > 0
         except SQLAlchemyError as e:
             await session.rollback()
@@ -972,10 +950,9 @@ class UserEducationRepository(UserBaseRepository):
         """Get user education history"""
         try:
             result = await session.execute(
-                text('SELECT * FROM "Web_user_education" WHERE profile_id = :profile_id ORDER BY is_primary DESC, graduation_year DESC, created_at ASC'),
-                {"profile_id": profile_id}
+                select(UserEducation).where(UserEducation.profile_id == profile_id).order_by(UserEducation.is_primary.desc(), UserEducation.graduation_year.desc(), UserEducation.created_at.asc())
             )
-            return result.fetchall()
+            return result.scalars().all()
         except SQLAlchemyError as e:
             logger.error(f"Error getting user education: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
@@ -1024,11 +1001,13 @@ class UserEducationRepository(UserBaseRepository):
     async def remove_all_education(self, session: AsyncSession, profile_id: int) -> bool:
         """Remove all education for user"""
         try:
+            logger.info(f"Removing all education for profile_id: {profile_id}")
             result = await session.execute(
                 text('DELETE FROM "Web_user_education" WHERE profile_id = :profile_id'),
                 {"profile_id": profile_id}
             )
             await session.flush()
+            logger.info(f"Removed {result.rowcount} education records for profile_id: {profile_id}")
             return result.rowcount > 0
         except SQLAlchemyError as e:
             await session.rollback()
