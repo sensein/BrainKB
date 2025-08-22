@@ -630,3 +630,367 @@ async def log_activity(
     except Exception as e:
         logger.error(f"Error logging activity for {email}: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/activities", response_model=List[UserActivity])
+async def get_activities(
+        jwt_user: Annotated[dict, Depends(get_current_user)],
+        email: str = Query(..., description="User email"),
+        orcid_id: Optional[str] = Query(None, description="User ORCID ID (optional)"),
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+
+):
+    """
+    Get user activities by email or ORCID ID (optional)
+
+    Example call:
+     -> api/users/activities?email=<email>&limit=50&offset=0
+    Example outupt:
+    [
+    {
+        "id": 42,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:41:22.541158"
+    },
+    {
+        "id": 41,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:40:28.817681"
+    },
+    {
+        "id": 40,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:40:03.772433"
+    },
+    {
+        "id": 39,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:38:39.119858"
+    },
+    {
+        "id": 38,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:37:48.436143"
+    },
+    {
+        "id": 37,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:24:38.620757"
+    },
+    {
+        "id": 36,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:23:03.695382"
+    },
+    {
+        "id": 35,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:22:13.196854"
+    },
+    {
+        "id": 34,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:20:51.056567"
+    },
+    {
+        "id": 33,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:18:29.787030"
+    },
+    {
+        "id": 32,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:17:41.356626"
+    },
+    {
+        "id": 31,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:14:30.902561"
+    },
+    {
+        "id": 30,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:10:28.670414"
+    },
+    {
+        "id": 29,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:10:10.901745"
+    },
+    {
+        "id": 28,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:09:33.921557"
+    },
+    {
+        "id": 27,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:08:21.577624"
+    },
+    {
+        "id": 26,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:07:18.450464"
+    },
+    {
+        "id": 25,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T21:06:35.850645"
+    },
+    {
+        "id": 24,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T20:55:56.792980"
+    },
+    {
+        "id": 23,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T19:28:38.198257"
+    },
+    {
+        "id": 22,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T19:23:25.163106"
+    },
+    {
+        "id": 21,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T19:23:03.915976"
+    },
+    {
+        "id": 20,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T19:21:43.467008"
+    },
+    {
+        "id": 19,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T19:18:27.057406"
+    },
+    {
+        "id": 18,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T19:16:33.984193"
+    },
+    {
+        "id": 16,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T19:12:15.321527"
+    },
+    {
+        "id": 15,
+        "user_id": null,
+        "activity_type": "login",
+        "description": "string",
+        "meta_data": {
+            "additionalProp1": {}
+        },
+        "ip_address": "127.0.0.1",
+        "user_agent": "PostmanRuntime/7.45.0",
+        "created_at": "2025-08-21T18:54:47.983079"
+    },
+    {
+        "id": 12,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T18:38:39.959016"
+    },
+    {
+        "id": 11,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T18:37:57.496116"
+    },
+    {
+        "id": 10,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T18:33:47.258405"
+    },
+    {
+        "id": 9,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T17:36:27.426550"
+    },
+    {
+        "id": 8,
+        "user_id": null,
+        "activity_type": "profile_update",
+        "description": "Profile created/updated",
+        "meta_data": null,
+        "ip_address": null,
+        "user_agent": null,
+        "created_at": "2025-08-21T00:23:08.764484"
+    }
+]
+    """
+    try:
+        async with user_db_manager.get_async_session() as session:
+
+            profile = await user_profile_repo.get_by_email(session, email)
+            if not profile and orcid_id:
+                profile = await user_profile_repo.get_by_orcid_id(session, orcid_id)
+
+            if not profile:
+                raise HTTPException(status_code=404, detail="Profile not found")
+
+            activities = await user_activity_repo.get_user_activities(
+                session=session,
+                profile_id=profile.id,
+                limit=limit,
+                offset=offset
+            )
+            return [UserActivity(**convert_row_to_dict(activity)) for activity in activities]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting activities for {email}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
