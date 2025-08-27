@@ -14,7 +14,8 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import logging
 from contextlib import asynccontextmanager
-
+from datetime import datetime
+import json
 from sqlalchemy import create_engine, text, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import sessionmaker, Session
@@ -426,8 +427,7 @@ class UserActivityRepository(UserBaseRepository):
                           as_info: Optional[Dict] = None) -> UserActivity:
         """Log user activity"""
         try:
-            from datetime import datetime
-            import json
+
             
             print(f"DEBUG: Starting log_activity for profile_id: {profile_id}")
             
