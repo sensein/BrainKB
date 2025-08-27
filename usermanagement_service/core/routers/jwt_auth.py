@@ -3,7 +3,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, status, Depends, Request
 
-from core.user_database import user_db_manager, user_repo
+from core.database import user_db_manager, jwt_user_repo
 from core.models.user import UserIn, LoginUserIn, ActivityType
 from core.security import get_password_hash, authenticate_user, create_access_token_with_user_id, verify_token
 
@@ -15,19 +15,19 @@ router = APIRouter()
 @router.post("/register", status_code=201)
 async def register(user: UserIn):
     async with user_db_manager.get_async_session() as session:
-        # Check if user already exists
-        existing_user = await user_repo.get_by_email(session, user.email)
-        if existing_user:
+        # Check if JWT user already exists
+        existing_jwt_user = await jwt_user_repo.get_by_email(session, user.email)
+        if existing_jwt_user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A user with that email already exists",
             )
-        
+
         hashed_password = get_password_hash(user.password)
         
-        # Create jwt user
+        # Create JWT user
         try:
-            new_user = await user_repo.create_user(
+            new_jwt_user = await jwt_user_repo.create_user(
                 session=session,
                 full_name=user.full_name,
                 email=user.email,
@@ -61,7 +61,10 @@ async def login(user: LoginUserIn, request: Request):
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        scopes = ["read"]  # Default scope
+        # Get JWT user scopes from database
+        scopes = await jwt_user_repo.get_user_scopes(session, user_record.id)
+        if not scopes:
+            scopes = ["read"]  # Default scope if no scopes found
 
         access_token = create_access_token_with_user_id(user_record.email, scopes, user_record.id)
 

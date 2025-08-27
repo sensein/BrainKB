@@ -18,7 +18,6 @@ from core.models.user import ActivityType
 from core.security import verify_token
 from fastapi.middleware.cors import CORSMiddleware
 
-
 class ActivityLoggingMiddleware(BaseHTTPMiddleware):
     """Middleware to automatically log user activities"""
     
@@ -42,16 +41,14 @@ class ActivityLoggingMiddleware(BaseHTTPMiddleware):
                         description = self._generate_description(request)
                         
                         # Log activity asynchronously (don't wait for it)
+                        # Note: This middleware logs JWT user activities, not profile activities
+                        # Profile activities are logged in the individual endpoints
                         try:
-                            async with user_db_manager.get_async_session() as session:
-                                await user_activity_repo.log_activity(
-                                    session=session,
-                                    user_id=user_id,
-                                    activity_type=activity_type,
-                                    description=description,
-                                    ip_address=request.client.host,
-                                    user_agent=request.headers.get("user-agent")
-                                )
+                            # For now, skip middleware activity logging since it requires profile_id
+                            # Individual endpoints handle their own activity logging
+                            pass
+                        except Exception as e:
+                            logger.error(f"Failed to log activity: {str(e)}")
                         except Exception as e:
                             logger.error(f"Failed to log activity: {str(e)}")
                             
