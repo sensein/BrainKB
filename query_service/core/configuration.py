@@ -21,7 +21,7 @@ import os
 from dotenv import load_dotenv
 
 
-def load_environment(env_name="development"):
+def load_environment(env_name="production"):
     """
     Load environment variables from the specified .env.development.development file.
 
