@@ -23,7 +23,13 @@ Please refer to the BrainKB documentation below for additional information regar
 
 ## Contact
 - Tek Raj Chhetri <tekraj@mit.edu>
+
 ## License
-- @Copyright 2024-now
-- [MIT](https://opensource.org/license/mit)
+
+This project is licensed under the [Apache License 2.0](https://opensource.org/license/apache-2-0).
+
+**Copyright © 2024–Present Senseable Intelligence Group**
+
+You may obtain a copy of the license at: [Apache License, Version 2.0](https://opensource.org/license/apache-2-0)
+
 

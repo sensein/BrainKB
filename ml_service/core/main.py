@@ -10,9 +10,11 @@ from fastapi.exceptions import HTTPException
 from core.configure_logging import configure_logging
 from core.routers.index import router as index_router
 from core.routers.jwt_auth import router as jwt_router
+from core.routers.resource_extraction_ingest import router as resource_router
 from core.routers.structsense import router as structsense_router
 from core.database import init_db_pool, get_db_pool
 
+from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -32,12 +34,26 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 logger = logging.getLogger(__name__)
+
+origins = [
+    "https://beta.brainkb.org",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.add_middleware(CorrelationIdMiddleware)
 
 
 app.include_router(index_router, prefix="/api")
 app.include_router(jwt_router, prefix="/api", tags=["Security"])
-app.include_router(structsense_router, prefix="/api", tags=["Multi-agent Systems"])
+# app.include_router(structsense_router, prefix="/api", tags=["Multi-agent Systems"])
+app.include_router(resource_router, prefix="/api", tags=["Resource Extraction"])
 
 
 

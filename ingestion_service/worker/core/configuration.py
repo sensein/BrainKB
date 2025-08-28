@@ -62,7 +62,10 @@ def load_environment(env_name="env"):
         "RABBITMQ_URL": os.getenv("RABBITMQ_URL", "localhost"),
         "RABBITMQ_PORT": os.getenv("RABBITMQ_PORT", 5672),
         "RABBITMQ_VHOST": os.getenv("RABBITMQ_VHOST","/"),
-        "INGEST_URL": os.getenv("INGEST_URL")
+        "INGEST_URL": os.getenv("INGEST_URL"),
+        "JWT_LOGIN_EMAIL": os.getenv("JWT_LOGIN_EMAIL"),
+        "JWT_LOGIN_PASSWORD": os.getenv("JWT_LOGIN_PASSWORD"),
+        "JWT_BEARER_TOKEN_URL": os.getenv("JWT_BEARER_TOKEN_URL")
     }
 
 

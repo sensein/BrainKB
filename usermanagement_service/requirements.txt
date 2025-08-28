@@ -1,0 +1,45 @@
+# ASGI server & framework
+fastapi==0.115.3
+uvicorn==0.29.0
+gunicorn==21.2.0
+
+# HTTP requests
+aiohttp==3.9.1
+
+# Logging
+rich==13.9.4
+python-json-logger==2.0.7
+asgi-correlation-id==4.3.4
+logtail-python==0.2.10
+
+# Config & Settings
+pydantic-settings==2.5.2
+pkonfig==2.0.0
+
+# Compatibility
+eval-type-backport==0.1.3
+
+# Auth & Security
+python-jose==3.3.0
+python-multipart==0.0.18
+passlib[bcrypt]==1.7.4
+
+python-dotenv==1.0.0
+
+# Database
+asyncpg==0.29.0
+
+# ORM Framework
+sqlalchemy==2.0.23
+alembic==1.13.1
+greenlet==3.0.3
+
+# Caching
+redis==5.0.1
+
+# fuzzy matching
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.27.1
+
+# Email validation for user models
+email-validator==2.1.0

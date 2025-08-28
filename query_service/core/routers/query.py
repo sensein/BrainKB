@@ -75,7 +75,7 @@ async def get_bkbit_id(xref):
     }
 
 
-@router.get("/query/sparql/", include_in_schema=False)
+@router.get("/query/sparql/")
 async def sparql_query(
     user: Annotated[LoginUserIn, Depends(get_current_user)], sparql_query: str
 ):

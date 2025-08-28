@@ -26,9 +26,15 @@ import yaml
 from fastapi import HTTPException, UploadFile
 from pydantic import BaseModel, ValidationError
 from typing import List, Optional, Dict, Union
-
+import re
+import httpx
+import os
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+import os
 logger = logging.getLogger(__name__)
-
+import fitz
+from io import BytesIO
 import requests
 from core.shared import load_environment  # adjust this import to your setup
 import json
@@ -116,6 +122,209 @@ def upsert_ner_annotations(input_data):
     finally:
         client.close()
 
+
+def upsert_structured_resources(input_data):
+    """
+    Upserts structured resource extraction results into a MongoDB collection with versioning and history.
+    Dynamically handles any structure keys and nested objects.
+    """
+
+    env = load_environment()
+    mongo_url = env.get("MONGO_DB_URL")
+    db_name = env.get("NER_DATABASE")
+    collection_name = "structured_resource" #env.get("STRUCTURED_RESOURCES_COLLECTION")
+    client = None
+
+    try:
+        client = MongoClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+        db = client[db_name]
+        collection = db[collection_name]
+
+        # Extract the structured data from the input
+        structured_data = input_data.get("data", [])
+        document_name = input_data.get("documentName", "")
+        processed_at = input_data.get("processedAt", "")
+        source_type = input_data.get("sourceType", "")  # doi, pdf, text, file
+        source_content = input_data.get("sourceContent", "")  # original input
+
+        now = datetime.now(timezone.utc)
+
+        inserted = 0
+        updated = 0
+
+        for idx, resource_data in enumerate(structured_data):
+            print(f"Processing resource {idx}: {type(resource_data)}")
+
+            # Ensure required fields exist and handle None values
+            if not isinstance(resource_data, dict):
+                print(f"Skipping non-dict resource: {resource_data}")
+                continue
+
+            #  Attach metadata as top-level fields
+            resource_data["documentName"] = str(document_name or "")
+            resource_data["processedAt"] = str(processed_at or "")
+            resource_data["sourceType"] = str(source_type or "")
+            resource_data["sourceContent"] = str(source_content or "")
+
+            # Dynamic structure detection and cleaning
+            cleaned_resource_data = clean_and_validate_structure(resource_data)
+
+            # Dynamic filter criteria generation
+            filter_criteria = generate_filter_criteria(cleaned_resource_data, document_name, idx, now)
+
+            print(f"Filter criteria: {filter_criteria}")
+
+            existing_doc = collection.find_one(filter_criteria)
+            version = 1
+            if existing_doc:
+                version = existing_doc.get("version", 1) + 1
+                updated += 1
+            else:
+                inserted += 1
+
+            # Prepare update fields with versioning
+            update_fields = {**cleaned_resource_data, "updated_at": now, "version": version}
+
+            # Create history entry
+            history_entry = {
+                "timestamp": now,
+                "updated_fields": {
+                    k: resource_data[k]
+                    for k in resource_data
+                    if k not in filter_criteria and resource_data[k] is not None and resource_data[k] != "null"
+                },
+                "source_type": source_type,
+                "source_content_preview": source_content[:200] + "..." if len(source_content) > 200 else source_content
+            }
+
+            print(f"About to upsert with filter: {filter_criteria}")
+            print(f"Update fields keys: {list(update_fields.keys())}")
+
+            collection.find_one_and_update(
+                filter_criteria,
+                {
+                    "$set": update_fields,
+                    "$setOnInsert": {"created_at": now},
+                    "$push": {"history": history_entry}
+                },
+                upsert=True,
+                return_document=ReturnDocument.AFTER
+            )
+
+        return {
+            "Inserted": inserted,
+            "Updated": updated,
+            "Total_Processed": len(structured_data)
+        }
+    except Exception as e:
+        print(f"Exception in upsert_structured_resources: {str(e)}")
+        print(f"Exception type: {type(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+    finally:
+        if client:
+            try:
+                client.close()
+                print("MongoDB client closed successfully")
+            except Exception as close_error:
+                print(f"Error closing MongoDB client: {close_error}")
+
+
+def clean_and_validate_structure(data):
+    """
+    Dynamically cleans and validates any nested structure.
+    Handles None values, null strings, and ensures proper types.
+    """
+    if not isinstance(data, dict):
+        return {}
+
+    cleaned_data = {}
+
+    for key, value in data.items():
+        if value is None or value == "null" or value == "":
+            continue
+
+        if isinstance(value, str):
+            cleaned_value = value.strip()
+            if cleaned_value and cleaned_value != "null":
+                cleaned_data[key] = cleaned_value
+        elif isinstance(value, dict):
+            # Recursively clean nested dictionaries
+            nested_cleaned = clean_and_validate_structure(value)
+            if nested_cleaned:  # Only include if not empty
+                cleaned_data[key] = nested_cleaned
+        elif isinstance(value, list):
+            # Clean list elements
+            cleaned_list = []
+            for item in value:
+                if item is not None and item != "null" and item != "":
+                    if isinstance(item, str):
+                        cleaned_item = item.strip()
+                        if cleaned_item and cleaned_item != "null":
+                            cleaned_list.append(cleaned_item)
+                    else:
+                        cleaned_list.append(str(item))
+            if cleaned_list:  # Only include if not empty
+                cleaned_data[key] = cleaned_list
+        else:
+            # Convert other types to string
+            cleaned_data[key] = str(value)
+
+    return cleaned_data
+
+
+def generate_filter_criteria(data, document_name, idx, now):
+    """
+    Dynamically generates filter criteria based on available fields.
+    Prioritizes fields that are most likely to be unique identifiers.
+    """
+    filter_criteria = {
+        "documentName": document_name
+    }
+
+    # Priority order for unique identifiers
+    priority_fields = [
+        ("name", "name"),
+        ("resource.name", "resource.name"),
+        ("type", "type"),
+        ("resource.type", "resource.type"),
+        ("category", "category"),
+        ("resource.category", "resource.category"),
+        ("id", "id"),
+        ("resource.id", "resource.id")
+    ]
+
+    # Try to find the best unique identifier
+    for field_path, filter_key in priority_fields:
+        value = get_nested_value(data, field_path)
+        if value and value.strip():
+            filter_criteria[filter_key] = value.strip()
+            break
+
+    # If no good identifier found, create a fallback
+    if len(filter_criteria) == 1:  # Only has documentName
+        fallback_name = f"unnamed_resource_{now.strftime('%Y%m%d_%H%M%S')}_{idx}"
+        filter_criteria["name"] = fallback_name
+
+    return filter_criteria
+
+
+def get_nested_value(data, path):
+    """
+    Safely gets a nested value from a dictionary using dot notation.
+    Example: get_nested_value(data, "resource.name")
+    """
+    keys = path.split('.')
+    current = data
+
+    for key in keys:
+        if isinstance(current, dict) and key in current:
+            current = current[key]
+        else:
+            return None
+
+    return current
 
 
 def parse_yaml_or_json(input_str: Optional[Union[str, dict]], file_or_model_type: Optional[Union[UploadFile, BaseModel]] = None, model_type: Optional[BaseModel] = None) -> BaseModel:
@@ -329,3 +538,138 @@ def named_graph_exists(named_graph_iri: str) -> dict:
             "status": "error",
             "message": f"Error connecting to query service: {str(e)}"
         }
+
+
+
+def is_valid_doi(doi: str) -> bool:
+    doi_pattern = r"^10.\d{4,9}/[-._;()/:A-Z0-9]+$"
+    return re.match(doi_pattern, doi, re.IGNORECASE) is not None
+
+
+def download_open_access_pdf(doi: str, filename: str = "paper.pdf"):
+    doi = doi.strip()
+    if not doi.startswith("http"):
+        if not is_valid_doi(doi):
+            return "Invalid DOI format."
+        doi_url = f"https://doi.org/{doi}"
+    else:
+        doi_url = doi
+
+    try:
+        # Step 1: Resolve DOI
+        response = requests.get(doi_url, allow_redirects=True, timeout=10)
+        response.raise_for_status()
+        final_url = response.url
+    except requests.RequestException as e:
+
+        return "Failed to resolve DOI"
+
+    try:
+        soup = BeautifulSoup(response.text, "html.parser")
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            if ".pdf" in href.lower():
+                pdf_url = urljoin(final_url, href)
+
+                # Step 3: Download PDF
+                pdf_response = requests.get(pdf_url, stream=True)
+                if pdf_response.status_code == 200:
+                    save_path = os.path.join(os.getcwd(), filename)
+                    with open(save_path, "wb") as f:
+                        for chunk in pdf_response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                else:
+                    return "Unable to download PDF"
+
+        return "Unable to download PDF"
+    except Exception as e:
+        return f"Error {e} occured, unable to download PDF"
+
+def fetch_open_access_pdf(doi: str) -> bytes | str:
+    doi = doi.strip()
+    if not doi.startswith("http"):
+        if not is_valid_doi(doi):
+            return "Invalid DOI format."
+        doi_url = f"https://doi.org/{doi}"
+    else:
+        doi_url = doi
+
+    try:
+        response = requests.get(doi_url, allow_redirects=True, timeout=10)
+        response.raise_for_status()
+        final_url = response.url
+    except requests.RequestException:
+        return "Failed to resolve DOI."
+
+    try:
+        soup = BeautifulSoup(response.text, "html.parser")
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            if ".pdf" in href.lower():
+                pdf_url = urljoin(final_url, href)
+                pdf_response = requests.get(pdf_url, stream=True)
+                if pdf_response.status_code == 200:
+                    return pdf_response.content
+                else:
+                    return "Failed to download PDF."
+        return "No PDF link found on page."
+    except Exception as e:
+        return f"Error occurred: {e}"
+def extract_full_text_fitz(pdf_bytes):
+    doc = fitz.open(stream=BytesIO(pdf_bytes), filetype="pdf")
+    full_text = "\n".join(page.get_text() for page in doc)
+    return full_text
+
+
+
+async def call_openrouter_llm(prompt: str, model: str = "openai/gpt-4") -> str:
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        return "OpenRouter API key not set."
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": """
+            You are a research assistant working with the Brain Behavior Quantification and Synchronization (BBQS) consortium. 
+
+            The consortium tracks resources in the following categories:
+            - Models (e.g., pose estimation models, embedding models)
+            - Datasets (e.g., annotated video data, behavioral recordings)
+            - Papers (e.g., methods or applications related to behavioral quantification)
+            - Tools (e.g., analysis software, labeling interfaces)
+            - Benchmarks (e.g., standardized datasets or protocols for evaluating performance)
+            - Leaderboards (e.g., systems ranking models based on performance on a task)
+
+            Your input will be a description, webpage, or paper about a **single primary resource**. However, that resource may mention other entities like datasets, benchmarks, or tools. These should not be extracted as separate resources.
+
+            Instead, extract the primary resource with the following fields:
+            - `name`: Resource name
+            - `description`: A concise summary of the resource
+            - `type`: One of [Model, Dataset, Paper, Tool, Benchmark, Leaderboard]
+            - `category`: Domain category (e.g., Pose Estimation, Gaze Detection, Behavioral Quantification)
+            - `target`: General target (e.g., Animal, Human, Mammals)
+            - `specific_target`: Free-text list of specific sub-targets (e.g., Mice, Macaque)
+            - `url`: Canonical URL (GitHub, HuggingFace, arXiv, lab site, etc.)
+            - `mentions` (optional): Dictionary of referenced models, datasets, benchmarks, papers, or tools used or discussed within the resource.
+            - `provenance` (optional): A dictionary indicating the source section from which each field was extracted (e.g., title, abstract, methods)
+
+            Also include a `mentions` field if applicable. This is a dictionary that may include referenced datasets, models, benchmarks, or tools used or described within the resource. 
+            Be mindful that webpages may contain many extraneous references and links that are not relevant to the primary resource and should not be included in mentions.
+            If a field is missing or unknown, use `null`. Only return a single JSON object under the key `resource`"""},
+            {"role": "user", "content": prompt}
+        ]
+    }
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
+        if response.status_code == 200:
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+        else:
+            return f"OpenRouter request failed: {response.status_code} - {response.text}"

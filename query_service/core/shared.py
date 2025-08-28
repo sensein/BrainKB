@@ -24,6 +24,8 @@ import os
 
 from rdflib import Graph, URIRef, Literal, RDF, XSD , DCTERMS , PROV
 import datetime
+import uuid
+from rdflib import Namespace
 
 
 try:
@@ -299,6 +301,77 @@ def clean_response_statistics(response: List[Dict[str, Any]]):
     except Exception as e:
         return {"error": f"An unexpected error occurred: {e}"}
 
+
+def is_uri(value):
+    """Check if a value is a URI"""
+    return isinstance(value, str) and value.startswith(("http://", "https://"))
+
+
+def typed_literal(value):
+    """Return rdflib Literal with appropriate datatype"""
+    if isinstance(value, int):
+        return Literal(value, datatype=XSD.integer)
+    elif isinstance(value, float):
+        return Literal(value, datatype=XSD.float)
+    elif isinstance(value, bool):
+        return Literal(value, datatype=XSD.boolean)
+    return Literal(value)
+
+
+def generate_uri(base_uri, value=None):
+    """Generate a URI using a given ID value or a UUID"""
+    if value and is_uri(value):
+        return URIRef(value)
+    if value:
+        return URIRef(f"{base_uri}{value}")
+    return URIRef(f"{base_uri}{uuid.uuid4()}")
+
+
+def json_to_kg(json_data, base_uri="http://example.org/resource/"):
+    """Convert JSON data to RDF graph"""
+    graph = Graph()
+    KG = Namespace(base_uri)
+    graph.bind("kg", KG)
+
+    def process_node(node, subject):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                predicate = KG[key]
+                if isinstance(value, (str, int, float, bool)):
+                    obj = URIRef(value) if is_uri(value) else typed_literal(value)
+                    graph.add((subject, predicate, obj))
+
+                elif isinstance(value, dict):
+                    # Use URI if 'id' key exists, otherwise generate one
+                    obj_uri = generate_uri(base_uri, value.get("id"))
+                    graph.add((subject, predicate, obj_uri))
+                    process_node(value, obj_uri)
+
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, (str, int, float, bool)):
+                            obj = URIRef(item) if is_uri(item) else typed_literal(item)
+                            graph.add((subject, predicate, obj))
+
+                        elif isinstance(item, dict):
+                            # Use URI if 'id' exists, else generate one based on content or UUID
+                            obj_uri = generate_uri(base_uri, item.get("id") or item.get("specific_target"))
+                            graph.add((subject, predicate, obj_uri))
+                            process_node(item, obj_uri)
+        else:
+            graph.add((subject, KG.value, typed_literal(str(node))))
+
+    subject_uri = generate_uri(base_uri)
+    process_node(json_data, subject_uri)
+    return graph
+
+
+def convert_json_to_ttl(json_data, base_uri="http://brainkb.org/"):
+    """Convert JSON data to TTL format string"""
+    graph = json_to_kg(json_data, base_uri)
+    return graph.serialize(format="turtle")
+
+
 def convert_ttl_to_named_graph(ttl_str: str, named_graph_uri: str = "https://brainkb.org/test") -> str:
     """
     Converts a Turtle (TTL) file to a Named Graph format and returns it as a string.
@@ -326,6 +399,7 @@ def convert_ttl_to_named_graph(ttl_str: str, named_graph_uri: str = "https://bra
     n3_named_graph_data += "}\n"
 
     return n3_named_graph_data
+
 
 def named_graph_metadata(named_graph_url, description):
     """

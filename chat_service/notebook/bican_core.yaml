@@ -1,0 +1,72 @@
+id: https://identifiers.org/brain-bican/bican-core-schema
+name: bican-core-schema
+title: BICAN Core Schema
+description: |-
+  The BICAN Core schema is designed to represent classes, slots, and enums that are frequently used in BICAN schemas.
+  
+prefixes:
+  linkml: https://w3id.org/linkml/
+  bican: https://identifiers.org/brain-bican/vocab/
+  spdx: http://spdx.org/rdf/terms#
+
+imports:
+  - linkml:types
+  - bican_biolink
+
+default_range: string
+default_prefix: bican
+
+classes:
+  VersionedNamedThing:
+      is_a: named thing
+      description: >-
+          An iteration of the biolink:NamedThing class that stores metadata about the object's version.
+      abstract: true
+      slots:
+          - version
+          - revision_of
+      slot_usage:
+          version:
+              required: true
+  checksum:
+    is_a: entity
+    description: >-
+      Checksum values associated with digital entities.
+    slots:
+      - checksum algorithm
+    attributes:
+      value: 
+        description: The checksum value obtained from a specific cryotographic hash function.
+
+slots:
+  revision_of:
+    range: VersionedNamedThing
+  digest:
+    description: Stores checksum information. 
+    slot_uri: bican:digest
+    multivalued: true
+    inlined_as_list: true
+    any_of:
+      - range: checksum
+      - range: string
+
+  checksum algorithm:
+    description: The type of cryptographic hash function used to calculate the checksum value.
+    range: DigestType
+  
+  content_url:
+    slot_uri: schema:url
+    multivalued: true
+
+enums:
+  DigestType:
+    permissible_values:
+      spdx:checksumAlgorithm_sha1:
+        title: SHA1
+        meaning: spdx:checksumAlgorithm_sha1
+      spdx:checksumAlgorithm_md5:
+        title: MD5
+        meaning: spdx:checksumAlgorithm_md5
+      spdx:checksumAlgorithm_sha256:
+        title: SHA256
+        meaning: spdx:checksumAlgorithm_sha256
