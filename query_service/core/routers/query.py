@@ -60,3 +60,30 @@ async def sparql_query(
 ):
     response = fetch_data_gdb(sparql_query)
     return response
+
+@router.get("/query/taxonomy")
+async def get_taxonomy():
+    query_taxonomy = """
+        PREFIX rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
+
+        SELECT ?id ?parent ?name
+        WHERE {
+        GRAPH <https://apitesting.com/> {
+        
+        ?id a bican:CellTypeTaxon .
+        OPTIONAL { ?id bican:has_parent ?parent . }
+        OPTIONAL { ?id rdfs:label ?name . }
+        }
+        }
+    """
+    response = fetch_data_gdb(query_taxonomy)
+    response_taxonomy = {}
+    for taxon_info in response["message"]["results"]["bindings"]:
+        response_taxonomy[taxon_info["id"]["value"]] = {
+            "id": taxon_info["id"]["value"],
+            "parent": taxon_info.get("parent", {}).get("value"),
+            "name": taxon_info.get("name", {}).get("value"),
+        }
+    return response_taxonomy
