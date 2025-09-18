@@ -21,11 +21,12 @@ from pydantic import BaseModel, Field, ValidationError
 from typing import List, Dict, Any
 import re
 import os
-
+from core.shared import load_environment
 from rdflib import Graph, URIRef, Literal, RDF, XSD , DCTERMS , PROV
 import datetime
 import uuid
 from rdflib import Namespace
+import requests
 
 
 try:
@@ -441,3 +442,41 @@ def named_graph_metadata(named_graph_url, description):
     )
     return named_graph_metadata
 
+def get_taxonomy_for_ui():
+    query_service_url = load_environment().get("QUERY_SERVICE_BASE_URL", "")
+    endpoint = f"{check_url_for_slash(query_service_url)}query/taxonomy"
+    try: 
+        response = requests.get(endpoint)
+        response.raise_for_status()  # Raise an error for bad responses
+        taxonomy_data = response.json()
+        return taxonomy_data
+    except requests.RequestException as e:
+        return {
+            "status": "error",
+            "message": f"Error connecting to query service: {str(e)}"
+        }
+
+
+def taxonomy_postprocessing(items):
+    # going through the query output and create dictionary with parents_id and lists of childs ids
+    taxon_dict = get_taxonomy_for_ui()
+    for tax_id, el in items.items():
+        if el['parent'] is None:
+            par_id = "root"
+            par_nm = "root"
+        else:
+            par_id = el['parent']
+            par_nm = items[par_id]["name"]
+    
+        if par_id not in taxon_dict:
+            taxon_dict[par_id] = {"meta": {"name": par_nm}, "childrens_id": [tax_id]}
+        else:
+            taxon_dict[par_id]["childrens_id"].append(tax_id)
+
+
+    # creating a simple function for one level of children for testing the figure:
+    fig_dict = {"name": "root",  "nodeColor": "#ffffff",  "children": []}
+    for child_id in taxon_dict["root"]['childrens_id']:
+        fig_dict["children"].append({"name": taxon_dict[child_id]["meta"]["name"], "nodeColor": "#ebb3a7", "children": []})
+    
+    return fig_dict
