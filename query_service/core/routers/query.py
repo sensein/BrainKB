@@ -22,6 +22,7 @@ import logging
 from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
+from core.shared import taxonomy_postprocessing
 from fastapi import Depends
 from pydantic import BaseModel, root_validator
 from typing import List
@@ -86,4 +87,5 @@ async def get_taxonomy():
             "parent": taxon_info.get("parent", {}).get("value"),
             "name": taxon_info.get("name", {}).get("value"),
         }
-    return response_taxonomy
+    processed_taxonomy = taxonomy_postprocessing(response_taxonomy)
+    return processed_taxonomy

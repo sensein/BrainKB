@@ -444,7 +444,7 @@ def named_graph_metadata(named_graph_url, description):
 
 def taxonomy_postprocessing(items):
     # going through the query output and create dictionary with parents_id and lists of childs ids
-    taxon_dict = get_taxonomy_for_ui()
+    taxon_dict = {}
     for tax_id, el in items.items():
         if el['parent'] is None:
             par_id = "root"
