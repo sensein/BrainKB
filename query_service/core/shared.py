@@ -442,21 +442,6 @@ def named_graph_metadata(named_graph_url, description):
     )
     return named_graph_metadata
 
-def get_taxonomy_for_ui():
-    query_service_url = load_environment().get("QUERY_SERVICE_BASE_URL", "")
-    endpoint = f"{check_url_for_slash(query_service_url)}query/taxonomy"
-    try: 
-        response = requests.get(endpoint)
-        response.raise_for_status()  # Raise an error for bad responses
-        taxonomy_data = response.json()
-        return taxonomy_data
-    except requests.RequestException as e:
-        return {
-            "status": "error",
-            "message": f"Error connecting to query service: {str(e)}"
-        }
-
-
 def taxonomy_postprocessing(items):
     # going through the query output and create dictionary with parents_id and lists of childs ids
     taxon_dict = get_taxonomy_for_ui()
