@@ -21,7 +21,6 @@ from pydantic import BaseModel, Field, ValidationError
 from typing import List, Dict, Any
 import re
 import os
-from core.shared import load_environment
 from rdflib import Graph, URIRef, Literal, RDF, XSD , DCTERMS , PROV
 import datetime
 import uuid
