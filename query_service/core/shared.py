@@ -441,26 +441,77 @@ def named_graph_metadata(named_graph_url, description):
     )
     return named_graph_metadata
 
-def taxonomy_postprocessing(items):
+# def taxonomy_postprocessing(items):
+#     # going through the query output and create dictionary with parents_id and lists of childs ids
+#     taxon_dict = {}
+#     for tax_id, el in items.items():
+#         if el['parent'] is None:
+#             par_id = "root"
+#             par_nm = "root"
+#         else:
+#             par_id = el['parent']
+#             par_nm = items[par_id]["name"]
+    
+#         if par_id not in taxon_dict:
+#             taxon_dict[par_id] = {"meta": {"name": par_nm}, "childrens_id": [tax_id]}
+#         else:
+#             taxon_dict[par_id]["childrens_id"].append(tax_id)
+
+
+#     # creating a simple function for one level of children for testing the figure:
+#     fig_dict = {"name": "root",  "nodeColor": "#ffffff",  "children": []}
+#     for child_id in taxon_dict["root"]['childrens_id']:
+#         fig_dict["children"].append({"name": taxon_dict[child_id]["meta"]["name"], "nodeColor": "#ebb3a7", "children": []})
+    
+#     return fig_dict
+def getting_childrens(items):
     # going through the query output and create dictionary with parents_id and lists of childs ids
     taxon_dict = {}
     for tax_id, el in items.items():
         if el['parent'] is None:
             par_id = "root"
-            par_nm = "root"
+            par_nm, par_col = "root", '#ffffff'
         else:
             par_id = el['parent']
-            par_nm = items[par_id]["name"]
+            par_nm, par_col = items[par_id]["name"], items[par_id]["color"]
     
         if par_id not in taxon_dict:
-            taxon_dict[par_id] = {"meta": {"name": par_nm}, "childrens_id": [tax_id]}
+            taxon_dict[par_id] = {"meta": {"name": par_nm, "color": par_col}, "childrens_id": [tax_id]}
         else:
             taxon_dict[par_id]["childrens_id"].append(tax_id)
 
+    # adding elements without children
+    for tax_id, el in items.items():
+        if tax_id not in taxon_dict:
+            taxon_dict[tax_id] = {"meta": {"name": items[tax_id]["name"],  "color": items[tax_id]["color"]}, "childrens_id": []}
+
+    return taxon_dict
+
+def create_tree(taxon_children):
+    children_list_root = []
+    update_childrens(children_list_root, "root", taxon_children)
+    fig_dict = {"name": "root",  "nodeColor": "#ffffff",  "children": children_list_root}
+
+    return fig_dict
+
+
+def update_childrens(children_list, parent_id, taxon_children_dict):
+    """ modyfies children_list"""
+    #print("in add children, parent_id", parent_id)
+    if parent_id in taxon_children_dict:
+        for child_id in taxon_children_dict[parent_id]["childrens_id"]:
+            #print("child id", child_id)
+            children_list_current = []
+            update_childrens(children_list_current, child_id, taxon_children_dict)
+            children_list.append({"name": taxon_children_dict[child_id]["meta"]["name"], "nodeColor": taxon_children_dict[child_id]["meta"]["color"], "children": children_list_current})
+        return
+    else:
+        return
+
+
+def taxonomy_postprocessing(items):
+    taxon_children = getting_childrens(items)
 
     # creating a simple function for one level of children for testing the figure:
-    fig_dict = {"name": "root",  "nodeColor": "#ffffff",  "children": []}
-    for child_id in taxon_dict["root"]['childrens_id']:
-        fig_dict["children"].append({"name": taxon_dict[child_id]["meta"]["name"], "nodeColor": "#ebb3a7", "children": []})
-    
+    fig_dict = create_tree(taxon_children)
     return fig_dict
