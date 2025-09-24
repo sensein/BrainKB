@@ -15,7 +15,7 @@
 # @Web     : https://tekrajchhetri.com/
 # @File    : shared.py
 # @Software: PyCharm
-
+from __future__ import annotations
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 from typing import List, Dict, Any
@@ -26,6 +26,8 @@ import datetime
 import uuid
 from rdflib import Namespace
 import requests
+
+from typing import Dict, Any, List
 
 
 try:
@@ -473,7 +475,7 @@ def getting_childrens(items):
             par_nm, par_col = "root", '#ffffff'
         else:
             par_id = el['parent']
-            par_nm, par_col = items[par_id]["name"], items[par_id]["color"]
+            par_nm, par_col = items[par_id]["name"], items[par_id]["hex"]
     
         if par_id not in taxon_dict:
             taxon_dict[par_id] = {"meta": {"name": par_nm, "color": par_col}, "childrens_id": [tax_id]}
@@ -483,7 +485,7 @@ def getting_childrens(items):
     # adding elements without children
     for tax_id, el in items.items():
         if tax_id not in taxon_dict:
-            taxon_dict[tax_id] = {"meta": {"name": items[tax_id]["name"],  "color": items[tax_id]["color"]}, "childrens_id": []}
+            taxon_dict[tax_id] = {"meta": {"name": items[tax_id]["name"],  "color": items[tax_id]["hex"]}, "childrens_id": []}
 
     return taxon_dict
 
