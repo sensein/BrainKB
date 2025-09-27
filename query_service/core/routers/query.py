@@ -71,7 +71,7 @@ async def get_taxonomy():
 
         SELECT ?id ?parent ?name ?hex
         WHERE {
-            GRAPH <http://hmbataxonomy20250923.com/> {
+            GRAPH <http://hmbataxonomy20250927.com/> {
                 ?id a bican:CellTypeTaxon .
                 OPTIONAL { ?id bican:has_parent ?parent . }
                 OPTIONAL { ?id rdfs:label ?name . }
