@@ -22,6 +22,7 @@ import logging
 from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
+from core.shared import taxonomy_postprocessing
 from fastapi import Depends
 from pydantic import BaseModel, root_validator
 from typing import List
@@ -81,3 +82,41 @@ async def sparql_query(
 ):
     response = fetch_data_gdb(sparql_query)
     return response
+
+@router.get("/query/taxonomy")
+async def get_taxonomy():
+    query_taxonomy = """
+        PREFIX rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
+
+        SELECT ?id ?parent ?name ?hex
+        WHERE {
+            GRAPH <http://hmbataxonomy20250927.com/> {
+                ?id a bican:CellTypeTaxon .
+                OPTIONAL { ?id bican:has_parent ?parent . }
+                OPTIONAL { ?id rdfs:label ?name . }
+
+                # Find a DisplayColor node linked to this taxon
+                OPTIONAL {
+                    ?colorNode a bican:DisplayColor ;
+                            bican:is_color_for_taxon ?cid ;
+                            bican:color_hex_triplet ?hex .
+                        FILTER(STR(?id) = STR(?cid))
+                }
+            }   
+        }
+    """
+    response = fetch_data_gdb(query_taxonomy)
+    response_taxonomy = {}
+    for taxon_info in response["message"]["results"]["bindings"]:
+        response_taxonomy[taxon_info["id"]["value"]] = {
+            "id": taxon_info["id"]["value"],
+            "parent": taxon_info.get("parent", {}).get("value"),
+            "name": taxon_info.get("name", {}).get("value"),
+            "hex": taxon_info.get("hex", {}).get("value"),
+        }
+    processed_taxonomy = taxonomy_postprocessing(response_taxonomy)
+    return processed_taxonomy
+
+
