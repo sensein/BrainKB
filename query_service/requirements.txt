@@ -19,3 +19,5 @@ passlib[bcrypt]==1.7.4
 pkonfig==2.0.0
 psycopg==3.1.18
 asyncpg==0.29.0
+#pin to bcrypt < 4.x to prevent error password cannot be longer than 72 bytes
+bcrypt==3.2.2

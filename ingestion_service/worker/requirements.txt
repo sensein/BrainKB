@@ -16,3 +16,5 @@ pika==1.3.2
 httpx==0.27.0
 rdflib
 PyLD
+#pin to bcrypt < 4.x to prevent error password cannot be longer than 72 bytes
+bcrypt==3.2.2
