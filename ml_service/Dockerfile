@@ -6,15 +6,31 @@ LABEL project="BrainyPedia" \
       version="1.0" \
       description="A large scale computational neuroscience knowledge graphs project, fastapi docker image"
 
+# Create app directory
+WORKDIR /app
 
-COPY . .
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-# Expose the port the app runs on
-EXPOSE 8007
+# Copy the rest of the application
+COPY . .
 
-# Command to run the application
-# Using workers and threads for handling concurrent requests (over 100)
-# workers = (2 * num_cores) + 1, using 4 as a reasonable default
-# threads = 8 per worker for I/O-bound operations
-CMD [ "gunicorn", "core.main:app", "--bind", "0.0.0.0:8007", "--workers", "9", "--worker-class", "uvicorn.workers.UvicornWorker", "--threads", "8", "--max-requests", "1000", "--max-requests-jitter", "50", "--timeout", "220", "--keep-alive", "220" ]
+# Ensure the core directory exists and has correct permissions
+RUN mkdir -p /app/core && \
+    chmod -R 755 /app/core
+
+# Expose the port the app runs on
+EXPOSE 8009
+
+# Command to run the application with optimized settings
+CMD [ "gunicorn", "core.main:app", \
+      "--bind", "0.0.0.0:8009", \
+      "--workers", "4", \
+      "--worker-class", "uvicorn.workers.UvicornWorker", \
+      "--threads", "4", \
+      "--max-requests", "1000", \
+      "--max-requests-jitter", "50", \
+      "--timeout", "220", \
+      "--keep-alive", "220", \
+      "--log-level", "debug" ]

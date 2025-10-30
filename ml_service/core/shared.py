@@ -673,3 +673,52 @@ async def call_openrouter_llm(prompt: str, model: str = "openai/gpt-4") -> str:
             return result["choices"][0]["message"]["content"]
         else:
             return f"OpenRouter request failed: {response.status_code} - {response.text}"
+
+def load_env_vars_from_ui(env_vars: dict):
+    """
+    Loads environment variables passed from a UI input dictionary.
+
+    Args:
+        env_vars (dict): Dictionary containing environment variable key-value pairs
+                         required for the StructSense or multi-agent application.
+
+    Notes:
+        - All expected environment variables will be set.
+        - Missing variables will default to 'false'.
+        - Boolean values are converted to lowercase strings.
+    """
+
+    expected_keys = [
+        "ENABLE_WEIGHTSANDBIAS",
+        "ENABLE_MLFLOW",
+        "ENABLE_KG_SOURCE",
+        "ONTOLOGY_DATABASE",
+        "WEAVIATE_API_KEY",
+        "WEAVIATE_HTTP_HOST",
+        "WEAVIATE_HTTP_PORT",
+        "WEAVIATE_HTTP_SECURE",
+        "WEAVIATE_GRPC_HOST",
+        "WEAVIATE_GRPC_PORT",
+        "WEAVIATE_GRPC_SECURE",
+        "OLLAMA_API_ENDPOINT",
+        "OLLAMA_MODEL",
+        "GROBID_SERVER_URL_OR_EXTERNAL_SERVICE",
+        "EXTERNAL_PDF_EXTRACTION_SERVICE"
+    ]
+
+    for key in expected_keys:
+        value = env_vars.get(key, "false")
+
+        # Convert booleans and None to lowercase string
+        if isinstance(value, bool):
+            value = str(value).lower()
+        elif value is None:
+            value = "false"
+
+        os.environ[key] = str(value)
+
+    # Log confirmation for key services
+    logger.info("*" * 100)
+    logger.info(f"GROBID_SERVER_URL_OR_EXTERNAL_SERVICE = {os.getenv('GROBID_SERVER_URL_OR_EXTERNAL_SERVICE')}")
+    logger.info(f"EXTERNAL_PDF_EXTRACTION_SERVICE = {os.getenv('EXTERNAL_PDF_EXTRACTION_SERVICE')}")
+    logger.info("*" * 100)

@@ -293,85 +293,85 @@ async def run_structsense_with_pdf(
                      }
                  }
              })
-async def run_structsense_with_raw_text(
-        user: Annotated[LoginUserIn, Depends(get_current_user)],
-        agent_config_file: UploadFile = File(..., description="YAML file containing agent configuration"),
-        task_config_file: UploadFile = File(..., description="YAML file containing task configuration"),
-        embedder_config_file: UploadFile = File(..., description="YAML file containing embedder configuration"),
-        knowledge_config_file: Optional[UploadFile] = File(None,
-                                                           description="Optional YAML file containing knowledge configuration"),
-        input_text: str = Form(..., description="Raw neuroscience text input."),
-
-        ENABLE_WEIGHTSANDBIAS: bool = Form(False, description="Enable Weights & Biases logging"),
-        ENABLE_MLFLOW: bool = Form(False, description="Enable MLflow logging"),
-        ENABLE_KG_SOURCE: bool = Form(False, description="Enable Knowledge Graph source"),
-        ONTOLOGY_DATABASE: str = Form("Ontology_database_agent_test", description="Ontology database name"),
-        WEAVIATE_API_KEY: str = Form("", description="Weaviate API key"),
-        WEAVIATE_HTTP_HOST: str = Form("localhost", description="Weaviate HTTP host"),
-        WEAVIATE_HTTP_PORT: str = Form("8080", description="Weaviate Port"),
-        WEAVIATE_HTTP_SECURE: str = Form("False",
-                                          description="Secure access to Weaviate. Note this needs to be supported by the Weaviate deployment"),
-        WEAVIATE_GRPC_HOST: str = Form("localhost", description="Weaviate GRPC host address"),
-        WEAVIATE_GRPC_PORT: str = Form("50051", description="Weaviate GRPC port"),
-        WEAVIATE_GRPC_SECURE: str = Form("False",
-                                          description="Secure GRPC access to Weaviate if enabled in Weaviate deployment"),
-
-        OLLAMA_API_ENDPOINT: str = Form("http://localhost:11434", description="Ollama API endpoint"),
-        OLLAMA_MODEL: str = Form("nomic-embed-text", description="Ollama model name")
-):
-
-    try:
-        # Parse YAML files
-        agent = parse_yaml_or_json(None, agent_config_file, AgentConfig)
-        task = parse_yaml_or_json(None, task_config_file, TaskConfig)
-        embedder = parse_yaml_or_json(None, embedder_config_file, EmbedderConfig)
-
-        # Parse optional knowledge config file
-        knowledge = None
-        if knowledge_config_file:
-            knowledge = parse_yaml_or_json(None, knowledge_config_file, SearchKeyConfig)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Error parsing configuration files: {str(e)}")
-
-    # Inject environment variables
-    os.environ["ENABLE_WEIGHTSANDBIAS"] = str(ENABLE_WEIGHTSANDBIAS).lower()
-    os.environ["ENABLE_MLFLOW"] = str(ENABLE_MLFLOW).lower()
-    os.environ["ENABLE_KG_SOURCE"] = str(ENABLE_KG_SOURCE).lower()
-    os.environ["ONTOLOGY_DATABASE"] = ONTOLOGY_DATABASE
-    os.environ["WEAVIATE_API_KEY"] = WEAVIATE_API_KEY
-    os.environ["WEAVIATE_HTTP_HOST"] = WEAVIATE_HTTP_HOST
-    os.environ["WEAVIATE_HTTP_PORT"] = WEAVIATE_HTTP_PORT
-    os.environ["WEAVIATE_HTTP_SECURE"] = WEAVIATE_HTTP_SECURE
-    os.environ["WEAVIATE_GRPC_HOST"] = WEAVIATE_GRPC_HOST
-    os.environ["WEAVIATE_GRPC_PORT"] = WEAVIATE_GRPC_PORT
-    os.environ["WEAVIATE_GRPC_SECURE"] = WEAVIATE_GRPC_SECURE
-    os.environ["OLLAMA_API_ENDPOINT"] = OLLAMA_API_ENDPOINT
-    os.environ["OLLAMA_MODEL"] = OLLAMA_MODEL
-
-    try:
-
-        # Run kickoff in a separate thread to avoid asyncio.run() conflicts
-        def run_kickoff():
-            return kickoff(
-                agentconfig=agent.model_dump(),
-                taskconfig=task.model_dump(),
-                embedderconfig=embedder.model_dump(),
-                input_source=input_text,
-                knowledgeconfig=knowledge.model_dump() if knowledge else None
-            )
-
-        # Use ThreadPoolExecutor to run the kickoff function in a separate thread
-        with ThreadPoolExecutor() as executor:
-            result = await asyncio.get_event_loop().run_in_executor(executor, run_kickoff)
-
-        response_ingest = result
-        logger.info("#"*100)
-        logger.info("Final response: ", response_ingest)
-        logger.info("#" * 100)
-        return response_ingest
-    except Exception as e:
-        logger.error(f"StructSense kickoff error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Kickoff error: {str(e)}")
+# async def run_structsense_with_raw_text(
+#         user: Annotated[LoginUserIn, Depends(get_current_user)],
+#         agent_config_file: UploadFile = File(..., description="YAML file containing agent configuration"),
+#         task_config_file: UploadFile = File(..., description="YAML file containing task configuration"),
+#         embedder_config_file: UploadFile = File(..., description="YAML file containing embedder configuration"),
+#         knowledge_config_file: Optional[UploadFile] = File(None,
+#                                                            description="Optional YAML file containing knowledge configuration"),
+#         input_text: str = Form(..., description="Raw neuroscience text input."),
+#
+#         ENABLE_WEIGHTSANDBIAS: bool = Form(False, description="Enable Weights & Biases logging"),
+#         ENABLE_MLFLOW: bool = Form(False, description="Enable MLflow logging"),
+#         ENABLE_KG_SOURCE: bool = Form(False, description="Enable Knowledge Graph source"),
+#         ONTOLOGY_DATABASE: str = Form("Ontology_database_agent_test", description="Ontology database name"),
+#         WEAVIATE_API_KEY: str = Form("", description="Weaviate API key"),
+#         WEAVIATE_HTTP_HOST: str = Form("localhost", description="Weaviate HTTP host"),
+#         WEAVIATE_HTTP_PORT: str = Form("8080", description="Weaviate Port"),
+#         WEAVIATE_HTTP_SECURE: str = Form("False",
+#                                           description="Secure access to Weaviate. Note this needs to be supported by the Weaviate deployment"),
+#         WEAVIATE_GRPC_HOST: str = Form("localhost", description="Weaviate GRPC host address"),
+#         WEAVIATE_GRPC_PORT: str = Form("50051", description="Weaviate GRPC port"),
+#         WEAVIATE_GRPC_SECURE: str = Form("False",
+#                                           description="Secure GRPC access to Weaviate if enabled in Weaviate deployment"),
+#
+#         OLLAMA_API_ENDPOINT: str = Form("http://localhost:11434", description="Ollama API endpoint"),
+#         OLLAMA_MODEL: str = Form("nomic-embed-text", description="Ollama model name")
+# ):
+#
+#     try:
+#         # Parse YAML files
+#         agent = parse_yaml_or_json(None, agent_config_file, AgentConfig)
+#         task = parse_yaml_or_json(None, task_config_file, TaskConfig)
+#         embedder = parse_yaml_or_json(None, embedder_config_file, EmbedderConfig)
+#
+#         # Parse optional knowledge config file
+#         knowledge = None
+#         if knowledge_config_file:
+#             knowledge = parse_yaml_or_json(None, knowledge_config_file, SearchKeyConfig)
+#     except Exception as e:
+#         raise HTTPException(status_code=422, detail=f"Error parsing configuration files: {str(e)}")
+#
+#     # Inject environment variables
+#     os.environ["ENABLE_WEIGHTSANDBIAS"] = str(ENABLE_WEIGHTSANDBIAS).lower()
+#     os.environ["ENABLE_MLFLOW"] = str(ENABLE_MLFLOW).lower()
+#     os.environ["ENABLE_KG_SOURCE"] = str(ENABLE_KG_SOURCE).lower()
+#     os.environ["ONTOLOGY_DATABASE"] = ONTOLOGY_DATABASE
+#     os.environ["WEAVIATE_API_KEY"] = WEAVIATE_API_KEY
+#     os.environ["WEAVIATE_HTTP_HOST"] = WEAVIATE_HTTP_HOST
+#     os.environ["WEAVIATE_HTTP_PORT"] = WEAVIATE_HTTP_PORT
+#     os.environ["WEAVIATE_HTTP_SECURE"] = WEAVIATE_HTTP_SECURE
+#     os.environ["WEAVIATE_GRPC_HOST"] = WEAVIATE_GRPC_HOST
+#     os.environ["WEAVIATE_GRPC_PORT"] = WEAVIATE_GRPC_PORT
+#     os.environ["WEAVIATE_GRPC_SECURE"] = WEAVIATE_GRPC_SECURE
+#     os.environ["OLLAMA_API_ENDPOINT"] = OLLAMA_API_ENDPOINT
+#     os.environ["OLLAMA_MODEL"] = OLLAMA_MODEL
+#
+#     try:
+#
+#         # Run kickoff in a separate thread to avoid asyncio.run() conflicts
+#         def run_kickoff():
+#             return kickoff(
+#                 agentconfig=agent.model_dump(),
+#                 taskconfig=task.model_dump(),
+#                 embedderconfig=embedder.model_dump(),
+#                 input_source=input_text,
+#                 knowledgeconfig=knowledge.model_dump() if knowledge else None
+#             )
+#
+#         # Use ThreadPoolExecutor to run the kickoff function in a separate thread
+#         with ThreadPoolExecutor() as executor:
+#             result = await asyncio.get_event_loop().run_in_executor(executor, run_kickoff)
+#
+#         response_ingest = result
+#         logger.info("#"*100)
+#         logger.info("Final response: ", response_ingest)
+#         logger.info("#" * 100)
+#         return response_ingest
+#     except Exception as e:
+#         logger.error(f"StructSense kickoff error: {str(e)}", exc_info=True)
+#         raise HTTPException(status_code=500, detail=f"Kickoff error: {str(e)}")
 
 
 @router.post("/multiagent/result/save",
