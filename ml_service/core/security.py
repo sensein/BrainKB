@@ -18,9 +18,9 @@
 
 import datetime
 import logging
-from typing import Annotated, List
+from typing import Annotated, List, Optional, Dict
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, WebSocket
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.security import OAuth2PasswordBearer
 from jose import ExpiredSignatureError, JWTError, jwt
@@ -120,3 +120,70 @@ def require_scopes(required_scopes: List[str]):
             raise HTTPException(status_code=403, detail="Insufficient scopes")
 
     return scoped_endpoint
+
+
+async def authenticate_websocket(websocket: WebSocket, required_scopes: Optional[List[str]] = None) -> Optional[Dict]:
+    """
+    Authenticate WebSocket connection using JWT token from Authorization header.
+    Matches the exact implementation of HTTP authentication (get_current_user + require_scopes).
+    
+    Args:
+        websocket: WebSocket connection object
+        required_scopes: List of required scopes (e.g., ["write"]). If None, scope check is skipped.
+    
+    Returns:
+        User dict if authenticated and authorized, None otherwise.
+    """
+    try:
+        # Extract token from Authorization header (same as HTTP - OAuth2PasswordBearer/HTTPBearer)
+        # Priority: Authorization header (matching HTTP implementation)
+        auth_header = websocket.headers.get("authorization", "")
+        token = None
+        
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+        elif auth_header.startswith("bearer "):
+            token = auth_header[7:]
+        
+        # Fallback to query parameter if not in header (WebSocket-specific convenience)
+        if not token:
+            token = websocket.query_params.get("token")
+        
+        if not token:
+            logger.warning("No JWT token provided in WebSocket connection")
+            return None
+        
+        # Decode and validate JWT token (same logic as get_current_user)
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        except ExpiredSignatureError:
+            logger.warning("JWT token has expired")
+            return None
+        except JWTError as e:
+            logger.warning(f"JWT token validation failed: {str(e)}")
+            return None
+        
+        # Verify email (sub claim) - same as get_current_user
+        email = payload.get("sub")
+        if email is None:
+            logger.warning("JWT token missing 'sub' claim")
+            return None
+        
+        # Verify scopes if required (same logic as require_scopes)
+        if required_scopes:
+            token_scopes = payload.get("scopes", [])
+            if not all(scope in token_scopes for scope in required_scopes):
+                logger.warning(f"Insufficient scopes. Required: {required_scopes}, Token has: {token_scopes}")
+                return None
+        
+        # Get user from database (same as get_current_user)
+        user = await get_user(email=email)
+        if user is None:
+            logger.warning(f"User not found for email: {email}")
+            return None
+        
+        return user
+        
+    except Exception as e:
+        logger.error(f"WebSocket authentication error: {str(e)}", exc_info=True)
+        return None
