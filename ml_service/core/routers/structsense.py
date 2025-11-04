@@ -138,6 +138,44 @@ async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
         except Exception:
             pass
 
+@router.websocket("/ws/{client_id}/pdf2reproschema")
+async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
+    """WebSocket endpoint for NER processing with JWT authentication."""
+    try:
+        # CRITICAL: Accept WebSocket connection FIRST before any other operations
+        # FastAPI/Starlette checks origin before calling this endpoint
+        # added because i was getting 403 despite cors update
+        origin = websocket.headers.get("origin")
+        logger.info(f"WebSocket connection attempt from origin: {origin}, client_id: {client_id}")
+
+        await websocket.accept()
+
+        user = await authenticate_websocket(websocket, required_scopes=["write"])
+        if not user:
+            logger.warning(f"Authentication failed for client_id: {client_id}")
+            await websocket.close(code=1008, reason="Authentication failed")
+            return
+
+        logger.info(f"WebSocket authenticated for user: {user.get('email')}, client_id: {client_id}")
+
+        # Extract api_key from query parameters ?api_key=XXXXX if provided
+        api_key = websocket.query_params.get("api_key") or None
+        logger.info(f"WebSocket connection established for client_id: {client_id}, api_key provided: {api_key is not None}")
+
+        # Use the correct path to the config file
+        config_path = os.path.join(os.path.dirname(__file__), "reproschema_config_gpt.yaml")
+        await _handle_websocket_connection(websocket, client_id, config_path, api_key)
+
+    except Exception as e:
+        logger.error(f"WebSocket connection error for client_id {client_id}: {str(e)}", exc_info=True)
+        # Attempt to close gracefully if connection is still valid
+        try:
+            # Only try to close if not already disconnected
+            if websocket.client_state.name != "DISCONNECTED":
+                await websocket.close(code=1011, reason="Internal server error")
+        except Exception:
+            pass
+
 @router.get("/job/{task_id}", include_in_schema=True)
 async def get_job_status(task_id: str):
     """REST endpoint to check job status by task_id."""
@@ -160,6 +198,8 @@ async def get_job_status(task_id: str):
         response["error"] = job["error"]
 
     return JSONResponse(response)
+
+
 
 
 
