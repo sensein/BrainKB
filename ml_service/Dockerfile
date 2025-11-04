@@ -11,6 +11,10 @@ WORKDIR /app
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
+# Install structsense with legacy resolver if needed
+RUN pip install --use-deprecated=legacy-resolver "structsense==0.0.4" || \
+    pip install --use-deprecated=legacy-resolver --no-deps "structsense==0.0.4"
+# Install remaining requirements
 RUN pip install -r requirements.txt
 
 # Copy the rest of the application
