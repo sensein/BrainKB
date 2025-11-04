@@ -81,7 +81,6 @@ def upsert_ner_annotations(input_data):
                 ann.setdefault("paper_title", "")
                 ann.setdefault("paper_location", "")
 
-                # ✅ Attach as top-level fields with exact names
                 if document_name:
                     ann["documentName"] = document_name
                 if processed_at:
@@ -865,12 +864,17 @@ def _to_bool(v, default):
 def _setup_environment():
     """Set up environment variables for downstream libraries."""
     env = load_environment()
-    os.environ["ENABLE_KG_SOURCE"] = env.get("ENABLE_KG_SOURCE", "False")
-    os.environ["EXTERNAL_PDF_EXTRACTION_SERVICE"] = os.getenv("EXTERNAL_PDF_EXTRACTION_SERVICE", "False")
-    os.environ["GROBID_SERVER_URL_OR_EXTERNAL_SERVICE"] = os.getenv("GROBID_SERVER_URL_OR_EXTERNAL_SERVICE",
-                                                              "http://localhost:8070")
-    os.environ["OLLAMA_API_ENDPOINT"] =  os.getenv("OLLAMA_API_ENDPOINT", "http://localhost:11434") #for docker "http://host.docker.internal:11434"
-    os.environ["OLLAMA_MODEL"] = os.getenv("OLLAMA_MODEL", "nomic-embed-text")
+    os.environ["ENABLE_KG_SOURCE"] = env.get("ENABLE_KG_SOURCE")
+    os.environ["ONTOLOGY_DATABASE"] = env.get("ONTOLOGY_DATABASE")
+    os.environ["WEAVIATE_GRPC_HOST"] = env.get("WEAVIATE_GRPC_HOST")
+    os.environ["WEAVIATE_HTTP_HOST"] = env.get("WEAVIATE_HTTP_HOST")
+    os.environ["WEAVIATE_API_KEY"] = env.get("WEAVIATE_API_KEY")
+    os.environ["EXTERNAL_PDF_EXTRACTION_SERVICE"] = env.get("EXTERNAL_PDF_EXTRACTION_SERVICE")
+    os.environ["GROBID_SERVER_URL_OR_EXTERNAL_SERVICE"] = env.get("GROBID_SERVER_URL_OR_EXTERNAL_SERVICE")
+    os.environ["OLLAMA_API_ENDPOINT"] =  env.get("OLLAMA_API_ENDPOINT")
+    os.environ["OLLAMA_MODEL"] = env.get("OLLAMA_MODEL")
+
+
 
     logger.info("*" * 100)
     logger.info("GROBID: %s", os.getenv("GROBID_SERVER_URL_OR_EXTERNAL_SERVICE"))
