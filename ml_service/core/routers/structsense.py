@@ -76,7 +76,7 @@ async def ws_info():
     })
 
 
-@router.websocket("/ws/{client_id}/ner")
+@router.websocket("/ws/ner/{client_id}")
 async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
     """WebSocket endpoint for NER processing with JWT authentication."""
     try:
@@ -114,7 +114,7 @@ async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
         except Exception:
             pass
 
-@router.websocket("/ws/{client_id}/extract-resources")
+@router.websocket("/ws/extract-resources/{client_id}")
 async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
     """WebSocket endpoint for NER processing with JWT authentication."""
     try:
@@ -152,7 +152,7 @@ async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
         except Exception:
             pass
 
-@router.websocket("/ws/{client_id}/pdf2reproschema")
+@router.websocket("/ws/pdf2reproschema/{client_id}")
 async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
     """WebSocket endpoint for NER processing with JWT authentication."""
     try:
