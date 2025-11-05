@@ -12,8 +12,7 @@ from starlette.websockets import WebSocket as StarletteWebSocket
 
 from core.configure_logging import configure_logging
 from core.routers.index import router as index_router
-from core.routers.jwt_auth import router as jwt_router
-from core.routers.resource_extraction_ingest import router as resource_router
+from core.routers.jwt_auth import router as jwt_router 
 from core.routers.structsense import router as structsense_router
 from core.database import init_db_pool, get_db_pool, debug_pool_status
 from core.configuration import load_environment
@@ -105,7 +104,6 @@ app.add_middleware(CorrelationIdMiddleware)
 app.include_router(index_router, prefix="/api")
 app.include_router(jwt_router, prefix="/api", tags=["Security"])
 app.include_router(structsense_router, prefix="/api", tags=["Multi-agent Systems"])
-app.include_router(resource_router, prefix="/api", tags=["Resource Extraction"])
 
 # Exception handlers
 @app.exception_handler(HTTPException)

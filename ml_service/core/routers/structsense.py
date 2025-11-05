@@ -16,22 +16,17 @@
 # @Software: PyCharm
 from fastapi import Request
 from fastapi import APIRouter, File, UploadFile, HTTPException, Form, Depends, WebSocket
-from typing import Optional
 from fastapi.responses import JSONResponse
 import logging
 from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes, authenticate_websocket
-from core.shared import parse_yaml_or_json
+from core.shared import parse_yaml_or_json, upsert_structured_resources
 from core.pydantic_models import AgentConfig, TaskConfig, EmbedderConfig, SearchKeyConfig
 from structsense import kickoff
 import os
-import tempfile
-import shutil
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from core.shared import upsert_ner_annotations
-from typing import Optional, Dict
 from core.shared import (_is_safe_path, run_kickoff_with_config, JobStatus, _job_storage,
                          _handle_websocket_connection, _get_job)
 
@@ -48,15 +43,34 @@ async def ws_info():
         "connect_to": "/ws/{client_id}/ner or /ws/{client_id}/resource",
         "protocol": [
             {"type": "message", "text": "string (required, non-empty)"},
-            {"type": "start", "name": "file.pdf", "size": "int (optional)"},
-            {"type": "end"},
+            {
+                "type": "start",
+                "input_type": "pdf|doi|text (required)",
+                "name": "file.pdf (required if input_type='pdf')",
+                "doi": "string (required if input_type='doi')",
+                "text_content": "string (required if input_type='text')",
+                "size": "int (optional, only for input_type='pdf')",
+                "config": "string (optional, config file path)",
+                "api_key": "string (optional)",
+                "chunking": "bool (optional)"
+            },
+            {"type": "end", "description": "Only required for input_type='pdf' file uploads"},
             {"type": "status", "task_id": "string (for reconnection)"}
         ],
-        "binary": "send PDF bytes between start/end",
+        "input_types": {
+            "pdf": "Upload PDF file via binary frames between start/end messages",
+            "doi": "Provide DOI string in start message, PDF will be fetched and processed automatically",
+            "text": "Provide text_content in start message, will be processed immediately"
+        },
+        "binary": "send PDF bytes between start/end (only for input_type='pdf')",
         "responses": [
-            {"type": "ack"}, {"type": "task_created", "task_id": "..."},
-            {"type": "job_status"}, {"type": "job_update"},
-            {"type": "progress"}, {"type": "error"}
+            {"type": "ack", "description": "Ready for file upload (only for input_type='pdf')"},
+            {"type": "status", "message": "string", "description": "Status updates during processing"},
+            {"type": "task_created", "task_id": "...", "filename": "...", "message": "..."},
+            {"type": "job_status"},
+            {"type": "job_update"},
+            {"type": "progress", "description": "Only for input_type='pdf' file uploads"},
+            {"type": "error"}
         ],
         "note": "Save task_id from 'task_created' message. Use 'status' message with task_id to check job progress after reconnection."
     })
@@ -269,3 +283,44 @@ async def save_ner_result(request: Request,
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error: {str(e)}")
 
+
+@router.post("/save/structured-resource")
+async def save_structured_resource(
+        request: Request,
+        user: Annotated[LoginUserIn, Depends(get_current_user)],
+):
+    try:
+        data = await request.json()
+
+        # Extract data from frontend
+        structured_data = data.get("data", [])
+        endpoint = data.get("endpoint", "")
+
+        # Get metadata from request or set defaults
+        document_name = data.get("documentName", f"structured_resource_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        processed_at = data.get("processedAt", datetime.now(timezone.utc).isoformat())
+        source_type = data.get("sourceType", "unknown")
+        source_content = data.get("sourceContent", "")
+
+        input_data = {
+            "data": structured_data,
+            "documentName": document_name,
+            "processedAt": processed_at,
+            "sourceType": source_type,
+            "sourceContent": source_content,
+            "endpoint": endpoint,
+            "user_id": user.id if hasattr(user, 'id') else None,
+            "user_email": user.email if hasattr(user, 'email') else None
+        }
+        print("*"*100)
+        print(type(input_data))
+        print("*"*100)
+        result = upsert_structured_resources(input_data=input_data)
+        return JSONResponse(content=result, status_code=200)
+
+    except Exception as e:
+        logger.error(f"Error saving structured resource: {str(e)}")
+        return JSONResponse(
+            content={"error": f"Failed to save structured resource: {str(e)}"},
+            status_code=500
+        )

@@ -46,6 +46,7 @@ from core.shared import load_environment  # adjust this import to your setup
 import json
 from pymongo import MongoClient, ReturnDocument
 from datetime import datetime, timezone
+import tempfile
 
 # for multi-agent
 UPLOAD_DIR = Path("uploads").resolve()
@@ -556,45 +557,6 @@ def is_valid_doi(doi: str) -> bool:
     return re.match(doi_pattern, doi, re.IGNORECASE) is not None
 
 
-def download_open_access_pdf(doi: str, filename: str = "paper.pdf"):
-    doi = doi.strip()
-    if not doi.startswith("http"):
-        if not is_valid_doi(doi):
-            return "Invalid DOI format."
-        doi_url = f"https://doi.org/{doi}"
-    else:
-        doi_url = doi
-
-    try:
-        # Step 1: Resolve DOI
-        response = requests.get(doi_url, allow_redirects=True, timeout=10)
-        response.raise_for_status()
-        final_url = response.url
-    except requests.RequestException as e:
-
-        return "Failed to resolve DOI"
-
-    try:
-        soup = BeautifulSoup(response.text, "html.parser")
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            if ".pdf" in href.lower():
-                pdf_url = urljoin(final_url, href)
-
-                # Step 3: Download PDF
-                pdf_response = requests.get(pdf_url, stream=True)
-                if pdf_response.status_code == 200:
-                    save_path = os.path.join(os.getcwd(), filename)
-                    with open(save_path, "wb") as f:
-                        for chunk in pdf_response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                else:
-                    return "Unable to download PDF"
-
-        return "Unable to download PDF"
-    except Exception as e:
-        return f"Error {e} occured, unable to download PDF"
-
 def fetch_open_access_pdf(doi: str) -> bytes | str:
     doi = doi.strip()
     if not doi.startswith("http"):
@@ -626,9 +588,81 @@ def fetch_open_access_pdf(doi: str) -> bytes | str:
     except Exception as e:
         return f"Error occurred: {e}"
 def extract_full_text_fitz(pdf_bytes):
-    doc = fitz.open(stream=BytesIO(pdf_bytes), filetype="pdf")
-    full_text = "\n".join(page.get_text() for page in doc)
-    return full_text
+    """
+    Extract full text from PDF bytes.
+    First tries external GROBID service if enabled, falls back to local PyMuPDF extraction.
+    
+    Args:
+        pdf_bytes: PDF file content as bytes
+        
+    Returns:
+        str: Extracted text content
+    """
+    env = load_environment()
+    grobid_url = env.get("GROBID_SERVER_URL_OR_EXTERNAL_SERVICE")
+    use_external = env.get("EXTERNAL_PDF_EXTRACTION_SERVICE", "False").lower() in ("true", "1", "yes")
+    
+    # Step 1: Try external service first if enabled (saves PDF to temp file, sends file, then deletes)
+    if use_external and grobid_url:
+        temp_file_path = None
+        try:
+            logger.info(f"Attempting to extract text using external service: {grobid_url}")
+            
+            # Save PDF bytes to a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+                temp_file.write(pdf_bytes)
+                temp_file_path = temp_file.name
+            
+            logger.info(f"Saved PDF to temporary file: {temp_file_path}")
+            
+            # Send PDF file to external service
+            # Try field name 'file' (common for file uploads)
+            with open(temp_file_path, 'rb') as pdf_file:
+                files = {'file': ('document.pdf', pdf_file, 'application/pdf')}
+                response = requests.post(
+                    grobid_url,
+                    files=files,
+                    timeout=30,  # 30 second timeout
+                    headers={'Accept': 'text/plain'}
+                )
+            
+            if response.status_code == 200:
+                extracted_text = response.text
+                logger.info(f"Successfully extracted text from PDF using external service ({len(extracted_text)} chars)")
+                return extracted_text
+            else:
+                logger.warning(
+                    f"External service returned status {response.status_code}: {response.text[:200]}. "
+                    "Falling back to local extraction from PDF bytes."
+                )
+        except requests.exceptions.Timeout:
+            logger.warning("External service request timed out. Falling back to local extraction from PDF bytes.")
+        except requests.exceptions.ConnectionError as e:
+            logger.warning(f"Could not connect to external service: {e}. Falling back to local extraction from PDF bytes.")
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Error calling external service: {e}. Falling back to local extraction from PDF bytes.")
+        except Exception as e:
+            logger.warning(f"Unexpected error calling external service: {e}. Falling back to local extraction from PDF bytes.")
+        finally:
+            # Always clean up temp file in finally block
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                    logger.debug(f"Cleaned up temporary file: {temp_file_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup temporary file {temp_file_path}: {cleanup_error}")
+    
+    # Step 2: Fallback to local extraction from PDF bytes using PyMuPDF (if external service fails or not enabled)
+    try:
+        logger.info("Using local PyMuPDF extraction from PDF bytes")
+        doc = fitz.open(stream=BytesIO(pdf_bytes), filetype="pdf")
+        full_text = "\n".join(page.get_text() for page in doc)
+        doc.close()
+        logger.info(f"Successfully extracted text using PyMuPDF ({len(full_text)} chars)")
+        return full_text
+    except Exception as e:
+        logger.error(f"Error during local PDF extraction from bytes: {e}")
+        raise Exception(f"Failed to extract text from PDF: {e}")
 
 
 
@@ -806,7 +840,7 @@ def _is_safe_path(p: Path, base: Path) -> bool:
 
 def run_kickoff_with_config(
     config_path: str,
-    source_path: Union[str, dict],
+    input_source: Union[str, dict],
     api_key: str,
     chunking: bool,
 ):
@@ -818,9 +852,9 @@ def run_kickoff_with_config(
     task_config = all_config.get("task_config", {})
     knowledge_config = all_config.get("knowledge_config", {})
 
-    # If your pipeline expects bytes instead of a path, use:
-    # input_source = source_path.read_bytes() if source_path else b""
-    input_source = str(source_path) if source_path else ""
+    # input_source can be a file path (str) or text content (str)
+    # Convert to string if needed
+    input_source_str = str(input_source) if input_source else ""
 
     # Call your new kickoff
     try:
@@ -829,7 +863,7 @@ def run_kickoff_with_config(
             taskconfig=task_config,
             embedderconfig=embedder_config,
             knowledgeconfig=knowledge_config,
-            input_source=input_source,
+            input_source=input_source_str,
             enable_human_feedback=False,
             api_key=api_key,
             enable_chunking=chunking,
@@ -927,7 +961,7 @@ def _get_job(task_id: str) -> Optional[Dict]:
 async def _process_job_background(
         task_id: str,
         config_path: str,
-        source_path: Path,
+        input_source: Union[str, Path],
         api_key: str,
         chunking: bool,
         target_path: Optional[Path] = None
@@ -944,7 +978,7 @@ async def _process_job_background(
         def _run():
             return run_kickoff_with_config(
                 config_path=config_path,
-                source_path=source_path,
+                input_source=input_source,
                 api_key=api_key,
                 chunking=chunking,
             )
@@ -1067,44 +1101,134 @@ async def _handle_websocket_connection(websocket: WebSocket, client_id: str, def
                         await websocket.send_text(_json_sendable({"type": "error", "message": "Transfer already in progress"}))
                         continue
 
-                    name = (meta.get("name") or "upload.pdf").split("/")[-1]
-                    if not name.lower().endswith(".pdf"):
-                        await websocket.send_text(_json_sendable({"type": "error", "message": "Only .pdf files allowed"}))
-                        continue
-
                     # pull kickoff overrides (optional) from the client
                     cfg_path = meta.get("config") or cfg_path
                     env_file = meta.get("env_file") or env_file
                     api_key = meta.get("api_key") or api_key
                     chunking = _to_bool(meta.get("chunking"), chunking)
+                    
+                    # Get input type and handle accordingly
+                    input_type = meta.get("input_type", "pdf")  # default to "pdf" for backward compatibility
+                    doi = meta.get("doi")
+                    text_content = meta.get("text_content")
+                    input_source = None
+                    filename = None
+                    target_path = None
 
-                    # expected size (optional)
-                    expected_bytes = meta.get("size")
-                    try:
-                        expected_bytes = int(expected_bytes) if expected_bytes is not None else None
-                    except Exception:
-                        expected_bytes = None
+                    if input_type == "doi" and doi:
+                        # Handle DOI input
+                        try:
+                            await websocket.send_text(_json_sendable({"type": "status", "message": "Fetching PDF from DOI..."}))
+                            pdf_bytes = await asyncio.to_thread(fetch_open_access_pdf, doi)
+                            
+                            if isinstance(pdf_bytes, str):
+                                # Error occurred
+                                await websocket.send_text(_json_sendable({"type": "error", "message": pdf_bytes}))
+                                continue
+                            
+                            # First try GROBID service (if enabled) - sends PDF bytes directly
+                            await websocket.send_text(_json_sendable({"type": "status", "message": "Attempting text extraction via GROBID service..."}))
+                            input_source = await asyncio.to_thread(extract_full_text_fitz, pdf_bytes)
+                            filename = f"doi_{doi.replace('/', '_')}.txt"
+                        except Exception as e:
+                            await websocket.send_text(_json_sendable({"type": "error", "message": f"Error processing DOI: {str(e)}"}))
+                            continue
+                    
+                    elif input_type == "pdf" and meta.get("name"):
+                        # Handle PDF file upload (existing behavior)
+                        name = meta.get("name").split("/")[-1]
+                        if not name.lower().endswith(".pdf"):
+                            await websocket.send_text(_json_sendable({"type": "error", "message": "Only .pdf files allowed"}))
+                            continue
 
-                    # safe path
-                    target_path = (UPLOAD_DIR / name).resolve()
-                    if not _is_safe_path(target_path, UPLOAD_DIR):
-                        await websocket.send_text(_json_sendable({"type": "error", "message": "Bad path"}))
-                        target_path = None
+                        # expected size (optional)
+                        expected_bytes = meta.get("size")
+                        try:
+                            expected_bytes = int(expected_bytes) if expected_bytes is not None else None
+                        except Exception:
+                            expected_bytes = None
+
+                        # safe path
+                        target_path = (UPLOAD_DIR / name).resolve()
+                        if not _is_safe_path(target_path, UPLOAD_DIR):
+                            await websocket.send_text(_json_sendable({"type": "error", "message": "Bad path"}))
+                            target_path = None
+                            continue
+
+                        # open file writer off the loop
+                        write_file = await asyncio.to_thread(open, target_path, "wb")
+                        received_bytes = 0
+                        filename = name
+
+                        # sidecar metadata (optional)
+                        if last_message_text:
+                            meta_path = target_path.with_suffix(target_path.suffix + ".json")
+                            await asyncio.to_thread(
+                                meta_path.write_text,
+                                json.dumps({"client_id": client_id, "message": last_message_text}, ensure_ascii=False, indent=2)
+                            )
+
+                        await websocket.send_text(_json_sendable({"type": "ack", "message": "ready"}))
+                        continue  # Wait for file upload via binary frames
+                    
+                    elif input_type == "text" and text_content:
+                        # Handle text input
+                        input_source = str(text_content)
+                        filename = "text_input.txt"
+                    
+                    else:
+                        await websocket.send_text(_json_sendable({
+                            "type": "error", 
+                            "message": f"Invalid input_type '{input_type}' or missing required data. For 'pdf', provide 'name'. For 'doi', provide 'doi'. For 'text', provide 'text_content'."
+                        }))
                         continue
 
-                    # open file writer off the loop
-                    write_file = await asyncio.to_thread(open, target_path, "wb")
-                    received_bytes = 0
+                    # For non-file inputs (doi, text), start processing immediately
+                    if input_source is not None:
+                        # Generate task_id and create job
+                        import uuid
+                        task_id = str(uuid.uuid4())
+                        job = _create_job(task_id, client_id, filename or "input")
 
-                    # sidecar metadata (optional)
-                    if last_message_text:
-                        meta_path = target_path.with_suffix(target_path.suffix + ".json")
-                        await asyncio.to_thread(
-                            meta_path.write_text,
-                            json.dumps({"client_id": client_id, "message": last_message_text}, ensure_ascii=False, indent=2)
-                        )
+                        # Send task_id to client immediately
+                        await websocket.send_text(_json_sendable({
+                            "type": "task_created",
+                            "task_id": task_id,
+                            "filename": filename,
+                            "message": "Processing started. You can disconnect and reconnect later with this task_id."
+                        }))
 
-                    await websocket.send_text(_json_sendable({"type": "ack", "message": "ready"}))
+                        # Start background processing task
+                        asyncio.create_task(_process_job_background(
+                            task_id=task_id,
+                            config_path=cfg_path,
+                            input_source=input_source,
+                            api_key=api_key,
+                            chunking=chunking,
+                            target_path=None  # No file to clean up for DOI/text
+                        ))
+
+                        # Monitor job and send updates if client is still connected
+                        async def _monitor_job():
+                            """Monitor job and send updates to connected client."""
+                            nonlocal client_connected
+                            while client_connected:
+                                job = _get_job(task_id)
+                                if not job:
+                                    break
+
+                                if job["status"] in [JobStatus.COMPLETED, JobStatus.FAILED]:
+                                    await _send_update(task_id)
+                                    break
+                                elif job["status"] == JobStatus.RUNNING:
+                                    await _send_update(task_id)
+
+                                await asyncio.sleep(2)  # Check every 2 seconds
+
+                        asyncio.create_task(_monitor_job())
+                        
+                        # reset state for next request
+                        last_message_text = None
 
                 elif mtype == "end":
                     if write_file is None:
@@ -1145,7 +1269,7 @@ async def _handle_websocket_connection(websocket: WebSocket, client_id: str, def
                     asyncio.create_task(_process_job_background(
                         task_id=task_id,
                         config_path=cfg_path,
-                        source_path=target_path,
+                        input_source=target_path,
                         api_key=api_key,
                         chunking=chunking,
                         target_path=target_path
