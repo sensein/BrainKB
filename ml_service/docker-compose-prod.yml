@@ -18,6 +18,7 @@ services:
       - webnet
     volumes:
       - .:/app:delegated
+      - ./crew_memory:/app/crew_memory
     deploy:
       resources:
         limits:
