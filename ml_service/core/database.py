@@ -43,29 +43,65 @@ pool = None
 
 async def init_db_pool():
     """Initialize the database connection pool."""
+    import os
     global pool
+    
+    # CRITICAL: Print to track pool instances
+    print("=" * 80)
+    print(f"[DB POOL INIT] Process ID: {os.getpid()}")
+    print(f"[DB POOL INIT] Pool instance before: {id(pool) if pool is not None else 'None'}")
+    
+    if pool is not None:
+        print(f"[DB POOL INIT] ⚠️  WARNING: Pool already exists! Instance ID: {id(pool)}")
+        print("=" * 80)
+        return pool
+    
+    print(f"[DB POOL INIT] ✅ Creating NEW pool instance...")
+    
     try:
-        # Adjusted pool size - consider environment-based configuration
         env_state = load_environment().get("ENV_STATE", "production").lower()
-        min_size = 2 if env_state == "development" else 10
-        max_size = 10 if env_state == "development" else 100
+        
+        # CRITICAL FIX: Account for multiple workers
+        # Gunicorn workers: each creates its own pool
+        num_workers = int(os.getenv("WEB_CONCURRENCY", "1" if env_state == "development" else "4"))
+        
+        # Calculate per-worker sizes to avoid exceeding PostgreSQL limits
+        # Target: ~40-50 total connections across all workers (leaves room for other services)
+        if env_state == "development":
+            min_size = 0  # Lazy init - no connections at startup
+            max_size = 5
+        else:
+            min_size = 0  # Lazy init - prevents connection stampede
+            # With 4 workers: 8 per worker = 32 total (safe)
+            max_size = max(3, min(8, 50 // num_workers))
+        
+        print(f"[DB POOL INIT] Workers: {num_workers}, min={min_size}, max={max_size} per worker")
+        print(f"[DB POOL INIT] Total potential: {max_size * num_workers} connections")
 
         pool = await asyncpg.create_pool(
             min_size=min_size,
             max_size=max_size,
-            max_inactive_connection_lifetime=300,  # Close inactive connections after 5 min
-            command_timeout=60,  # Timeout queries after 60 seconds
+            max_inactive_connection_lifetime=300,
+            command_timeout=60,
             **DB_SETTINGS
         )
-        logger.info(f"Database connection pool initialized (min={min_size}, max={max_size})")
+        print(f"[DB POOL INIT] ✅ Pool created! Instance ID: {id(pool)}")
+        print("=" * 80)
+        logger.info(f"Database connection pool initialized (workers={num_workers}, min={min_size}, max={max_size} per worker)")
         return pool
     except Exception as e:
+        print(f"[DB POOL INIT] ❌ ERROR: {str(e)}")
+        print("=" * 80)
         logger.error(f"Failed to initialize database connection pool: {str(e)}")
         raise
 
 async def get_db_pool():
     """Get the database connection pool. Initialize if not already done."""
+    import os
     global pool
+    
+    print(f"[GET DB POOL] Process ID: {os.getpid()}, Pool: {id(pool) if pool is not None else 'None'}")
+    
     if pool is None:
         pool = await init_db_pool()
     return pool
@@ -74,18 +110,52 @@ async def get_db_pool():
 async def get_db_connection():
     """
     Context manager for database connections.
-    Automatically handles acquire and release, even on errors.
-
+    
+    IMPORTANT: 
+    - The POOL stays alive for the entire application lifetime (not closed after each request)
+    - Individual CONNECTIONS are acquired per request and released back to the pool
+    - This is efficient: pool is created once, connections are reused
+    
     Usage:
         async with get_db_connection() as conn:
             result = await conn.fetch("SELECT * FROM table")
     """
+    import os
+    import asyncio
     pool = await get_db_pool()
-    conn = await pool.acquire()
+    
+    # Get pool status before acquiring
+    pool_size = pool.get_size()
+    idle_size = pool.get_idle_size()
+    in_use = pool_size - idle_size
+    
+    print(f"[CONN ACQUIRE] Process {os.getpid()}: Acquiring connection... (pool: size={pool_size}, idle={idle_size}, in_use={in_use})")
+    
+    # Add timeout to prevent indefinite waiting
+    try:
+        conn = await asyncio.wait_for(pool.acquire(), timeout=10.0)
+        print(f"[CONN ACQUIRE] ✅ Connection acquired! (pool now: size={pool.get_size()}, idle={pool.get_idle_size()}, in_use={pool.get_size() - pool.get_idle_size()})")
+    except asyncio.TimeoutError:
+        logger.error("Connection acquisition timed out after 10 seconds")
+        raise HTTPException(
+            status_code=503,
+            detail="Database connection timeout. Please try again."
+        )
+    except asyncpg.exceptions.TooManyConnectionsError as e:
+        logger.error(f"Too many database connections: {str(e)}")
+        raise HTTPException(
+            status_code=503,
+            detail="Database temporarily unavailable due to connection limit. Please try again in a moment."
+        )
+    
     try:
         yield conn
     finally:
+        # Always release connection back to pool (not closed, just returned to pool)
         await pool.release(conn)
+        pool_size_after = pool.get_size()
+        idle_size_after = pool.get_idle_size()
+        print(f"[CONN RELEASE] ✅ Connection released back to pool! (pool now: size={pool_size_after}, idle={idle_size_after}, in_use={pool_size_after - idle_size_after})")
 
 # FastAPI dependency for automatic connection management in routes
 async def get_db() -> AsyncGenerator[asyncpg.Connection, None]:
