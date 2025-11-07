@@ -25,21 +25,35 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    import os
     configure_logging()
     logger.info("Starting FastAPI application")
+    
+    print("=" * 80)
+    print(f"[APP STARTUP] FastAPI application starting...")
+    print(f"[APP STARTUP] Process ID: {os.getpid()}")
+    print(f"[APP STARTUP] About to initialize database pool...")
+    print("=" * 80)
 
     try:
         # Initialize database connection pool
         await init_db_pool()
+        print(f"[APP STARTUP] ✅ Database pool initialization completed")
         logger.info("Database connection pool initialized successfully")
     except Exception as e:
+        print(f"[APP STARTUP] ❌ ERROR: Failed to initialize database pool: {e}")
         logger.error(f"Failed to initialize database pool: {e}")
         raise
 
     yield
 
     # Shutdown
+    import os
     logger.info("Initiating FastAPI shutdown sequence")
+    
+    print("=" * 80)
+    print(f"[APP SHUTDOWN] Process {os.getpid()}: Closing database connection pool...")
+    print("=" * 80)
 
     try:
         # Debug: Check pool status before closing
@@ -47,23 +61,33 @@ async def lifespan(app: FastAPI):
 
         pool = await get_db_pool()
         if pool:
+            pool_size = pool.get_size()
+            idle_size = pool.get_idle_size()
+            print(f"[APP SHUTDOWN] Pool status before close: size={pool_size}, idle={idle_size}, in_use={pool_size - idle_size}")
+            
             logger.info("Closing database connection pool...")
             try:
                 # Try graceful close with timeout
                 await asyncio.wait_for(pool.close(), timeout=10.0)
+                print(f"[APP SHUTDOWN] ✅ Pool closed gracefully - all connections closed")
                 logger.info("Database connection pool closed gracefully")
             except asyncio.TimeoutError:
                 logger.warning("Database pool closure timed out after 10 seconds")
                 logger.warning("Forcing termination of remaining connections...")
                 await pool.terminate()
+                print(f"[APP SHUTDOWN] ⚠️  Pool terminated forcefully")
                 logger.info("Database connection pool terminated")
             except Exception as e:
                 logger.error(f"Error during pool closure: {e}")
                 logger.info("Attempting forced termination...")
                 await pool.terminate()
+                print(f"[APP SHUTDOWN] ⚠️  Pool terminated after error")
                 logger.info("Database connection pool terminated")
         else:
+            print(f"[APP SHUTDOWN] ⚠️  No pool found to close")
             logger.warning("No database pool found during shutdown")
+        
+        print("=" * 80)
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
 
