@@ -217,7 +217,7 @@ async def get_job_status(task_id: str):
 
 
 
-@router.post("/multiagent/result/save",
+@router.post("/save/ner",
              dependencies=[Depends(require_scopes(["write"]))],
              summary="Save the results of the multi-agent model",
              description="""
