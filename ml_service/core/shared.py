@@ -55,66 +55,198 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 def upsert_ner_annotations(input_data):
     """
     Upserts NER annotations into a MongoDB collection with versioning and history.
+    Dynamically detects the key containing NER data (any key with dict of lists structure).
     """
 
     env = load_environment()
     mongo_url = env.get("MONGO_DB_URL")
     db_name = env.get("NER_DATABASE")
     collection_name = env.get("NER_COLLECTION")
-    client = MongoClient(mongo_url)
+    client = None
 
     try:
+        client = MongoClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
         db = client[db_name]
         collection = db[collection_name]
 
-        judge_terms = input_data["judged_structured_information"]
+        # Dynamically detect NER data key - look for dict structure with lists of dicts
+        judge_terms = None
+        ner_data_key = None
+        
+        def is_ner_structure(value):
+            """Check if value looks like NER data structure: dict with lists of dicts"""
+            if not isinstance(value, dict):
+                return False
+            # Check if it has at least one key with a list of dicts
+            for key, val in value.items():
+                if isinstance(val, list) and len(val) > 0:
+                    if isinstance(val[0], dict) and "entity" in val[0]:
+                        return True
+            return False
+        
+        # Try known keys first
+        for known_key in ["judge_ner_terms", "judged_structured_information"]:
+            if known_key in input_data and is_ner_structure(input_data[known_key]):
+                judge_terms = input_data[known_key]
+                ner_data_key = known_key
+                print(f"Found NER data in known key: {known_key}")
+                break
+        
+        # If not found, search all keys dynamically
+        if not judge_terms:
+            for key, value in input_data.items():
+                # Skip metadata keys
+                if key in ["documentName", "processedAt", "sourceType", "sourceContent"]:
+                    continue
+                if is_ner_structure(value):
+                    judge_terms = value
+                    ner_data_key = key
+                    print(f"Found NER data in dynamic key: {key}")
+                    break
+        
+        if not judge_terms:
+            print(f"⚠️  No NER data found in input_data. Available keys: {list(input_data.keys())}")
+            return {
+                "Inserted": 0,
+                "Updated": 0,
+                "Error": "No NER data structure found in input data"
+            }
+
+        # Get or generate documentName and processedAt
         document_name = input_data.get("documentName")
         processed_at = input_data.get("processedAt")
+        
+        # If documentName not provided, try to extract from first annotation
+        if not document_name:
+            # Try to get paper_title or doi from first annotation
+            for group_key, annotations in judge_terms.items():
+                if isinstance(annotations, list) and len(annotations) > 0:
+                    first_ann = annotations[0]
+                    if isinstance(first_ann, dict):
+                        # Try paper_title first
+                        paper_title = first_ann.get("paper_title", "")
+                        if isinstance(paper_title, list) and paper_title:
+                            paper_title = paper_title[0]
+                        if paper_title and paper_title != "null" and paper_title.strip():
+                            document_name = str(paper_title).strip()
+                            print(f"Using paper_title as documentName: {document_name[:50]}...")
+                            break
+                        # Fallback to doi
+                        doi = first_ann.get("doi", "")
+                        if isinstance(doi, list) and doi:
+                            doi = doi[0]
+                        if doi and doi != "null" and doi.strip():
+                            document_name = str(doi).strip()
+                            print(f"Using doi as documentName: {document_name}")
+                            break
+            
+            # If still no documentName, use "na"
+            if not document_name:
+                document_name = "na"
+                print("Using 'na' as documentName (no paper_title or doi found)")
+        
+        # If processedAt not provided, use current timestamp
+        if not processed_at:
+            processed_at = datetime.now(timezone.utc).isoformat()
+            print(f"Using current timestamp as processedAt: {processed_at}")
 
         now = datetime.now(timezone.utc)
 
         inserted = 0
         updated = 0
 
-        for _, annotations in judge_terms.items():
-            for ann in annotations:
-                ann.setdefault("doi", "")
-                ann.setdefault("paper_title", "")
-                ann.setdefault("paper_location", "")
+        print(f"Processing NER annotations from key '{ner_data_key}' with {len(judge_terms)} groups")
+        print(f"documentName: {document_name}, processedAt: {processed_at}")
 
+        for group_key, annotations in judge_terms.items():
+            if not isinstance(annotations, list):
+                print(f"⚠️  Skipping non-list annotations for group {group_key}")
+                continue
+                
+            print(f"Processing group {group_key} with {len(annotations)} annotations")
+            
+            for ann_idx, ann in enumerate(annotations):
+                if not isinstance(ann, dict):
+                    print(f"⚠️  Skipping non-dict annotation at group {group_key}, index {ann_idx}")
+                    continue
+
+                # Handle fields that might be lists (extract first value if list)
+                def get_value(field_name, default=""):
+                    value = ann.get(field_name, default)
+                    if isinstance(value, list):
+                        # Extract first non-null value from list
+                        for item in value:
+                            if item is not None and item != "null" and item != "":
+                                return str(item).strip()
+                        return default
+                    return str(value).strip() if value else default
+
+                # Extract and normalize fields
+                doi = get_value("doi", "")
+                paper_title = get_value("paper_title", "")
+                paper_location = get_value("paper_location", "")
+                entity = ann.get("entity", "")
+                
+                # Ensure entity is a string
+                if isinstance(entity, list):
+                    entity = entity[0] if entity else ""
+                entity = str(entity).strip()
+
+                # Add metadata
                 if document_name:
                     ann["documentName"] = document_name
                 if processed_at:
                     ann["processedAt"] = processed_at
 
+                # Create filter criteria (use normalized values)
                 filter_criteria = {
-                    "doi": ann["doi"],
-                    "paper_title": ann["paper_title"],
-                    "paper_location": ann["paper_location"],
-                    "entity": ann["entity"]
+                    "doi": doi,
+                    "paper_title": paper_title,
+                    "paper_location": paper_location,
+                    "entity": entity
                 }
+
+                # Clean filter criteria - remove empty values
+                filter_criteria = {k: v for k, v in filter_criteria.items() if v}
+
+                if not filter_criteria or not entity:
+                    print(f"⚠️  Skipping annotation with empty filter criteria: {ann.get('entity', 'unknown')}")
+                    continue
+
+                print(f"Upserting annotation: entity='{entity}', doi='{doi}', paper_title='{paper_title[:50]}...'")
 
                 existing_doc = collection.find_one(filter_criteria)
                 version = 1
                 if existing_doc:
                     version = existing_doc.get("version", 1) + 1
                     updated += 1
+                    print(f"  → Updating existing document (version {version})")
                 else:
                     inserted += 1
+                    print(f"  → Inserting new document (version {version})")
 
-                update_fields = {**ann, "updated_at": now, "version": version}
-                update_fields = {k: v for k, v in update_fields.items() if v is not None}
+                # Clean annotation data - handle lists properly
+                cleaned_ann = {}
+                for key, value in ann.items():
+                    if value is None or value == "null":
+                        continue
+                    if isinstance(value, list):
+                        # Keep lists as-is for fields like sentence, start, end, etc.
+                        cleaned_ann[key] = [v for v in value if v is not None and v != "null"]
+                    else:
+                        cleaned_ann[key] = value
+
+                update_fields = {**cleaned_ann, "updated_at": now, "version": version}
 
                 history_entry = {
                     "timestamp": now,
                     "updated_fields": {
-                        k: ann[k]
-                        for k in ann
-                        if k not in filter_criteria and ann[k] is not None
+                        k: v for k, v in cleaned_ann.items()
+                        if k not in filter_criteria and v is not None
                     },
                 }
 
-                collection.find_one_and_update(
+                result = collection.find_one_and_update(
                     filter_criteria,
                     {
                         "$set": update_fields,
@@ -124,14 +256,32 @@ def upsert_ner_annotations(input_data):
                     upsert=True,
                     return_document=ReturnDocument.AFTER
                 )
+                
+                if result:
+                    print(f"  ✅ Successfully saved annotation with _id: {result.get('_id')}")
+                else:
+                    print(f"  ⚠️  Upsert completed but no document returned")
 
+        print(f"NER upsert complete: Inserted={inserted}, Updated={updated}")
 
         return {
             "Inserted": inserted,
-            "Updated": updated
+            "Updated": updated,
+            "Total_Processed": inserted + updated
         }
+    except Exception as e:
+        print(f"❌ Exception in upsert_ner_annotations: {str(e)}")
+        print(f"Exception type: {type(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
     finally:
-        client.close()
+        if client:
+            try:
+                client.close()
+                print("MongoDB client closed successfully")
+            except Exception as close_error:
+                print(f"Error closing MongoDB client: {close_error}")
 
 
 def upsert_structured_resources(input_data):

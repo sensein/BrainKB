@@ -217,7 +217,7 @@ async def get_job_status(task_id: str):
 
 
 
-@router.post("/multiagent/result/save",
+@router.post("/save/ner",
              dependencies=[Depends(require_scopes(["write"]))],
              summary="Save the results of the multi-agent model",
              description="""
@@ -266,21 +266,11 @@ async def save_ner_result(request: Request,
                           ):
     try:
         data = await request.json()
-
-        entity_map = data.get("entities", {})
-        document_name = data.get("documentName")
-        processed_at = data.get("processedAt")
-
-        input_data = {
-            "judged_structured_information": entity_map,
-            "documentName": document_name,
-            "processedAt": processed_at
-        }
-
-        result = upsert_ner_annotations(input_data=input_data)
+        result = upsert_ner_annotations(input_data=data)
         return JSONResponse(content=result, status_code=200)
 
     except Exception as e:
+        logger.error(f"Error in save_ner_result: {str(e)}", exc_info=True)
         raise HTTPException(status_code=400, detail=f"Error: {str(e)}")
 
 
