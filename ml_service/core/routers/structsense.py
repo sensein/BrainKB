@@ -292,6 +292,10 @@ async def save_structured_resource(
     try:
         data = await request.json()
 
+        print("*"*100)
+        print(data)
+        print("*"*100)
+
         # Extract data from frontend
         structured_data = data.get("data", [])
         endpoint = data.get("endpoint", "")

@@ -171,14 +171,25 @@ def upsert_structured_resources(input_data):
                 print(f"Skipping non-dict resource: {resource_data}")
                 continue
 
-            #  Attach metadata as top-level fields
-            resource_data["documentName"] = str(document_name or "")
-            resource_data["processedAt"] = str(processed_at or "")
-            resource_data["sourceType"] = str(source_type or "")
-            resource_data["sourceContent"] = str(source_content or "")
+            # Save input data as-is without flattening - preserve complete nested structure
+            # Create a copy to avoid modifying the original
+            import copy
+            complete_data = copy.deepcopy(resource_data)
+            
+            print(f"Original data structure preserved with keys: {list(complete_data.keys())}")
 
-            # Dynamic structure detection and cleaning
+            # Attach metadata as top-level fields (without modifying nested structure)
+            complete_data["documentName"] = str(document_name or "")
+            complete_data["processedAt"] = str(processed_at or "")
+            complete_data["sourceType"] = str(source_type or "")
+            complete_data["sourceContent"] = str(source_content or "")
+            
+            # Use complete_data as the resource_data for processing
+            resource_data = complete_data
+
+            # Clean the data while preserving structure (recursive cleaning)
             cleaned_resource_data = clean_and_validate_structure(resource_data)
+            print(f"Cleaned resource data keys (structure preserved): {list(cleaned_resource_data.keys())}")
 
             # Dynamic filter criteria generation
             filter_criteria = generate_filter_criteria(cleaned_resource_data, document_name, idx, now)
@@ -190,19 +201,20 @@ def upsert_structured_resources(input_data):
             if existing_doc:
                 version = existing_doc.get("version", 1) + 1
                 updated += 1
+                print(f"Updating existing document (version {version})")
             else:
                 inserted += 1
+                print(f"Inserting new document (version {version})")
 
             # Prepare update fields with versioning
             update_fields = {**cleaned_resource_data, "updated_at": now, "version": version}
 
-            # Create history entry
+            # Create history entry with all changed fields
             history_entry = {
                 "timestamp": now,
                 "updated_fields": {
-                    k: resource_data[k]
-                    for k in resource_data
-                    if k not in filter_criteria and resource_data[k] is not None and resource_data[k] != "null"
+                    k: v for k, v in cleaned_resource_data.items()
+                    if k not in filter_criteria and v is not None and v != "null" and v != ""
                 },
                 "source_type": source_type,
                 "source_content_preview": source_content[:200] + "..." if len(source_content) > 200 else source_content
@@ -210,8 +222,9 @@ def upsert_structured_resources(input_data):
 
             print(f"About to upsert with filter: {filter_criteria}")
             print(f"Update fields keys: {list(update_fields.keys())}")
+            print(f"History entry has {len(history_entry['updated_fields'])} updated fields")
 
-            collection.find_one_and_update(
+            result = collection.find_one_and_update(
                 filter_criteria,
                 {
                     "$set": update_fields,
@@ -221,6 +234,11 @@ def upsert_structured_resources(input_data):
                 upsert=True,
                 return_document=ReturnDocument.AFTER
             )
+            
+            if result:
+                print(f"✅ Successfully upserted document with _id: {result.get('_id')}")
+            else:
+                print(f"⚠️  Upsert completed but no document returned")
 
         return {
             "Inserted": inserted,
@@ -266,16 +284,42 @@ def clean_and_validate_structure(data):
             if nested_cleaned:  # Only include if not empty
                 cleaned_data[key] = nested_cleaned
         elif isinstance(value, list):
-            # Clean list elements
+            # Clean list elements - preserve structure for dicts and lists
             cleaned_list = []
             for item in value:
-                if item is not None and item != "null" and item != "":
-                    if isinstance(item, str):
-                        cleaned_item = item.strip()
-                        if cleaned_item and cleaned_item != "null":
-                            cleaned_list.append(cleaned_item)
-                    else:
-                        cleaned_list.append(str(item))
+                if item is None or item == "null" or item == "":
+                    continue
+                    
+                if isinstance(item, str):
+                    cleaned_item = item.strip()
+                    if cleaned_item and cleaned_item != "null":
+                        cleaned_list.append(cleaned_item)
+                elif isinstance(item, dict):
+                    # Recursively clean dict items in list - preserve structure
+                    cleaned_dict = clean_and_validate_structure(item)
+                    if cleaned_dict:  # Only include if not empty
+                        cleaned_list.append(cleaned_dict)
+                elif isinstance(item, list):
+                    # Recursively clean nested lists
+                    cleaned_nested_list = []
+                    for nested_item in item:
+                        if nested_item is None or nested_item == "null" or nested_item == "":
+                            continue
+                        if isinstance(nested_item, dict):
+                            cleaned_nested_dict = clean_and_validate_structure(nested_item)
+                            if cleaned_nested_dict:
+                                cleaned_nested_list.append(cleaned_nested_dict)
+                        elif isinstance(nested_item, str):
+                            cleaned_nested_item = nested_item.strip()
+                            if cleaned_nested_item and cleaned_nested_item != "null":
+                                cleaned_nested_list.append(cleaned_nested_item)
+                        else:
+                            cleaned_nested_list.append(nested_item)
+                    if cleaned_nested_list:
+                        cleaned_list.append(cleaned_nested_list)
+                else:
+                    # Preserve other types as-is (numbers, booleans, etc.)
+                    cleaned_list.append(item)
             if cleaned_list:  # Only include if not empty
                 cleaned_data[key] = cleaned_list
         else:
@@ -288,37 +332,151 @@ def clean_and_validate_structure(data):
 def generate_filter_criteria(data, document_name, idx, now):
     """
     Dynamically generates filter criteria based on available fields.
+    Works with nested structures - searches recursively for identifier fields.
     Prioritizes fields that are most likely to be unique identifiers.
     """
     filter_criteria = {
         "documentName": document_name
     }
 
-    # Priority order for unique identifiers
+    # Priority order for unique identifiers (searches nested structures)
     priority_fields = [
-        ("name", "name"),
-        ("resource.name", "resource.name"),
-        ("type", "type"),
-        ("resource.type", "resource.type"),
-        ("category", "category"),
-        ("resource.category", "resource.category"),
-        ("id", "id"),
-        ("resource.id", "resource.id")
+        "name",
+        "type", 
+        "category",
+        "id",
+        "url"
     ]
 
+    # Recursively search for identifier fields in nested structure
+    def find_field_in_nested(obj, field_name, path=""):
+        """Recursively search for a field in nested dict/list structure, returns (value, full_path)"""
+        if isinstance(obj, dict):
+            # Check if field exists at current level
+            if field_name in obj:
+                value = obj[field_name]
+                if value and (isinstance(value, str) and value.strip()) or (not isinstance(value, str) and value):
+                    full_path = f"{path}.{field_name}" if path else field_name
+                    return (value, full_path)
+            # Recursively search nested dicts
+            for key, val in obj.items():
+                result = find_field_in_nested(val, field_name, f"{path}.{key}" if path else key)
+                if result:
+                    return result
+        elif isinstance(obj, list):
+            # Search in list items (use array index notation for MongoDB)
+            for idx, item in enumerate(obj):
+                result = find_field_in_nested(item, field_name, f"{path}.{idx}" if path else str(idx))
+                if result:
+                    return result
+        return None
+
     # Try to find the best unique identifier
-    for field_path, filter_key in priority_fields:
-        value = get_nested_value(data, field_path)
-        if value and value.strip():
-            filter_criteria[filter_key] = value.strip()
+    for field_name in priority_fields:
+        result = find_field_in_nested(data, field_name)
+        if result:
+            value, full_path = result
+            # Use dot notation for nested fields in MongoDB query
+            filter_key = full_path if "." in full_path else field_name
+            filter_criteria[filter_key] = str(value).strip() if isinstance(value, str) else str(value)
+            print(f"Found identifier '{field_name}' at path '{full_path}': {filter_criteria[filter_key]}")
             break
 
     # If no good identifier found, create a fallback
     if len(filter_criteria) == 1:  # Only has documentName
         fallback_name = f"unnamed_resource_{now.strftime('%Y%m%d_%H%M%S')}_{idx}"
         filter_criteria["name"] = fallback_name
+        print(f"Using fallback identifier: {fallback_name}")
 
     return filter_criteria
+
+
+def extract_and_flatten_nested_data(data, max_depth=10, current_depth=0):
+    """
+    Recursively extracts and flattens nested data structures.
+    Handles any nested dicts, lists, and preserves all data.
+    
+    Strategy:
+    - If nested dict contains lists of dicts, extract the first dict from each list
+    - Merge all nested dicts into a flat structure
+    - Preserve top-level metadata
+    - Handle any key names, not just specific ones
+    
+    Args:
+        data: The data structure to flatten (dict, list, or primitive)
+        max_depth: Maximum recursion depth to prevent infinite loops
+        current_depth: Current recursion depth
+    
+    Returns:
+        Flattened dictionary with all extracted data
+    """
+    if current_depth >= max_depth:
+        print(f"⚠️  Max depth {max_depth} reached, returning data as-is")
+        return data if isinstance(data, dict) else {}
+    
+    if not isinstance(data, dict):
+        return {}
+    
+    result = {}
+    
+    for key, value in data.items():
+        if value is None or value == "null":
+            continue
+        
+        if isinstance(value, dict):
+            # Check if this dict contains lists of dicts (like judge_resource.1[0])
+            # If so, extract the first dict from the first list found
+            has_list_of_dicts = False
+            for sub_key, sub_value in value.items():
+                if isinstance(sub_value, list) and len(sub_value) > 0:
+                    if isinstance(sub_value[0], dict):
+                        has_list_of_dicts = True
+                        # Extract and merge the first dict from the list
+                        first_dict = sub_value[0]
+                        flattened_first = extract_and_flatten_nested_data(first_dict, max_depth, current_depth + 1)
+                        for fk, fv in flattened_first.items():
+                            if fk not in result:
+                                result[fk] = fv
+                        print(f"Extracted data from {key}.{sub_key}[0]")
+                        break
+            
+            # Recursively flatten nested dict (even if we extracted from list)
+            nested_flattened = extract_and_flatten_nested_data(value, max_depth, current_depth + 1)
+            # Merge nested dict into result
+            for nested_key, nested_value in nested_flattened.items():
+                if nested_key not in result:  # Don't overwrite existing top-level keys
+                    result[nested_key] = nested_value
+                elif isinstance(result[nested_key], dict) and isinstance(nested_value, dict):
+                    # Merge dicts if both are dicts
+                    result[nested_key] = {**result[nested_key], **nested_value}
+            
+            # Also keep the original nested structure with a prefixed key for reference
+            result[f"_nested_{key}"] = value
+        
+        elif isinstance(value, list):
+            # Handle lists - extract data from list items
+            list_data = []
+            for item in value:
+                if isinstance(item, dict):
+                    # Recursively flatten dict items in list
+                    flattened_item = extract_and_flatten_nested_data(item, max_depth, current_depth + 1)
+                    list_data.append(flattened_item)
+                    # If it's the first item and has useful fields, merge into result
+                    if len(list_data) == 1 and flattened_item:
+                        for item_key, item_value in flattened_item.items():
+                            if item_key not in result:  # Don't overwrite existing keys
+                                result[item_key] = item_value
+                else:
+                    list_data.append(item)
+            
+            # Keep the list as-is with original key
+            result[key] = list_data if list_data else value
+        
+        else:
+            # Primitive value - keep as-is
+            result[key] = value
+    
+    return result
 
 
 def get_nested_value(data, path):
