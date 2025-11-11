@@ -1,0 +1,35 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      # Persist models/cache; adjust the right-hand path if your image uses a different home
+      - ollama:/root/.ollama
+    # Start server, wait until it's responsive, then pull only if the model isn't present
+    command: >
+      sh -lc '
+        set -e
+        ollama serve &
+        until ollama list >/dev/null 2>&1; do
+          echo "Waiting for ollama server to start..."
+          sleep 1
+        done
+        if ! ollama list | awk "{print \$1}" | grep -qx "nomadic-text"; then
+          echo "Pulling model nomadic-text..."
+          ollama pull nomadic-text
+        else
+          echo "Model nomadic-text already present."
+        fi
+        wait
+      '
+    # Optional but helpful: let Docker know when the service is healthy
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  ollama:
