@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
-NAME=ollama; PORT=11434; VOL=ollama; MODEL=nomic-embed-text
+NAME="ollama"
+PORT="11434"
+VOL="ollama"
+MODEL="nomic-embed-text"
 
 sudo docker rm -f "$NAME" >/dev/null 2>&1 || true
 echo "Starting container..."
