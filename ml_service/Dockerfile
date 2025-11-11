@@ -25,14 +25,14 @@ RUN mkdir -p /app/core && \
     chmod -R 755 /app/core
 
 # Expose the port the app runs on
-EXPOSE 8009
+EXPOSE 8007
 
 # Set WEB_CONCURRENCY to match number of workers for pool sizing
 ENV WEB_CONCURRENCY=4
 
 # Command to run the application with optimized settings
 CMD [ "gunicorn", "core.main:app", \
-      "--bind", "0.0.0.0:8009", \
+      "--bind", "0.0.0.0:8007", \
       "--workers", "4", \
       "--worker-class", "uvicorn.workers.UvicornWorker", \
       "--threads", "4", \
