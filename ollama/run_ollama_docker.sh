@@ -19,7 +19,7 @@ done
 [[ "${ok:-}" == "1" ]] || { echo "Timeout waiting for API"; sudo docker logs "$NAME" || true; exit 1; }
 
 # Pull model if missing
-if ! sudo docker exec "$NAME" sh -lc "ollama list | awk '{print \$1}' | grep -qx $MODEL"; then
+if ! sudo docker exec "$NAME" ollama list | awk 'NR>1 {print $1}' | grep -q "^${MODEL}:"; then
   echo "Pulling model: $MODEL"; sudo docker exec -it "$NAME" ollama pull "$MODEL"
 fi
 
