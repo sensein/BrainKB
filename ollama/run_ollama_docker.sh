@@ -23,7 +23,7 @@ done
 
 # Pull model if missing
 if ! sudo docker exec "$NAME" ollama list | awk 'NR>1 {print $1}' | grep -q "^${MODEL}:"; then
-  echo "Pulling model: $MODEL"; sudo docker exec -it "$NAME" ollama pull "$MODEL"
+  echo "Pulling model: $MODEL"; sudo docker exec "$NAME" ollama pull "$MODEL"
 fi
 
 echo "Ready. Test:"
