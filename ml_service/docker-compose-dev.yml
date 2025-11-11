@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8009:8009"
+      - "8007:8007"
     env_file:
       - core/.env
     environment:
