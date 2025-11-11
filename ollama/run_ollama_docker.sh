@@ -7,7 +7,7 @@ MODEL="nomic-embed-text"
 
 sudo docker rm -f "$NAME" >/dev/null 2>&1 || true
 echo "Starting container..."
-if ! sudo docker run -d --name "$NAME" -p "$PORT":11434 -v "$VOL":/root/.ollama -e OLLAMA_HOST=0.0.0.0 ollama/ollama >/dev/null; then
+if ! sudo docker run -d --name "$NAME" -p "$PORT":11434 -v "$VOL":/root/.ollama -e OLLAMA_HOST=0.0.0.0 ollama/ollama:latest >/dev/null; then
   echo "docker run failed"; exit 1
 fi
 
