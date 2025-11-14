@@ -29,9 +29,30 @@ from datetime import datetime, timezone
 from core.shared import upsert_ner_annotations
 from core.shared import (_is_safe_path, run_kickoff_with_config, JobStatus, _job_storage,
                          _handle_websocket_connection, _get_job)
+from core.configuration import load_environment
+from pymongo import MongoClient
+from typing import Optional
+from bson import ObjectId
 
 
 logger = logging.getLogger(__name__)
+
+
+def serialize_mongo_document(doc):
+    """
+    Recursively convert MongoDB document to JSON-serializable format.
+    Converts ObjectId to string and datetime to ISO format string.
+    """
+    if isinstance(doc, dict):
+        return {key: serialize_mongo_document(value) for key, value in doc.items()}
+    elif isinstance(doc, list):
+        return [serialize_mongo_document(item) for item in doc]
+    elif isinstance(doc, ObjectId):
+        return str(doc)
+    elif isinstance(doc, datetime):
+        return doc.isoformat()
+    else:
+        return doc
 
 router = APIRouter(tags=["Multi-agent Systems"])
 
@@ -318,3 +339,179 @@ async def save_structured_resource(
             content={"error": f"Failed to save structured resource: {str(e)}"},
             status_code=500
         )
+
+
+@router.get("/ner",
+            # dependencies=[Depends(require_scopes(["read"]))],
+            summary="Get saved NER annotations",
+            description="""
+            Retrieves saved NER annotations from MongoDB.
+            Supports filtering by documentName, date range, and pagination.
+            """)
+async def get_ner_annotations(
+    request: Request,
+    # user: Annotated[LoginUserIn, Depends(get_current_user)],
+    document_name: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 100,
+    skip: int = 0
+):
+    """
+    Get saved NER annotations with optional filtering and pagination.
+    
+    Query Parameters:
+    - document_name: Filter by document name
+    - start_date: Filter by processedAt start date (ISO format)
+    - end_date: Filter by processedAt end date (ISO format)
+    - limit: Maximum number of results (default: 100, max: 1000)
+    - skip: Number of results to skip for pagination (default: 0)
+    """
+    client = None
+    try:
+        env = load_environment()
+        mongo_url = env.get("MONGO_DB_URL")
+        db_name = env.get("NER_DATABASE")
+        collection_name = env.get("NER_COLLECTION")
+        
+        if not mongo_url or not db_name or not collection_name:
+            raise HTTPException(
+                status_code=500,
+                detail="MongoDB configuration not found"
+            )
+        
+        client = MongoClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+        db = client[db_name]
+        collection = db[collection_name]
+        
+        # Build query filter
+        query_filter = {}
+        
+        if document_name:
+            query_filter["documentName"] = document_name
+        
+        if start_date or end_date:
+            query_filter["processedAt"] = {}
+            if start_date:
+                query_filter["processedAt"]["$gte"] = start_date
+            if end_date:
+                query_filter["processedAt"]["$lte"] = end_date
+        
+        # Limit max results
+        limit = min(limit, 1000)
+        
+        # Query database
+        cursor = collection.find(query_filter).sort("updated_at", -1).skip(skip).limit(limit)
+        results = list(cursor)
+        
+        # Get total count for pagination
+        total_count = collection.count_documents(query_filter)
+        
+        # Serialize all documents (convert ObjectId and datetime to JSON-serializable format)
+        serialized_results = [serialize_mongo_document(result) for result in results]
+        
+        return JSONResponse(content={
+            "data": serialized_results,
+            "total": total_count,
+            "limit": limit,
+            "skip": skip,
+            "has_more": (skip + limit) < total_count
+        }, status_code=200)
+        
+    except Exception as e:
+        logger.error(f"Error retrieving NER annotations: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve NER annotations: {str(e)}")
+    finally:
+        if client:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
+@router.get("/structured-resource",
+            # dependencies=[Depends(require_scopes(["read"]))],
+            summary="Get saved structured resources",
+            description="""
+            Retrieves saved structured resources from MongoDB.
+            Supports filtering by documentName, date range, and pagination.
+            """)
+async def get_structured_resources(
+    request: Request,
+    # user: Annotated[LoginUserIn, Depends(get_current_user)],
+    document_name: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 100,
+    skip: int = 0
+):
+    """
+    Get saved structured resources with optional filtering and pagination.
+    
+    Query Parameters:
+    - document_name: Filter by document name
+    - start_date: Filter by processedAt start date (ISO format)
+    - end_date: Filter by processedAt end date (ISO format)
+    - limit: Maximum number of results (default: 100, max: 1000)
+    - skip: Number of results to skip for pagination (default: 0)
+    """
+    client = None
+    try:
+        env = load_environment()
+        mongo_url = env.get("MONGO_DB_URL")
+        db_name = env.get("NER_DATABASE")
+        collection_name = "structured_resource"
+        
+        if not mongo_url or not db_name:
+            raise HTTPException(
+                status_code=500,
+                detail="MongoDB configuration not found"
+            )
+        
+        client = MongoClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+        db = client[db_name]
+        collection = db[collection_name]
+        
+        # Build query filter
+        query_filter = {}
+        
+        if document_name:
+            query_filter["documentName"] = document_name
+        
+        if start_date or end_date:
+            query_filter["processedAt"] = {}
+            if start_date:
+                query_filter["processedAt"]["$gte"] = start_date
+            if end_date:
+                query_filter["processedAt"]["$lte"] = end_date
+        
+        # Limit max results
+        limit = min(limit, 1000)
+        
+        # Query database
+        cursor = collection.find(query_filter).sort("updated_at", -1).skip(skip).limit(limit)
+        results = list(cursor)
+        
+        # Get total count for pagination
+        total_count = collection.count_documents(query_filter)
+        
+        # Serialize all documents (convert ObjectId and datetime to JSON-serializable format)
+        serialized_results = [serialize_mongo_document(result) for result in results]
+        
+        return JSONResponse(content={
+            "data": serialized_results,
+            "total": total_count,
+            "limit": limit,
+            "skip": skip,
+            "has_more": (skip + limit) < total_count
+        }, status_code=200)
+        
+    except Exception as e:
+        logger.error(f"Error retrieving structured resources: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve structured resources: {str(e)}")
+    finally:
+        if client:
+            try:
+                client.close()
+            except Exception:
+                pass
