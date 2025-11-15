@@ -17,6 +17,7 @@ from core.routers.jwt_auth import router as jwt_router
 from core.routers.structsense import router as structsense_router
 from core.database import init_db_pool, get_db_pool, debug_pool_status
 from core.configuration import load_environment
+from pymongo import MongoClient
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -44,6 +45,28 @@ async def lifespan(app: FastAPI):
         print(f"[APP STARTUP] ❌ ERROR: Failed to initialize database pool: {e}")
         logger.error(f"Failed to initialize database pool: {e}")
         raise
+
+    # Initialize MongoDB client (reused across all requests)
+    try:
+        env = load_environment()
+        mongo_url = env.get("MONGO_DB_URL")
+        if mongo_url:
+            app.state.mongo_client = MongoClient(
+                mongo_url,
+                serverSelectionTimeoutMS=5000,
+                connectTimeoutMS=5000,
+                maxPoolSize=50,  # Connection pool size
+                minPoolSize=5    # Minimum connections to maintain
+            )
+            print(f"[APP STARTUP] ✅ MongoDB client initialized")
+            logger.info("MongoDB client initialized successfully")
+        else:
+            print(f"[APP STARTUP] ⚠️  MongoDB URL not configured, skipping client initialization")
+            app.state.mongo_client = None
+    except Exception as e:
+        print(f"[APP STARTUP] ⚠️  WARNING: Failed to initialize MongoDB client: {e}")
+        logger.warning(f"Failed to initialize MongoDB client: {e}")
+        app.state.mongo_client = None
 
     yield
 
@@ -89,6 +112,16 @@ async def lifespan(app: FastAPI):
         print("=" * 80)
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
+
+    # Close MongoDB client
+    try:
+        if hasattr(app.state, 'mongo_client') and app.state.mongo_client:
+            print(f"[APP SHUTDOWN] Closing MongoDB client...")
+            app.state.mongo_client.close()
+            print(f"[APP SHUTDOWN] ✅ MongoDB client closed")
+            logger.info("MongoDB client closed successfully")
+    except Exception as e:
+        logger.error(f"Error closing MongoDB client: {e}")
 
     logger.info("FastAPI shutdown complete")
 
