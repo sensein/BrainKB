@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 # logging
@@ -25,7 +26,6 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    import os
     configure_logging()
     logger.info("Starting FastAPI application")
     
@@ -48,7 +48,6 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    import os
     logger.info("Initiating FastAPI shutdown sequence")
     
     print("=" * 80)
@@ -158,7 +157,8 @@ async def health_check():
     """Simple health check endpoint."""
     try:
         pool = await get_db_pool()
-        db_status = "healthy" if pool and pool.get_size() > 0 else "unhealthy"
+        # Check if pool exists (not if it has connections, since we use lazy init with min_size=0)
+        db_status = "healthy" if pool is not None else "unhealthy"
     except Exception:
         db_status = "unhealthy"
 
