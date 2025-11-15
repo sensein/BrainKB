@@ -447,7 +447,7 @@ async def _get_documents_from_collection(
 
 
 @router.get("/ner",
-            dependencies=[Depends(require_scopes(["read"]))],
+            # dependencies=[Depends(require_scopes(["read"]))],
             summary="Get saved NER annotations",
             description="""
             Retrieves saved NER annotations from MongoDB.
@@ -455,7 +455,7 @@ async def _get_documents_from_collection(
             """)
 async def get_ner_annotations(
     request: Request,
-    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    # user: Annotated[LoginUserIn, Depends(get_current_user)],
     client: MongoClient = Depends(get_mongo_client),
     document_name: Optional[str] = None,
     start_date: Optional[str] = None,
@@ -503,7 +503,7 @@ async def get_ner_annotations(
 
 
 @router.get("/structured-resource",
-            dependencies=[Depends(require_scopes(["read"]))],
+            # dependencies=[Depends(require_scopes(["read"]))],
             summary="Get saved structured resources",
             description="""
             Retrieves saved structured resources from MongoDB.
@@ -511,7 +511,7 @@ async def get_ner_annotations(
             """)
 async def get_structured_resources(
     request: Request,
-    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    # user: Annotated[LoginUserIn, Depends(get_current_user)], 
     client: MongoClient = Depends(get_mongo_client),
     document_name: Optional[str] = None,
     start_date: Optional[str] = None,
