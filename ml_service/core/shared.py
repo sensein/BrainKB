@@ -52,20 +52,39 @@ import tempfile
 UPLOAD_DIR = Path("uploads").resolve()
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-def upsert_ner_annotations(input_data):
+def upsert_ner_annotations(input_data, client=None, db_name=None, collection_name=None):
     """
     Upserts NER annotations into a MongoDB collection with versioning and history.
     Dynamically detects the key containing NER data (any key with dict of lists structure).
+    
+    Args:
+        input_data: The input data containing NER annotations
+        client: MongoDB client (reused from app state). If None, creates a new client (deprecated).
+        db_name: Database name. If None, loads from environment.
+        collection_name: Collection name. If None, loads from environment.
     """
 
-    env = load_environment()
-    mongo_url = env.get("MONGO_DB_URL")
-    db_name = env.get("NER_DATABASE")
-    collection_name = env.get("NER_COLLECTION")
-    client = None
-
-    try:
+    # Backward compatibility: create client if not provided (deprecated)
+    should_close_client = False
+    if client is None:
+        env = load_environment()
+        mongo_url = env.get("MONGO_DB_URL")
+        if not mongo_url:
+            raise ValueError("MongoDB URL not configured and no client provided")
         client = MongoClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+        should_close_client = True
+    
+    try:
+        if db_name is None:
+            env = load_environment()
+            db_name = env.get("NER_DATABASE")
+        if collection_name is None:
+            env = load_environment()
+            collection_name = env.get("NER_COLLECTION")
+        
+        if not db_name or not collection_name:
+            raise ValueError("Database name or collection name not configured")
+        
         db = client[db_name]
         collection = db[collection_name]
 
@@ -276,7 +295,8 @@ def upsert_ner_annotations(input_data):
         traceback.print_exc()
         raise
     finally:
-        if client:
+        # Only close client if we created it (backward compatibility)
+        if should_close_client and client:
             try:
                 client.close()
                 print("MongoDB client closed successfully")
@@ -284,20 +304,38 @@ def upsert_ner_annotations(input_data):
                 print(f"Error closing MongoDB client: {close_error}")
 
 
-def upsert_structured_resources(input_data):
+def upsert_structured_resources(input_data, client=None, db_name=None, collection_name=None):
     """
     Upserts structured resource extraction results into a MongoDB collection with versioning and history.
     Dynamically handles any structure keys and nested objects.
+    
+    Args:
+        input_data: The input data containing structured resources
+        client: MongoDB client (reused from app state). If None, creates a new client (deprecated).
+        db_name: Database name. If None, loads from environment.
+        collection_name: Collection name. If None, defaults to "structured_resource".
     """
 
-    env = load_environment()
-    mongo_url = env.get("MONGO_DB_URL")
-    db_name = env.get("NER_DATABASE")
-    collection_name = "structured_resource" #env.get("STRUCTURED_RESOURCES_COLLECTION")
-    client = None
+    # Backward compatibility: create client if not provided (deprecated)
+    should_close_client = False
+    if client is None:
+        env = load_environment()
+        mongo_url = env.get("MONGO_DB_URL")
+        if not mongo_url:
+            raise ValueError("MongoDB URL not configured and no client provided")
+        client = MongoClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+        should_close_client = True
 
     try:
-        client = MongoClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+        if db_name is None:
+            env = load_environment()
+            db_name = env.get("NER_DATABASE")
+        if collection_name is None:
+            collection_name = "structured_resource"
+        
+        if not db_name:
+            raise ValueError("Database name not configured")
+        
         db = client[db_name]
         collection = db[collection_name]
 
@@ -402,7 +440,8 @@ def upsert_structured_resources(input_data):
         traceback.print_exc()
         raise
     finally:
-        if client:
+        # Only close client if we created it (backward compatibility)
+        if should_close_client and client:
             try:
                 client.close()
                 print("MongoDB client closed successfully")

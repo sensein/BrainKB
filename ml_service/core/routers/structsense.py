@@ -29,9 +29,44 @@ from datetime import datetime, timezone
 from core.shared import upsert_ner_annotations
 from core.shared import (_is_safe_path, run_kickoff_with_config, JobStatus, _job_storage,
                          _handle_websocket_connection, _get_job)
+from core.configuration import load_environment
+from pymongo import MongoClient
+from typing import Optional
+from bson import ObjectId
 
 
 logger = logging.getLogger(__name__)
+
+
+def get_mongo_client(request: Request) -> MongoClient:
+    """
+    Dependency to get MongoDB client from app state.
+    The client is initialized once during app startup and reused for all requests.
+    """
+    client = request.app.state.mongo_client
+    if client is None:
+        raise HTTPException(
+            status_code=500,
+            detail="MongoDB client not initialized. Please check server configuration."
+        )
+    return client
+
+
+def serialize_mongo_document(doc):
+    """
+    Recursively convert MongoDB document to JSON-serializable format.
+    Converts ObjectId to string and datetime to ISO format string.
+    """
+    if isinstance(doc, dict):
+        return {key: serialize_mongo_document(value) for key, value in doc.items()}
+    elif isinstance(doc, list):
+        return [serialize_mongo_document(item) for item in doc]
+    elif isinstance(doc, ObjectId):
+        return str(doc)
+    elif isinstance(doc, datetime):
+        return doc.isoformat()
+    else:
+        return doc
 
 router = APIRouter(tags=["Multi-agent Systems"])
 
@@ -261,12 +296,22 @@ async def get_job_status(task_id: str):
                  }
              })
 
-async def save_ner_result(request: Request,
-                          user: Annotated[LoginUserIn, Depends(get_current_user)]
-                          ):
+async def save_ner_result(
+    request: Request,
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    client: MongoClient = Depends(get_mongo_client)
+):
     try:
         data = await request.json()
-        result = upsert_ner_annotations(input_data=data)
+        env = load_environment()
+        db_name = env.get("NER_DATABASE")
+        collection_name = env.get("NER_COLLECTION")
+        result = upsert_ner_annotations(
+            input_data=data,
+            client=client,
+            db_name=db_name,
+            collection_name=collection_name
+        )
         return JSONResponse(content=result, status_code=200)
 
     except Exception as e:
@@ -278,6 +323,7 @@ async def save_ner_result(request: Request,
 async def save_structured_resource(
         request: Request,
         user: Annotated[LoginUserIn, Depends(get_current_user)],
+        client: MongoClient = Depends(get_mongo_client)
 ):
     try:
         data = await request.json()
@@ -309,7 +355,15 @@ async def save_structured_resource(
         print("*"*100)
         print(type(input_data))
         print("*"*100)
-        result = upsert_structured_resources(input_data=input_data)
+        
+        env = load_environment()
+        db_name = env.get("NER_DATABASE")
+        result = upsert_structured_resources(
+            input_data=input_data,
+            client=client,
+            db_name=db_name,
+            collection_name="structured_resource"
+        )
         return JSONResponse(content=result, status_code=200)
 
     except Exception as e:
@@ -318,3 +372,187 @@ async def save_structured_resource(
             content={"error": f"Failed to save structured resource: {str(e)}"},
             status_code=500
         )
+
+
+async def _get_documents_from_collection(
+    client: MongoClient,
+    db_name: str,
+    collection_name: str,
+    document_name: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 100,
+    skip: int = 0
+) -> JSONResponse:
+    """
+    Shared helper function to retrieve documents from a MongoDB collection.
+    
+    Args:
+        client: MongoDB client (reused from app state)
+        db_name: Database name
+        collection_name: Collection name
+        document_name: Optional filter by document name
+        start_date: Optional filter by processedAt start date (ISO format)
+        end_date: Optional filter by processedAt end date (ISO format)
+        limit: Maximum number of results (default: 100, max: 1000)
+        skip: Number of results to skip for pagination (default: 0)
+    
+    Returns:
+        JSONResponse with documents and pagination metadata
+    """
+    try:
+        db = client[db_name]
+        collection = db[collection_name]
+        
+        # Build query filter
+        query_filter = {}
+        
+        if document_name:
+            query_filter["documentName"] = document_name
+        
+        if start_date or end_date:
+            query_filter["processedAt"] = {}
+            if start_date:
+                query_filter["processedAt"]["$gte"] = start_date
+            if end_date:
+                query_filter["processedAt"]["$lte"] = end_date
+        
+        # Limit max results
+        limit = min(limit, 1000)
+        
+        # Query database
+        cursor = collection.find(query_filter).sort("updated_at", -1).skip(skip).limit(limit)
+        results = list(cursor)
+        
+        # Get total count for pagination
+        total_count = collection.count_documents(query_filter)
+        
+        # Serialize all documents (convert ObjectId and datetime to JSON-serializable format)
+        serialized_results = [serialize_mongo_document(result) for result in results]
+        
+        return JSONResponse(content={
+            "data": serialized_results,
+            "total": total_count,
+            "limit": limit,
+            "skip": skip,
+            "has_more": (skip + limit) < total_count
+        }, status_code=200)
+        
+    except Exception as e:
+        logger.error(f"Error retrieving documents from {collection_name}: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve documents from {collection_name}: {str(e)}"
+        )
+
+
+@router.get("/ner",
+            # dependencies=[Depends(require_scopes(["read"]))],
+            summary="Get saved NER annotations",
+            description="""
+            Retrieves saved NER annotations from MongoDB.
+            Supports filtering by documentName, date range, and pagination.
+            """)
+async def get_ner_annotations(
+    request: Request,
+    # user: Annotated[LoginUserIn, Depends(get_current_user)],
+    client: MongoClient = Depends(get_mongo_client),
+    document_name: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 100,
+    skip: int = 0
+):
+    """
+    Get saved NER annotations with optional filtering and pagination.
+    
+    Query Parameters:
+    - document_name: Filter by document name
+    - start_date: Filter by processedAt start date (ISO format)
+    - end_date: Filter by processedAt end date (ISO format)
+    - limit: Maximum number of results (default: 100, max: 1000)
+    - skip: Number of results to skip for pagination (default: 0)
+    """
+    try:
+        env = load_environment()
+        db_name = env.get("NER_DATABASE")
+        collection_name = env.get("NER_COLLECTION")
+        
+        if not db_name or not collection_name:
+            raise HTTPException(
+                status_code=500,
+                detail="MongoDB configuration not found"
+            )
+        
+        return await _get_documents_from_collection(
+            client=client,
+            db_name=db_name,
+            collection_name=collection_name,
+            document_name=document_name,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            skip=skip
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving NER annotations: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve NER annotations: {str(e)}")
+
+
+@router.get("/structured-resource",
+            # dependencies=[Depends(require_scopes(["read"]))],
+            summary="Get saved structured resources",
+            description="""
+            Retrieves saved structured resources from MongoDB.
+            Supports filtering by documentName, date range, and pagination.
+            """)
+async def get_structured_resources(
+    request: Request,
+    # user: Annotated[LoginUserIn, Depends(get_current_user)],
+    client: MongoClient = Depends(get_mongo_client),
+    document_name: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 100,
+    skip: int = 0
+):
+    """
+    Get saved structured resources with optional filtering and pagination.
+    
+    Query Parameters:
+    - document_name: Filter by document name
+    - start_date: Filter by processedAt start date (ISO format)
+    - end_date: Filter by processedAt end date (ISO format)
+    - limit: Maximum number of results (default: 100, max: 1000)
+    - skip: Number of results to skip for pagination (default: 0)
+    """
+    try:
+        env = load_environment()
+        db_name = env.get("NER_DATABASE")
+        collection_name = "structured_resource"
+        
+        if not db_name:
+            raise HTTPException(
+                status_code=500,
+                detail="MongoDB configuration not found"
+            )
+        
+        return await _get_documents_from_collection(
+            client=client,
+            db_name=db_name,
+            collection_name=collection_name,
+            document_name=document_name,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            skip=skip
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving structured resources: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve structured resources: {str(e)}")

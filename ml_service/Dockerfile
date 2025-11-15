@@ -24,7 +24,7 @@ COPY . .
 RUN mkdir -p /app/core && \
     chmod -R 755 /app/core
 
-# Expose the port the app runs on
+# Expose the port the app runs on (internal port - no root privileges needed)
 EXPOSE 8007
 
 # Set WEB_CONCURRENCY to match number of workers for pool sizing

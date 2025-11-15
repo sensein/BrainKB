@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8007:8007"
+      - "8007:8007"  # Map host port 80 to container port 8007
     env_file:
       - core/.env
     environment:
@@ -28,7 +28,7 @@ services:
           memory: 2G
           cpus: '1'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8007/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8007/api/health"]  # Internal container port
       interval: 30s
       timeout: 10s
       retries: 3
