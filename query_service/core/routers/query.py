@@ -68,22 +68,51 @@ async def get_taxonomy():
         PREFIX rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
         PREFIX bican: <https://identifiers.org/brain-bican/vocab/>
+        PREFIX DHBA: <https://purl.brain-bican.org/ontology/dmbao/DMBA_>
 
-        SELECT ?id ?parent ?name ?hex
+        SELECT ?id ?name ?accession_id ?parentNode ?abbrNode ?abbrMeaning ?abbrTerm ?parcellationTerm ?geneAnnotation ?cellType ?hex ?setAccessionId
         WHERE {
-            GRAPH <http://hmbataxonomy20250927.com/> {
-                ?id a bican:CellTypeTaxon .
-                OPTIONAL { ?id bican:has_parent ?parent . }
-                OPTIONAL { ?id rdfs:label ?name . }
+            # 1. Find all CellTypeTaxon nodes
+            ?id a bican:CellTypeTaxon .
 
-                # Find a DisplayColor node linked to this taxon
-                OPTIONAL {
-                    ?colorNode a bican:DisplayColor ;
-                            bican:is_color_for_taxon ?cid ;
-                            bican:color_hex_triplet ?hex .
-                        FILTER(STR(?id) = STR(?cid))
-                }
-            }   
+            # 2. Get CellTypeTaxon name
+            OPTIONAL { ?id rdfs:label ?name . }
+
+            # 3. Get CellTypeTaxon accession_id
+            OPTIONAL { ?id bican:accession_id ?accession_id . }
+
+            # 4. Get CellTypeTaxon Parent Node
+            OPTIONAL { 
+                ?id bican:has_parent ?parentNode . 
+            }
+
+            # 5. Get CellTypeTaxon Abbreviation Nodes
+            OPTIONAL {
+                ?id bican:has_abbreviation ?abbrNode .
+                ?abbrNode a bican:Abbreviation ;
+                    bican:meaning ?abbrMeaning ;
+                    bican:term ?abbrTerm .
+                OPTIONAL { ?abbrNode bican:denotes_parcellation_term ?parcellationTerm . }
+                OPTIONAL { ?abbrNode bican:denotes_gene_annotation    ?geneAnnotation . }
+                OPTIONAL { ?abbrNode bican:denotes_cell_type          ?cellType . }            
+            }
+
+            # 6. Get CellTypeTaxon Color Hex Triplet
+            OPTIONAL {
+                ?colorNode a bican:DisplayColor ;
+                        bican:is_color_for_taxon ?cid ;
+                        bican:color_hex_triplet ?hex .
+                FILTER(STR(?id) = STR(?cid))
+            }
+
+            # 7. Get CellTypeSet Node
+            OPTIONAL {
+                ?cellTypeSetNode a bican:CellTypeSet ;
+                        bican:contains_taxon ?id ;
+                        bican:accession_id ?setAccessionId .
+            }
+
+
         }
     """
     response = fetch_data_gdb(query_taxonomy)
@@ -97,5 +126,37 @@ async def get_taxonomy():
         }
     processed_taxonomy = taxonomy_postprocessing(response_taxonomy)
     return processed_taxonomy
+
+#! TODO: Update lines 119-126 with this:
+# data = {}
+# for row in response:
+#     id_, name, accession_id, parentNode, abbrNode, abbrMeaning, abbrTerm, parcellationTerm, geneAnnotation, cellType, hex_, setAccessionId = row
+#     id_ = str(id_)
+#     name = str(name) if name else None
+#     accession_id = str(accession_id) if accession_id else None
+#     parentNode = str(parentNode) if parentNode else None
+#     abbrNode = str(abbrNode) if abbrNode else None
+#     abbrMeaning = str(abbrMeaning) if abbrMeaning else None
+#     abbrTerm = str(abbrTerm) if abbrTerm else None
+#     denotes = str(parcellationTerm) if parcellationTerm else None
+#     denotes = str(geneAnnotation) if geneAnnotation else denotes
+#     denotes = str(cellType) if cellType else denotes
+#     hex_ = str(hex_) if hex_ else None
+
+#     if str(id_) in data:
+#         if abbrNode in data[id_]["abbreviations"]:
+#             if denotes:
+#                 data[id_]["abbreviations"][abbrNode]["denotes"].append(denotes)
+#         else:
+#             data[id_]["abbreviations"][abbrNode] = {"term": abbrTerm, "meaning": abbrMeaning, "denotes": [denotes]}
+#     else:
+#         data[id_] = {
+#             "name": name,
+#             "accession_id": accession_id,
+#             "parent": parentNode,
+#             "abbreviations": dict({abbrNode: {"term": abbrTerm,  "meaning": abbrMeaning, "denotes": [denotes]}}) if abbrNode else {},
+#             "hex": hex_,
+#             "belongs_to_set": setAccessionId
+#         }
 
 
