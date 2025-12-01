@@ -105,9 +105,7 @@ services:
 
   # pgAdmin for PostgreSQL management
   pgadmin:
-    build:
-      context: ./pgadmin-init
-      dockerfile: Dockerfile.pgadmin
+    image: dpage/pgadmin4:latest
     container_name: brainkb-pgadmin
     env_file:
       - .env
@@ -125,6 +123,7 @@ services:
       - "${PGADMIN_PORT:-5051}:80"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin-init/servers.json:/pgadmin4/servers.json:ro
     networks:
       - brainkb-network
     depends_on:
