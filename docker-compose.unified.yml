@@ -1,0 +1,147 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database for APItokenmanager and JWT services
+  postgres:
+    image: postgres:15
+    container_name: brainkb-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-brainkb}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - brainkb-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Unified BrainKB Services Container
+  brainkb-unified:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    container_name: brainkb-unified
+    env_file:
+      - .env
+    ports:
+      - "${API_TOKEN_PORT:-8000}:8000"
+      - "${QUERY_SERVICE_PORT:-8010}:8010"
+      - "${ML_SERVICE_PORT:-8007}:8007"
+      
+    volumes:
+      - ./logs:/var/log/supervisor
+      # Note: Environment variables are now managed via docker-compose
+      # .env files are optional and will be used as fallback if they exist
+    networks:
+      - brainkb-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Note: oxigraph is optional - services will retry connection if needed
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Oxigraph SPARQL Database (separate service)
+  # Note: Oxigraph is not directly exposed - access through oxigraph-nginx service
+  # This service is independent and other services will retry connection if needed
+  oxigraph:
+    image: ghcr.io/oxigraph/oxigraph:0.4.0-rc.1
+    container_name: brainkb-oxigraph
+    # No port mapping - only accessible through oxigraph-nginx
+    volumes:
+      - oxigraph_data:/data
+      - /tmp:/tmp
+    environment:
+      - TMPDIR=/tmp
+    ulimits:
+      fsize: -1
+    networks:
+      - brainkb-network
+    restart: unless-stopped
+    # Note: No healthcheck - oxigraph image is distroless and doesn't have curl
+    # Services will handle connection failures gracefully
+
+  # Nginx reverse proxy with HTTP Basic Authentication for Oxigraph
+  oxigraph-nginx:
+    image: nginx:1.21.4
+    container_name: brainkb-oxigraph-nginx
+    env_file:
+      - .env
+    environment:
+      OXIGRAPH_USER: ${OXIGRAPH_USER:-admin}
+      OXIGRAPH_PASSWORD: ${OXIGRAPH_PASSWORD:-pwdoxigraph}
+    volumes:
+      - ./oxigraph/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "${OXIGRAPH_PORT:-7878}:7878"
+    networks:
+      - brainkb-network
+    depends_on:
+      - oxigraph
+      # Note: No health condition - will start when oxigraph starts, but won't wait for it to be ready
+    restart: unless-stopped
+    entrypoint: >
+      sh -c 'echo -n "$$OXIGRAPH_USER:" > /etc/nginx/.htpasswd &&
+      echo "$$OXIGRAPH_PASSWORD" | openssl passwd -stdin -apr1 >> /etc/nginx/.htpasswd &&
+      chmod 644 /etc/nginx/.htpasswd &&
+      /docker-entrypoint.sh nginx -g "daemon off;"'
+    # Note: Healthcheck removed - nginx will start and proxy will work once oxigraph is ready
+    # Note: Oxigraph is password protected via HTTP Basic Auth
+    # Access at: http://localhost:OXIGRAPH_PORT
+    # Username: OXIGRAPH_USER (default: admin)
+    # Password: OXIGRAPH_PASSWORD (default: pwdoxigraph)
+
+  # pgAdmin for PostgreSQL management
+  pgadmin:
+    build:
+      context: ./pgadmin-init
+      dockerfile: Dockerfile.pgadmin
+    container_name: brainkb-pgadmin
+    env_file:
+      - .env
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@brainkb.org}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      # PostgreSQL connection details for auto-configuration
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-brainkb}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      PGADMIN_SERVER_NAME: ${PGADMIN_SERVER_NAME:-BrainKB PostgreSQL}
+    ports:
+      - "${PGADMIN_PORT:-5051}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - brainkb-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # Note: PostgreSQL server is automatically configured on startup
+
+volumes:
+  postgres_data:
+    driver: local
+  oxigraph_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  brainkb-network:
+    driver: bridge
+

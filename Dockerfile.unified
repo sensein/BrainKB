@@ -1,0 +1,186 @@
+# Unified Dockerfile for BrainKB Services
+# Deploys: APItokenmanager, query_service, ml_service, and oxigraph
+
+# Note: Oxigraph binary extraction skipped - oxigraph image is distroless
+# Oxigraph will be run as a separate service in docker-compose or use the fallback script
+
+# Main build stage
+FROM python:3.10-slim
+
+# Set metadata
+LABEL project="BrainyPedia" \
+      maintainer="Tek Raj Chhetri <tekraj@mit.edu>" \
+      version="1.0" \
+      description="Unified Docker image for BrainKB services"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    postgresql-client \
+    libpq-dev \
+    supervisor \
+    curl \
+    wget \
+    openssl \
+    apache2-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directories for all services
+WORKDIR /app
+
+# Copy APItokenmanager
+COPY APItokenmanager/ /app/APItokenmanager/
+WORKDIR /app/APItokenmanager
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt && \
+    pip install python-decouple gunicorn
+
+# Copy query_service
+COPY query_service/ /app/query_service/
+WORKDIR /app/query_service
+RUN pip install -r requirements.txt
+
+# Copy ml_service
+COPY ml_service/ /app/ml_service/
+WORKDIR /app/ml_service
+RUN pip install --use-deprecated=legacy-resolver "structsense==0.0.4" || \
+    pip install --use-deprecated=legacy-resolver --no-deps "structsense==0.0.4" && \
+    pip install -r requirements.txt
+
+
+# Create supervisor configuration
+RUN mkdir -p /etc/supervisor/conf.d
+RUN cat > /etc/supervisor/conf.d/supervisord.conf << 'EOF'
+[supervisord]
+nodaemon=true
+user=root
+logfile=/var/log/supervisor/supervisord.log
+pidfile=/var/run/supervisord.pid
+
+[program:api_tokenmanager]
+command=gunicorn -b 0.0.0.0:8000 APIAuthManager.wsgi:application
+directory=/app/APItokenmanager
+autostart=true
+autorestart=true
+startsecs=10
+stderr_logfile=/var/log/supervisor/api_tokenmanager.err.log
+stdout_logfile=/var/log/supervisor/api_tokenmanager.out.log
+environment=PATH="/usr/local/bin:/usr/bin:/bin"
+
+[program:query_service]
+command=uvicorn core.main:app --host 0.0.0.0 --port 8010 --timeout-keep-alive 120 --timeout-graceful-shutdown 60
+directory=/app/query_service
+autostart=true
+autorestart=true
+startsecs=20
+stderr_logfile=/var/log/supervisor/query_service.err.log
+stdout_logfile=/var/log/supervisor/query_service.out.log
+environment=PATH="/usr/local/bin:/usr/bin:/bin"
+startretries=5
+stopwaitsecs=10
+
+[program:ml_service]
+command=gunicorn core.main:app --bind 0.0.0.0:8007 --workers 4 --worker-class uvicorn.workers.UvicornWorker --threads 4 --max-requests 1000 --max-requests-jitter 50 --timeout 220 --keep-alive 220 --log-level debug
+directory=/app/ml_service
+autostart=true
+autorestart=true
+startsecs=15
+stderr_logfile=/var/log/supervisor/ml_service.err.log
+stdout_logfile=/var/log/supervisor/ml_service.out.log
+environment=PATH="/usr/local/bin:/usr/bin:/bin",WEB_CONCURRENCY="4"
+
+[program:oxigraph]
+command=/app/oxigraph/oxigraph_server --bind 0.0.0.0:7878 --storage /data
+directory=/app/oxigraph
+autostart=false
+autorestart=false
+stderr_logfile=/var/log/supervisor/oxigraph.err.log
+stdout_logfile=/var/log/supervisor/oxigraph.out.log
+environment=PATH="/usr/local/bin:/usr/bin:/bin",TMPDIR="/tmp"
+startsecs=0
+startretries=0
+EOF
+
+# Create directories for logs and data
+RUN mkdir -p /var/log/supervisor /data /app/oxigraph
+
+# Create oxigraph fallback script
+# Note: Oxigraph binary extraction from distroless image is not possible
+# Oxigraph should be run as a separate service in docker-compose
+RUN echo '#!/bin/bash' > /app/oxigraph/oxigraph_server && \
+    echo 'echo "Oxigraph is not available in this container. Please run oxigraph as a separate service."' >> /app/oxigraph/oxigraph_server && \
+    echo 'echo "You can add it to docker-compose.unified.yml or run it separately."' >> /app/oxigraph/oxigraph_server && \
+    echo 'exit 1' >> /app/oxigraph/oxigraph_server && \
+    chmod +x /app/oxigraph/oxigraph_server
+
+# Create startup script
+RUN cat > /app/start.sh << 'EOF'
+#!/bin/bash
+set -e
+
+# Note: Oxigraph runs as a separate service in docker-compose
+
+# Wait for PostgreSQL to be ready
+echo "Waiting for PostgreSQL to be ready..."
+until PGPASSWORD=$DB_PASSWORD psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; do
+    echo "PostgreSQL is unavailable - sleeping"
+    sleep 2
+done
+echo "PostgreSQL is ready!"
+
+# Note: Oxigraph is optional - services will handle connection failures gracefully
+# No need to wait for it here - services will retry when needed
+
+# Run Django migrations for APItokenmanager if needed
+cd /app/APItokenmanager
+if [ -f .env ] || [ -n "$DB_NAME" ]; then
+    echo "Running Django migrations..."
+    python manage.py makemigrations || true
+    python manage.py migrate || true
+    python manage.py collectstatic --noinput || true
+    
+    # Create superuser if credentials are provided and user doesn't exist
+    if [ -n "$DJANGO_SUPERUSER_USERNAME" ] && [ -n "$DJANGO_SUPERUSER_EMAIL" ] && [ -n "$DJANGO_SUPERUSER_PASSWORD" ]; then
+        echo "Creating Django superuser..."
+        export DJANGO_SUPERUSER_USERNAME DJANGO_SUPERUSER_EMAIL DJANGO_SUPERUSER_PASSWORD
+        python manage.py shell << 'PYTHON_SCRIPT' || true
+import os
+from django.contrib.auth import get_user_model
+User = get_user_model()
+username = os.environ.get('DJANGO_SUPERUSER_USERNAME')
+email = os.environ.get('DJANGO_SUPERUSER_EMAIL')
+password = os.environ.get('DJANGO_SUPERUSER_PASSWORD')
+if username and email and password:
+    if not User.objects.filter(username=username).exists():
+        User.objects.create_superuser(username, email, password)
+        print(f'Superuser {username} created successfully')
+    else:
+        print(f'Superuser {username} already exists')
+else:
+    print('Error: Missing superuser credentials in environment')
+PYTHON_SCRIPT
+    else
+        echo "Warning: DJANGO_SUPERUSER credentials not provided. Superuser not created."
+        echo "You can create one manually with: python manage.py createsuperuser"
+    fi
+    
+    echo "Django migrations completed"
+fi
+
+# Start supervisor
+echo "Starting all services..."
+exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+EOF
+
+RUN chmod +x /app/start.sh
+
+# Expose ports
+EXPOSE 8000 8007 8010
+
+# Set working directory
+WORKDIR /app
+
+# Default command
+CMD ["/app/start.sh"]
+
