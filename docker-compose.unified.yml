@@ -37,14 +37,11 @@ services:
       
     volumes:
       - ./logs:/var/log/supervisor
-      # Note: Environment variables are now managed via docker-compose
-      # .env files are optional and will be used as fallback if they exist
     networks:
       - brainkb-network
     depends_on:
       postgres:
         condition: service_healthy
-      # Note: oxigraph is optional - services will retry connection if needed
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/ || exit 1"]
@@ -55,7 +52,6 @@ services:
 
   # Oxigraph SPARQL Database (separate service)
   # Note: Oxigraph is not directly exposed - access through oxigraph-nginx service
-  # This service is independent and other services will retry connection if needed
   oxigraph:
     image: ghcr.io/oxigraph/oxigraph:0.4.0-rc.1
     container_name: brainkb-oxigraph
@@ -70,8 +66,6 @@ services:
     networks:
       - brainkb-network
     restart: unless-stopped
-    # Note: No healthcheck - oxigraph image is distroless and doesn't have curl
-    # Services will handle connection failures gracefully
 
   # Nginx reverse proxy with HTTP Basic Authentication for Oxigraph
   oxigraph-nginx:
@@ -96,12 +90,7 @@ services:
       sh -c 'echo -n "$$OXIGRAPH_USER:" > /etc/nginx/.htpasswd &&
       echo "$$OXIGRAPH_PASSWORD" | openssl passwd -stdin -apr1 >> /etc/nginx/.htpasswd &&
       chmod 644 /etc/nginx/.htpasswd &&
-      /docker-entrypoint.sh nginx -g "daemon off;"'
-    # Note: Healthcheck removed - nginx will start and proxy will work once oxigraph is ready
-    # Note: Oxigraph is password protected via HTTP Basic Auth
-    # Access at: http://localhost:OXIGRAPH_PORT
-    # Username: OXIGRAPH_USER (default: admin)
-    # Password: OXIGRAPH_PASSWORD (default: pwdoxigraph)
+      /docker-entrypoint.sh nginx -g "daemon off;"' 
 
   # pgAdmin for PostgreSQL management
   pgadmin:
