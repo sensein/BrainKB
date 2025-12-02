@@ -16,8 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Source the hook script if it exists
-if [ -f ".docker-compose-hook.sh" ]; then
-    source .docker-compose-hook.sh
+if [ -f "docker-compose-hook.sh" ]; then
+    source docker-compose-hook.sh
 fi
 
 # If no arguments provided, default to "up -d"
