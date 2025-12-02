@@ -1,12 +1,15 @@
 #!/bin/bash
-# Wrapper script for docker-compose that automatically generates servers.json
-# Usage: 
-#   ./docker-compose-wrapper.sh              # Runs: docker compose -f docker-compose.unified.yml up -d
-#   ./docker-compose-wrapper.sh down          # Runs: docker compose -f docker-compose.unified.yml down
-#   ./docker-compose-wrapper.sh logs -f       # Runs: docker compose -f docker-compose.unified.yml logs -f
-# 
-# To use automatically, add this alias to your ~/.bashrc or ~/.zshrc:
-#   alias docker-compose='path/to/BrainKB/docker-compose-wrapper.sh'
+# Wrapper script for docker-compose that auto-generates servers.json.
+#
+# Usage:
+#   ./start_services.sh                          # Equivalent to: docker compose -f docker-compose.unified.yml up -d
+#   ./start_services.sh down                     # Equivalent to: docker compose -f docker-compose.unified.yml down
+#   ./start_services.sh logs -f                  # Equivalent to: docker compose -f docker-compose.unified.yml logs -f
+#
+# Optional: Make it your default docker-compose command by adding this alias
+# to your ~/.bashrc or ~/.zshrc:
+#   alias docker-compose='path/to/BrainKB/start_services.sh'
+
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,8 +48,8 @@ elif command -v docker-compose >/dev/null 2>&1; then
     # Use docker-compose (standalone version)
     exec docker-compose "$@"
 else
-    echo "❌ Error: Neither 'docker compose' nor 'docker-compose' found in PATH"
-    echo "   Please install Docker Compose: https://docs.docker.com/compose/install/"
+    echo " Error: Neither 'docker compose' nor 'docker-compose' found in PATH"
+    echo " Please install Docker Compose: https://docs.docker.com/compose/install/"
     exit 1
 fi
 
