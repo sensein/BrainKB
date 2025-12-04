@@ -36,17 +36,22 @@ def load_environment(env_name="env"):
     Returns:
         dict: A dictionary containing the loaded environment variables.
     """
-    # Determine the path to the .env.development.development file based on the environment
+    # Determine the path to the .env file based on the environment
+    # Always fall back to root .env file - service-specific .env files are removed
     root_dir = os.path.dirname(os.path.abspath(__file__))
-    env_file = os.path.join(root_dir, f".{env_name}")
-
-    # Load environment variables from the .env file
-    load_dotenv(dotenv_path=env_file)
+    
+    # Traverse up to project root (BrainKB/)
+    # chat_service/core/ -> chat_service/ -> BrainKB/
+    project_root = os.path.dirname(os.path.dirname(root_dir))
+    
+    # Always load from root .env file (used by docker-compose)
+    root_env_file = os.path.join(project_root, ".env")
+    if os.path.exists(root_env_file):
+        load_dotenv(dotenv_path=root_env_file, override=False)
 
     # Return a dictionary containing the loaded environment variables
     return {
         "ENV_STATE": os.getenv("ENV_STATE"),
-        "DATABASE_URL": os.getenv("DATABASE_URL"),
         "LOGTAIL_API_KEY": os.getenv("LOGTAIL_API_KEY"),
         
         # PostgreSQL Database Configuration
@@ -65,7 +70,7 @@ def load_environment(env_name="env"):
         
         # JWT Configuration
         "JWT_ALGORITHM": os.getenv("JWT_ALGORITHM", "HS256"),
-        "JWT_SECRET_KEY": os.getenv("JWT_SECRET_KEY"),
+        "JWT_SECRET_KEY": os.getenv("CHAT_SERVICE_JWT_SECRET_KEY"),
 
         "JWT_BEARER_TOKEN_URL": os.getenv("JWT_BEARER_TOKEN_URL"),
         "JWT_LOGIN_EMAIL": os.getenv("JWT_LOGIN_EMAIL"),
@@ -116,11 +121,6 @@ class Configuration:
     @property
     def env_state(self) -> Optional[str]:
         return self._env_vars.get("ENV_STATE")
-    
-    # Database Configuration
-    @property
-    def database_url(self) -> Optional[str]:
-        return self._env_vars.get("DATABASE_URL")
     
     # PostgreSQL Database Configuration
     @property
