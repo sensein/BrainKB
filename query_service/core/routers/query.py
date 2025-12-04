@@ -22,7 +22,7 @@ import logging
 from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
-from core.shared import taxonomy_postprocessing
+from core.shared import taxonomy_postprocessing, check_named_graph_exists
 from fastapi import Depends
 from pydantic import BaseModel, root_validator
 from typing import List
