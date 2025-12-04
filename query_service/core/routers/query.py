@@ -55,15 +55,20 @@ async def get_named_graphs():
     return response_graph
 
 
-@router.get("/query/sparql/")
+@router.get("/query/sparql/",
+            dependencies=[Depends(require_scopes(["write","admin"]))],
+            )
 async def sparql_query(
     user: Annotated[LoginUserIn, Depends(get_current_user)], sparql_query: str
 ):
     response = fetch_data_gdb(sparql_query)
     return response
 
-@router.get("/query/taxonomy")
-async def get_taxonomy():
+@router.get("/query/taxonomy",
+            dependencies=[Depends(require_scopes(["read"]))],)
+async def get_taxonomy(
+        user: Annotated[LoginUserIn, Depends(get_current_user)]
+):
     query_taxonomy = """
         PREFIX rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
