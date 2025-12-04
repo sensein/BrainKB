@@ -22,7 +22,7 @@ import asyncpg
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional, Dict, Any, List
 from fastapi import HTTPException
-
+import sys
 from core.configuration import load_environment
 
 logger = logging.getLogger(__name__)
@@ -48,16 +48,16 @@ async def init_db_pool():
     global pool
     
     # CRITICAL: Print to track pool instances
-    print("=" * 80)
-    print(f"[DB POOL INIT] Process ID: {os.getpid()}")
-    print(f"[DB POOL INIT] Pool instance before: {id(pool) if pool is not None else 'None'}")
+    sys.stdout.write("=" * 80)
+    sys.stdout.write(f"[DB POOL INIT] Process ID: {os.getpid()}")
+    sys.stdout.write(f"[DB POOL INIT] Pool instance before: {id(pool) if pool is not None else 'None'}")
     
     if pool is not None:
-        print(f"[DB POOL INIT] WARNING: Pool already exists! Instance ID: {id(pool)}")
-        print("=" * 80)
+        sys.stdout.write(f"[DB POOL INIT] WARNING: Pool already exists! Instance ID: {id(pool)}")
+        sys.stdout.write("=" * 80)
         return pool
     
-    print(f"[DB POOL INIT] Creating NEW pool instance...")
+    sys.stdout.write(f"[DB POOL INIT] Creating NEW pool instance...")
     
     try:
         env_state = load_environment().get("ENV_STATE", "production").lower()
@@ -76,8 +76,8 @@ async def init_db_pool():
             # With 4 workers: 8 per worker = 32 total (safe)
             max_size = max(3, min(8, 50 // num_workers))
         
-        print(f"[DB POOL INIT] Workers: {num_workers}, min={min_size}, max={max_size} per worker")
-        print(f"[DB POOL INIT] Total potential: {max_size * num_workers} connections")
+        sys.stdout.write(f"[DB POOL INIT] Workers: {num_workers}, min={min_size}, max={max_size} per worker")
+        sys.stdout.write(f"[DB POOL INIT] Total potential: {max_size * num_workers} connections")
 
         pool = await asyncpg.create_pool(
             min_size=min_size,
@@ -86,13 +86,13 @@ async def init_db_pool():
             command_timeout=60,
             **DB_SETTINGS
         )
-        print(f"[DB POOL INIT] Pool created! Instance ID: {id(pool)}")
-        print("=" * 80)
+        sys.stdout.write(f"[DB POOL INIT] Pool created! Instance ID: {id(pool)}")
+        sys.stdout.write("=" * 80)
         logger.info(f"Database connection pool initialized (workers={num_workers}, min={min_size}, max={max_size} per worker)")
         return pool
     except Exception as e:
-        print(f"[DB POOL INIT] ERROR: {str(e)}")
-        print("=" * 80)
+        sys.stdout.write(f"[DB POOL INIT] ERROR: {str(e)}")
+        sys.stdout.write("=" * 80)
         logger.error(f"Failed to initialize database connection pool: {str(e)}")
         raise
 
@@ -101,7 +101,7 @@ async def get_db_pool():
     import os
     global pool
     
-    print(f"[GET DB POOL] Process ID: {os.getpid()}, Pool: {id(pool) if pool is not None else 'None'}")
+    sys.stdout.write(f"[GET DB POOL] Process ID: {os.getpid()}, Pool: {id(pool) if pool is not None else 'None'}")
     
     if pool is None:
         pool = await init_db_pool()
@@ -130,12 +130,12 @@ async def get_db_connection():
     idle_size = pool.get_idle_size()
     in_use = pool_size - idle_size
     
-    print(f"[CONN ACQUIRE] Process {os.getpid()}: Acquiring connection... (pool: size={pool_size}, idle={idle_size}, in_use={in_use})")
+    sys.stdout.write(f"[CONN ACQUIRE] Process {os.getpid()}: Acquiring connection... (pool: size={pool_size}, idle={idle_size}, in_use={in_use})")
     
     # Add timeout to prevent indefinite waiting
     try:
         conn = await asyncio.wait_for(pool.acquire(), timeout=10.0)
-        print(f"[CONN ACQUIRE] Connection acquired! (pool now: size={pool.get_size()}, idle={pool.get_idle_size()}, in_use={pool.get_size() - pool.get_idle_size()})")
+        sys.stdout.write(f"[CONN ACQUIRE] Connection acquired! (pool now: size={pool.get_size()}, idle={pool.get_idle_size()}, in_use={pool.get_size() - pool.get_idle_size()})")
     except asyncio.TimeoutError:
         logger.error("Connection acquisition timed out after 10 seconds")
         raise HTTPException(
@@ -156,7 +156,7 @@ async def get_db_connection():
         await pool.release(conn)
         pool_size_after = pool.get_size()
         idle_size_after = pool.get_idle_size()
-        print(f"[CONN RELEASE] Connection released back to pool! (pool now: size={pool_size_after}, idle={idle_size_after}, in_use={pool_size_after - idle_size_after})")
+        sys.stdout.write(f"[CONN RELEASE] Connection released back to pool! (pool now: size={pool_size_after}, idle={idle_size_after}, in_use={pool_size_after - idle_size_after})")
 
 # FastAPI dependency for automatic connection management in routes
 async def get_db() -> AsyncGenerator[asyncpg.Connection, None]:
@@ -604,7 +604,7 @@ async def list_user_jobs(
         Dict with total_jobs count and jobs list
     """
     async with get_db_connection() as conn:
-        # Build WHERE clause dynamically
+        # Build WHERE clause dynamically with proper parameter indexing
         where_clauses = ["user_id = $1"]
         params: List[Any] = [user_id]
         param_index = 2
@@ -626,6 +626,8 @@ async def list_user_jobs(
         total_jobs = await conn.fetchval(count_sql, *params)
         
         # Get jobs with pagination, ordered by newest first
+        limit_param = param_index
+        offset_param = param_index + 1
         jobs_sql = f"""
             SELECT job_id, status, total_files, processed_files,
                    success_count, fail_count, start_time, end_time,
@@ -633,7 +635,7 @@ async def list_user_jobs(
             FROM jobs
             WHERE {where_sql}
             ORDER BY COALESCE(start_time, 0) DESC, job_id DESC
-            LIMIT ${param_index} OFFSET ${param_index + 1}
+            LIMIT ${limit_param} OFFSET ${offset_param}
         """
         params.extend([limit, offset])
         jobs_rows = await conn.fetch(jobs_sql, *params)
