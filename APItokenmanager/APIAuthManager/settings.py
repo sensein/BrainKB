@@ -20,10 +20,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 env_file = os.path.join(BASE_DIR, ".env")
 
-# Load environment variables from the .env.development.development file
-load_dotenv(dotenv_path=env_file)
+# Load environment variables from the .env file if it exists
+# In Docker, environment variables are provided via docker-compose, so .env is optional
+if os.path.exists(env_file):
+    load_dotenv(dotenv_path=env_file, override=False)
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("BRAINYPEDIA_APITOKEN_MANAGER_SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("BRAINYPEDIA_APITOKEN_MANAGER_SECRET_KEY must be set in environment variables")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
