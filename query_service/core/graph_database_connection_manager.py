@@ -17,19 +17,17 @@
 # @Software: PyCharm
 
 from SPARQLWrapper import SPARQLWrapper, BASIC, GET, JSON, POST
-from rdflib import Graph
+from rdflib import Graph, URIRef, Literal, RDF, XSD
 from core.shared import ValueNotSetException
 import logging
+import sys
 from core.configuration import load_environment
 import concurrent.futures
 from typing import List, Dict, Any
 from core.shared import contains_ip
+import asyncio
 
 logger = logging.getLogger(__name__)
-
-
-def convert_to_turtle(jsonlddata):
-    return Graph().parse(data=jsonlddata, format="json-ld").serialize(format="turtle")
 
 
 def _connectionmanager(request_type="get"):
@@ -48,7 +46,7 @@ def _connectionmanager(request_type="get"):
     graphdatabase_port = load_environment()["GRAPHDATABASE_PORT"]
     graphdatabase_type = load_environment()["GRAPHDATABASE_TYPE"]
     graphdatabase_repository = load_environment()["GRAPHDATABASE_REPOSITORY"]
-    print(
+    sys.stdout.write(
         f"Connecting to {graphdatabase_type}-{graphdatabase_username}-{graphdatabase_password}-{graphdatabase_hostname} Repository: {graphdatabase_repository}"
     )
 
@@ -69,16 +67,23 @@ def _connectionmanager(request_type="get"):
             raise ValueError("Invalid request type. Use 'get' or 'post'.")
 
     elif graphdatabase_type == "OXIGRAPH":
-        print("Connecting to OXIGRAPH")
-        if contains_ip(graphdatabase_hostname):
-            endpoint_set = f"{graphdatabase_hostname}:{graphdatabase_port}"
+        sys.stdout.write("Connecting to OXIGRAPH")
+        # Construct endpoint URL properly
+        # If hostname contains IP or http/https, use as-is, otherwise construct http:// URL
+        if graphdatabase_hostname.startswith("http://") or graphdatabase_hostname.startswith("https://"):
+            base_url = graphdatabase_hostname
+        elif contains_ip(graphdatabase_hostname):
+            base_url = f"http://{graphdatabase_hostname}:{graphdatabase_port}"
         else:
-            endpoint_set = f"{graphdatabase_hostname}"
+            # Docker service name or hostname - construct full URL
+            base_url = f"http://{graphdatabase_hostname}:{graphdatabase_port}"
+        
         if request_type == "get":
-            endpoint = f"{endpoint_set}/query"
-            print(f"Connecting to OXIGRAPH endpoing: {endpoint}")
+            endpoint = f"{base_url}/query"
+            sys.stdout.write(f"Connecting to OXIGRAPH endpoint: {endpoint}")
         elif request_type == "post":
-            endpoint = f"{endpoint_set}/update"
+            endpoint = f"{base_url}/update"
+            sys.stdout.write(f"Connecting to OXIGRAPH endpoint: {endpoint}")
         else:
             raise ValueError("Invalid request type. Use 'get' or 'post'.")
 
@@ -99,9 +104,16 @@ def _connectionmanager(request_type="get"):
 
     try:
         sparql = SPARQLWrapper(endpoint)
+        # Only use authentication if credentials are provided and we're going through nginx
+        # Direct access to oxigraph (without nginx) doesn't require authentication
         if graphdatabase_username and graphdatabase_password:
-            sparql.setHTTPAuth(BASIC)
-            sparql.setCredentials(graphdatabase_username, graphdatabase_password)
+            # Check if we're using nginx (oxigraph-nginx) or direct access (oxigraph)
+            if "oxigraph-nginx" in endpoint or "nginx" in graphdatabase_hostname.lower():
+                sparql.setHTTPAuth(BASIC)
+                sparql.setCredentials(graphdatabase_username, graphdatabase_password)
+                sys.stdout.write(f"Using HTTP Basic Auth for endpoint: {endpoint}")
+            else:
+                sys.stdout.write(f"Direct access to Oxigraph (no authentication required): {endpoint}")
         return sparql
     except Exception as e:
         raise ConnectionError(f"Failed to connect to the graph database: {str(e)}")
@@ -125,7 +137,7 @@ def test_connection():
         return isinstance(response, dict) and "head" in response and "results" in response and "bindings" in response["results"]
 
     except Exception as e:
-        print(f"Error-test conn:{e}")
+        sys.stdout.write(f"Error-test conn:{e}")
         return False
 
 
@@ -144,7 +156,7 @@ def insert_data_gdb(turtle_data):
             )
             sparql.setQuery(sparql_query)
             response = sparql.query()
-            print(response)
+            sys.stdout.write(response)
             return {
                 "status": "success",
                 "message": "Data inserted to graph database successfully",
@@ -153,6 +165,17 @@ def insert_data_gdb(turtle_data):
             return {"status": "fail", "message": {str(e)}}
     else:
         return "Not connected! or Connection error"
+
+
+async def insert_data_gdb_async(turtle_data):
+    """
+    Async wrapper for insert_data_gdb that runs the blocking operation in a thread pool.
+    This prevents blocking the event loop during long-running database operations.
+    """
+    loop = asyncio.get_event_loop()
+    # Run the blocking operation in a thread pool executor
+    result = await loop.run_in_executor(None, insert_data_gdb, turtle_data)
+    return result
 
 
 def fetch_data_gdb(sparql_query):
@@ -166,6 +189,42 @@ def fetch_data_gdb(sparql_query):
         return {"status": "success", "message": result}
     except Exception as e:
         return {"status": "fail", "message": str(e)}
+
+
+def check_named_graph_exists(named_graph_iri: str) -> bool:
+    """
+    Check if a named graph is registered in the metadata graph.
+    
+    Args:
+        named_graph_iri: The IRI of the named graph to check
+        
+    Returns:
+        bool: True if the graph is registered, False otherwise
+    """
+    METADATA_GRAPH_URI = "https://brainkb.org/metadata/named-graph"
+    
+    try:
+        # Ensure named_graph_iri ends with '/' for consistency
+        graph_iri = named_graph_iri
+        if not graph_iri.endswith('/'):
+            graph_iri = graph_iri + '/'
+        
+        query = f"""
+        ASK WHERE {{
+          GRAPH <{METADATA_GRAPH_URI}> {{
+            ?s ?p ?o.
+            FILTER(?s = <{graph_iri}>)
+          }}
+        }}
+        """
+        result = fetch_data_gdb(query)
+        
+        if isinstance(result, dict):
+            return result.get("message", {}).get("boolean", False)
+        return False
+    except Exception as e:
+        logger.error(f"Error checking named graph existence: {e}", exc_info=True)
+        return False
 
 
 def concurrent_query(
@@ -200,12 +259,134 @@ def concurrent_query(
                 result = future.result(timeout=timeout)
                 results.append({query_key: result})
             except concurrent.futures.TimeoutError:
-                print(f"Query timed out for {query_key}")
+                sys.stdout.write(f"Query timed out for {query_key}")
                 results.append({query_key: None})
             except Exception as e:
-                print(f"Error occurred during query execution for {query_key}: {e}")
+                sys.stdout.write(f"Error occurred during query execution for {query_key}: {e}")
                 results.append(
                     {"query_key": query_key, "result": None}
                 )  # Optional: Handle failure case
 
     return results
+
+
+def initialize_metadata_graph():
+    """
+    Check if the metadata named graph exists and create it if it doesn't.
+    This should be called once on service startup.
+    
+    Returns:
+        bool: True if metadata graph exists or was created successfully, False otherwise
+    """
+    import time
+    
+    metadata_graph_uri = "https://brainkb.org/metadata/named-graph"
+    
+    # Wait a bit for Oxigraph to be ready (if it's starting up)
+    max_retries = 5
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            # Check if the metadata graph exists
+            check_metadata_graph_query = f"""
+            ASK WHERE {{
+              GRAPH <{metadata_graph_uri}> {{
+                ?s ?p ?o.
+              }}
+            }}
+            """
+            
+            metadata_graph_exists = fetch_data_gdb(check_metadata_graph_query)
+            
+            # Handle both dict and string responses
+            if isinstance(metadata_graph_exists, dict):
+                if metadata_graph_exists.get("status") == "success":
+                    metadata_exists = metadata_graph_exists.get("message", {}).get("boolean", False)
+                else:
+                    # Query failed, assume graph doesn't exist
+                    metadata_exists = False
+            else:
+                # If response is not a dict, assume graph doesn't exist
+                sys.stdout.write(f"Unexpected response type from fetch_data_gdb: {type(metadata_graph_exists)}")
+                metadata_exists = False
+            
+            if metadata_exists:
+                sys.stdout.write(f"Metadata graph <{metadata_graph_uri}> already exists.")
+                return True
+            else:
+                # Graph doesn't exist, break and create it
+                break
+                
+        except Exception as e:
+            sys.stdout.write(f"Attempt {attempt + 1}/{max_retries}: Could not check metadata graph existence: {str(e)}")
+            if attempt < max_retries - 1:
+                sys.stdout.write(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                sys.stdout.write("Max retries reached. Will attempt to create metadata graph anyway.")
+                metadata_exists = False
+    
+    # If metadata graph doesn't exist, create it with an initialization triple
+    sys.stdout.write(f"Metadata graph <{metadata_graph_uri}> does not exist. Creating it...")
+    for attempt in range(max_retries):
+        try:
+            # Create the metadata graph by inserting a minimal initialization statement
+            init_graph = Graph()
+            init_uri = URIRef(f"{metadata_graph_uri}#init")
+            prov_entity = URIRef("http://www.w3.org/ns/prov#Entity")
+            dcterms_desc = URIRef("http://purl.org/dc/terms/description")
+            
+            init_graph.add((init_uri, RDF.type, prov_entity))
+            init_graph.add((init_uri, dcterms_desc, 
+                           Literal("Metadata graph for BrainKB named graph registry", datatype=XSD.string)))
+            
+            # Serialize to N-Triples format (s p o .)
+            init_nt = init_graph.serialize(format='nt')
+            
+            # Create SPARQL INSERT DATA query with GRAPH clause for Oxigraph
+            # Format: INSERT DATA { GRAPH <uri> { triples } }
+            insert_query = f"""
+            INSERT DATA {{
+              GRAPH <{metadata_graph_uri}> {{
+                {init_nt}
+              }}
+            }}
+            """
+            
+            # Execute the insert query directly
+            sparql = _connectionmanager("post")
+            sparql.setMethod(POST)
+            sparql.setQuery(insert_query)
+            response = sparql.query()
+            sys.stdout.write(f"Insert response: {response}")
+            
+            # Verify the graph was created
+            verify_query = f"""
+            ASK WHERE {{
+              GRAPH <{metadata_graph_uri}> {{
+                ?s ?p ?o.
+              }}
+            }}
+            """
+            verify_result = fetch_data_gdb(verify_query)
+            if isinstance(verify_result, dict) and verify_result.get("status") == "success":
+                verified = verify_result.get("message", {}).get("boolean", False)
+                if verified:
+                    sys.stdout.write(f"Metadata graph <{metadata_graph_uri}> created and verified successfully.")
+                    return True
+            
+            sys.stdout.write(f"Metadata graph created but verification failed. Response: {verify_result}")
+            return False
+            
+        except Exception as e:
+            sys.stdout.write(f"Attempt {attempt + 1}/{max_retries}: Failed to create metadata graph: {str(e)}")
+            if attempt < max_retries - 1:
+                sys.stdout.write(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                import traceback
+                traceback.print_exc()
+                return False
+    
+    return False
