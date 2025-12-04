@@ -32,11 +32,10 @@ from core.shared import (
     convert_to_turtle, chunk_ttl_to_named_graphs,
     human_size, human_rate, get_ext, get_content_type_for_ext,
     convert_jsonld_to_ntriples_flat, detect_raw_format,
-    compute_summary, append_csv_summary, contains_ip, attach_provenance,
-    check_named_graph_exists
+    compute_summary, contains_ip, attach_provenance,
+    get_oxigraph_endpoint, get_oxigraph_auth
 )
-from core.configuration import load_environment
-from core.graph_database_connection_manager import fetch_data_gdb
+from core.graph_database_connection_manager import fetch_data_gdb, check_named_graph_exists
 from core.database import (
     create_job,
     update_job_status,
@@ -45,6 +44,7 @@ from core.database import (
     update_job_progress,
     get_job_results,
     get_job_by_id_and_user,
+    list_user_jobs,
 )
 import datetime
 import uuid
@@ -72,7 +72,6 @@ SUPPORTED_EXTS = {"ttl", "turtle", "nt", "nq", "trig", "rdf", "owl", "jsonld", "
 os.makedirs(JOB_BASE_DIR, exist_ok=True)
 
 
-# ---------- Helper functions for Oxigraph upload ----------
 
 async def upload_single_file_path(
     client: httpx.AsyncClient,
@@ -87,33 +86,16 @@ async def upload_single_file_path(
     filename = os.path.basename(filepath)
     ext = get_ext(filename)
     
-    # Get Oxigraph endpoint from configuration
-    env = load_environment()
-    hostname = env.get("GRAPHDATABASE_HOSTNAME", "http://localhost")
-    port = env.get("GRAPHDATABASE_PORT", 7878)
-    
-    # Construct base URL
-    if hostname.startswith("http://") or hostname.startswith("https://"):
-        base_url = hostname
-    elif contains_ip(hostname):
-        base_url = f"http://{hostname}:{port}"
-    else:
-        # Docker service name or hostname - construct full URL
-        base_url = f"http://{hostname}:{port}"
-    
-    # Use Graph Store HTTP endpoint
-    endpoint = f"{base_url}/store"
+    # Get Oxigraph endpoint and auth from configuration
+    endpoint = get_oxigraph_endpoint()
     url = f"{endpoint}?graph={graph}"
-    
-    # Get auth from configuration
-    username = env.get("GRAPHDATABASE_USERNAME")
-    password = env.get("GRAPHDATABASE_PASSWORD")
-    auth = (username, password) if username and password else None
+    auth = get_oxigraph_auth()
     
     if ext == "jsonld":
         try:
             with open(filepath, "rb") as f:
                 data = f.read()
+            #current oxigraph doesn't support jsonld ingestion directly so convert to nt
             payload = convert_jsonld_to_ntriples_flat(data)
             content_type = "application/n-triples"
         except Exception as e:
@@ -170,21 +152,6 @@ async def run_ingest_job(
     max_concurrency: int,
 ):
     """Background job runner for file ingestion."""
-    # Get Oxigraph endpoint from configuration
-    env = load_environment()
-    hostname = env.get("GRAPHDATABASE_HOSTNAME", "http://localhost")
-    port = env.get("GRAPHDATABASE_PORT", 7878)
-    
-    # Construct base URL
-    if hostname.startswith("http://") or hostname.startswith("https://"):
-        base_url = hostname
-    elif contains_ip(hostname):
-        base_url = f"http://{hostname}:{port}"
-    else:
-        base_url = f"http://{hostname}:{port}"
-    
-    endpoint = f"{base_url}/store"
-    
     try:
         # Mark job as running and get job_dir + graph
         await update_job_status(job_id, "running", start_time=time.time())
@@ -244,11 +211,7 @@ async def run_ingest_job(
             tasks = [worker(fi) for fi in file_infos]
             if tasks:
                 await asyncio.gather(*tasks)
-        
-        # Compute summary and mark job done
-        results = await get_job_results(job_id)
-        summary = compute_summary(results)
-        append_csv_summary(summary, CSV_SUMMARY_FILE, endpoint)
+
         await update_job_status(job_id, "done", end_time=time.time())
     except Exception as e:
         # Mark job as errored
@@ -291,19 +254,7 @@ async def insert_knowledge_graph_triples(
     job_id = uuid.uuid4().hex
     
     # Get Oxigraph endpoint from configuration
-    env = load_environment()
-    hostname = env.get("GRAPHDATABASE_HOSTNAME", "http://localhost")
-    port = env.get("GRAPHDATABASE_PORT", 7878)
-    
-    # Construct base URL
-    if hostname.startswith("http://") or hostname.startswith("https://"):
-        base_url = hostname
-    elif contains_ip(hostname):
-        base_url = f"http://{hostname}:{port}"
-    else:
-        base_url = f"http://{hostname}:{port}"
-    
-    endpoint = f"{base_url}/store"
+    endpoint = get_oxigraph_endpoint()
     
     raw_bytes = data.encode("utf-8")
     if len(raw_bytes) > MAX_RAW_SIZE_BYTES:
@@ -346,7 +297,7 @@ async def insert_knowledge_graph_triples(
             detected = "ttl"  # Update format after provenance attachment
         elif detected == "nt":
             # Convert back to N-Triples
-            from rdflib import Graph
+
             temp_graph = Graph()
             temp_graph.parse(data=ttl_data_with_provenance, format="turtle")
             data = temp_graph.serialize(format="nt")
@@ -396,7 +347,6 @@ async def insert_knowledge_graph_triples(
             "response_body": f"Failed to prepare payload (detected={detected}): {e}",
         }
         summary = compute_summary([result])
-        append_csv_summary(summary, CSV_SUMMARY_FILE, endpoint)
         await insert_job_result(
             job_id=job_id,
             file_name=result["file"],
@@ -424,9 +374,7 @@ async def insert_knowledge_graph_triples(
     url = f"{endpoint}?graph={named_graph_iri}"
     
     # Get auth from configuration
-    username = env.get("GRAPHDATABASE_USERNAME")
-    password = env.get("GRAPHDATABASE_PASSWORD")
-    auth = (username, password) if username and password else None
+    auth = get_oxigraph_auth()
     
     async with httpx.AsyncClient(timeout=None) as client:
         start_time = time.time()
@@ -466,9 +414,8 @@ async def insert_knowledge_graph_triples(
     }
     
     summary = compute_summary([result])
-    append_csv_summary(summary, CSV_SUMMARY_FILE, endpoint)
     
-    # Record job_results and update job
+    # Record job_results and update job in pgdb
     await insert_job_result(
         job_id=job_id,
         file_name=result["file"],
@@ -538,22 +485,10 @@ async def insert_file_knowledge_graph_triples(
             status_code=400,
         )
     
-    job_id = uuid.uuid4().hex
+    job_id = uuid.uuid4().hex  # generate for job tracking
     
     # Get Oxigraph endpoint from configuration
-    env = load_environment()
-    hostname = env.get("GRAPHDATABASE_HOSTNAME", "http://localhost")
-    port = env.get("GRAPHDATABASE_PORT", 7878)
-    
-    # Construct base URL
-    if hostname.startswith("http://") or hostname.startswith("https://"):
-        base_url = hostname
-    elif contains_ip(hostname):
-        base_url = f"http://{hostname}:{port}"
-    else:
-        base_url = f"http://{hostname}:{port}"
-    
-    endpoint = f"{base_url}/store"
+    endpoint = get_oxigraph_endpoint()
     
     job_dir = os.path.join(JOB_BASE_DIR, user_id, f"job_{job_id}")
     os.makedirs(job_dir, exist_ok=True)
@@ -645,12 +580,10 @@ async def insert_file_knowledge_graph_triples(
                 
                 # Convert to Turtle if needed for provenance
                 if format_type == "jsonld":
-                    from rdflib import Graph
                     temp_graph = Graph()
                     temp_graph.parse(data=file_data, format="json-ld")
                     ttl_data = temp_graph.serialize(format="turtle")
                 elif format_type == "nt":
-                    from rdflib import Graph
                     temp_graph = Graph()
                     temp_graph.parse(data=file_data, format="nt")
                     ttl_data = temp_graph.serialize(format="turtle")
@@ -668,7 +601,6 @@ async def insert_file_knowledge_graph_triples(
                         f.write(file_data)
                 elif format_type == "nt":
                     # Convert back to N-Triples
-                    from rdflib import Graph
                     temp_graph = Graph()
                     temp_graph.parse(data=ttl_data_with_provenance, format="turtle")
                     file_data = temp_graph.serialize(format="nt")
@@ -744,40 +676,85 @@ async def insert_file_knowledge_graph_triples(
             include_in_schema=True
             )
 async def get_job_status(
-    job_id: Annotated[str, Query(..., description="Job identifier")],
     user_id: Annotated[str, Query(..., description="User identifier")],
+    job_id: Annotated[Optional[str], Query(None, description="If provided, return a single job; otherwise list all jobs for this user")] = None,
+    limit: Annotated[int, Query(50, ge=1, le=500, description="Page size when listing jobs")] = 50,
+    offset: Annotated[int, Query(0, ge=0, description="Offset for pagination when listing jobs")] = 0,
+    started_after: Annotated[Optional[float], Query(None, description="(list mode) jobs with start_time >= this UNIX epoch seconds")] = None,
+    started_before: Annotated[Optional[float], Query(None, description="(list mode) jobs with start_time <= this UNIX epoch seconds")] = None,
     # user: Annotated[LoginUserIn, Depends(get_current_user)]
 ):
     """
-    Get JSON status for a job (user-specific).
-    Works for both file-based and raw ingests.
+    GET /insert/jobs
+    Two modes:
+    1) Single job mode (job_id provided):
+       - Returns that job for this user, including summary (when done/error)
+    2) List mode (job_id omitted):
+       - Returns a paginated list of jobs for this user
+       - Supports optional started_after / started_before filters
     """
-    job = await get_job_by_id_and_user(job_id, user_id)
-    if not job:
-        return JSONResponse({"error": "Job not found"}, status_code=404)
+    # Mode 1: Single job
+    if job_id:
+        job = await get_job_by_id_and_user(job_id, user_id)
+        if not job:
+            return JSONResponse({"error": "Job not found"}, status_code=404)
+        
+        total = job["total_files"]
+        processed = job["processed_files"]
+        progress = (100.0 * processed / total) if total else 0.0
+        
+        resp: Dict[str, Any] = {
+            "job_id": job_id,
+            "user_id": user_id,
+            "status": job["status"],
+            "total_files": total,
+            "processed_files": processed,
+            "progress_percent": round(progress, 2),
+            "success_count": job["success_count"],
+            "fail_count": job["fail_count"],
+            "endpoint": job["endpoint"],
+            "named_graph_iri": job["graph"],
+        }
+        
+        # Only pull full summary when job is finished/errored
+        if job["status"] in ("done", "error"):
+            results = await get_job_results(job_id)
+            resp["summary"] = compute_summary(results)
+        
+        return resp
     
-    total = job["total_files"]
-    processed = job["processed_files"]
-    progress = (100.0 * processed / total) if total else 0.0
-    
-    resp: Dict[str, Any] = {
-        "job_id": job_id,
-        "user_id": user_id,
-        "status": job["status"],
-        "total_files": total,
-        "processed_files": processed,
-        "progress_percent": round(progress, 2),
-        "success_count": job["success_count"],
-        "fail_count": job["fail_count"],
-        "endpoint": job["endpoint"],
-        "named_graph_iri": job["graph"],
-    }
-    
-    if job["status"] in ("done", "error"):
-        results = await get_job_results(job_id)
-        resp["summary"] = compute_summary(results)
-    
-    return resp
+    # Mode 2: List all jobs for user
+    return await list_user_jobs(
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+        started_after=started_after,
+        started_before=started_before,
+    )
+
+
+@router.get("/insert/user/jobs",
+            include_in_schema=True
+            )
+async def list_user_jobs_endpoint(
+    user_id: Annotated[str, Query(..., description="User identifier")],
+    limit: Annotated[int, Query(50, ge=1, le=500, description="Maximum number of jobs to return")] = 50,
+    offset: Annotated[int, Query(0, ge=0, description="Number of jobs to skip")] = 0,
+    started_after: Annotated[Optional[float], Query(None, description="Filter: jobs with start_time >= this UNIX epoch seconds")] = None,
+    started_before: Annotated[Optional[float], Query(None, description="Filter: jobs with start_time <= this UNIX epoch seconds")] = None,
+    # user: Annotated[LoginUserIn, Depends(get_current_user)]
+):
+    """
+    List all jobs for a user, with pagination and optional time range filters.
+    Returns saved statistics for all jobs.
+    """
+    return await list_user_jobs(
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+        started_after=started_after,
+        started_before=started_before,
+    )
 
 
 @router.post("/register-named-graph")
