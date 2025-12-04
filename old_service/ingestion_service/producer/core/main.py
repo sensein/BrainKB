@@ -10,6 +10,7 @@ from core.configure_logging import configure_logging
 from core.routers.index import router as index_router
 from core.routers.jwt_auth import router as jwt_router
 from core.routers.api_endpoints_input import router as ingest_api_router
+from core.database import init_db_pool
 
 
 app = FastAPI()
@@ -25,6 +26,9 @@ app.include_router(ingest_api_router, prefix="/api", tags=["Ingestion"])
 async def startup_event():
     configure_logging()
     logger.info("Starting FastAPI")
+    # Initialize database connection pool
+    await init_db_pool()
+    logger.info("Database connection pool initialized")
 
 
 # log all HTTP exception when raised

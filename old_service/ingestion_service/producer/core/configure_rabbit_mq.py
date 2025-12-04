@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 rabbitmq_username = load_environment()["RABBITMQ_USERNAME"]
 rabbitmq_password = load_environment()["RABBITMQ_PASSWORD"]
 rabbitmq_url = load_environment()["RABBITMQ_URL"]
-rabbitmq_port = load_environment()["RABBITMQ_PORT"]
-rabbitmq_vhost = load_environment()["RABBITMQ_VHOST"]
+rabbitmq_port = 5672
+rabbitmq_vhost = "/"
 
 
 

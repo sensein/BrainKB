@@ -31,7 +31,7 @@ from core.database import get_user
 
 logger = logging.getLogger(__name__)
 
-SECRET_KEY = load_environment()["JWT_SECRET_KEY"]
+SECRET_KEY = load_environment()["JWT_SECRET_KEY"]  # Uses INGESTION_SERVICE_JWT_SECRET_KEY
 ALGORITHM = load_environment()["JWT_ALGORITHM"]
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 pwd_context = CryptContext(schemes=["bcrypt"])

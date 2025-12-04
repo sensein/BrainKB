@@ -113,7 +113,6 @@ venv.bak/
 *.iml
 
 #ignoring any changes to other microservices for time being
-ingestion_service
 chat_service
 usermanagement_service
 # macOS specific

@@ -32,12 +32,18 @@ def load_environment(env_name="env"):
     Returns:
         dict: A dictionary containing the loaded environment variables.
     """
-    # Determine the path to the .env.development.development file based on the environment
+    # Determine the path to the .env file based on the environment
+    # Always fall back to root .env file - service-specific .env files are removed
     root_dir = os.path.dirname(os.path.abspath(__file__))
-    env_file = os.path.join(root_dir, f".{env_name}")
-
-    # Load environment variables from the .env file
-    load_dotenv(dotenv_path=env_file)
+    
+    # Traverse up to project root (BrainKB/)
+    # ingestion_service/producer/core/ -> ingestion_service/producer/ -> ingestion_service/ -> BrainKB/
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(root_dir)))
+    
+    # Always load from root .env file (used by docker-compose)
+    root_env_file = os.path.join(project_root, ".env")
+    if os.path.exists(root_env_file):
+        load_dotenv(dotenv_path=root_env_file, override=False)
 
     # Return a dictionary containing the loaded environment variables
     return {
@@ -55,7 +61,7 @@ def load_environment(env_name="env"):
         "JWT_POSTGRES_DATABASE_PASSWORD": os.getenv("JWT_POSTGRES_DATABASE_PASSWORD"),
         "JWT_POSTGRES_DATABASE_NAME": os.getenv("JWT_POSTGRES_DATABASE_NAME"),
         "JWT_ALGORITHM": os.getenv("JWT_ALGORITHM", "HS256"),
-        "JWT_SECRET_KEY": os.getenv("JWT_SECRET_KEY"),
+        "JWT_SECRET_KEY": os.getenv("INGESTION_SERVICE_JWT_SECRET_KEY"),
 
     #     Ingestion specific environment
         "RABBITMQ_USERNAME": os.getenv("RABBITMQ_USERNAME"),
