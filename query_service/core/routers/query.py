@@ -17,12 +17,12 @@
 # @Software: PyCharm
 
 from fastapi import APIRouter
-from core.graph_database_connection_manager import  fetch_data_gdb
+from core.graph_database_connection_manager import fetch_data_gdb, check_named_graph_exists
 import logging
 from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
-from core.shared import taxonomy_postprocessing, check_named_graph_exists
+from core.shared import taxonomy_postprocessing
 from fastapi import Depends
 from pydantic import BaseModel, root_validator
 from typing import List
