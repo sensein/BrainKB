@@ -27,13 +27,34 @@ from core.configuration import load_environment
 
 logger = logging.getLogger(__name__)
 
-DB_SETTINGS = {
-    "user": load_environment()["JWT_POSTGRES_DATABASE_USER"],
-    "password": load_environment()["JWT_POSTGRES_DATABASE_PASSWORD"],
-    "database": load_environment()["JWT_POSTGRES_DATABASE_NAME"],
-    "host": load_environment()["JWT_POSTGRES_DATABASE_HOST_URL"],
-    "port": load_environment()["JWT_POSTGRES_DATABASE_PORT"],
-}
+# Load environment and validate database settings
+def get_db_settings():
+    """Get database settings with validation and defaults."""
+    env = load_environment()
+    
+    # Validate host - cannot be None or empty
+    host = env.get("JWT_POSTGRES_DATABASE_HOST_URL")
+    if not host or host.strip() == "":
+        logger.warning("JWT_POSTGRES_DATABASE_HOST_URL is not set, defaulting to 'postgres'")
+        host = "postgres"  # Default Docker service name
+    
+    # Validate port - convert to int, default to 5432
+    port = env.get("JWT_POSTGRES_DATABASE_PORT")
+    try:
+        port = int(port) if port else 5432
+    except (ValueError, TypeError):
+        logger.warning(f"Invalid JWT_POSTGRES_DATABASE_PORT '{port}', defaulting to 5432")
+        port = 5432
+    
+    return {
+        "user": env.get("JWT_POSTGRES_DATABASE_USER") or "postgres",
+        "password": env.get("JWT_POSTGRES_DATABASE_PASSWORD") or "",
+        "database": env.get("JWT_POSTGRES_DATABASE_NAME") or "brainkb",
+        "host": host,
+        "port": port,
+    }
+
+DB_SETTINGS = get_db_settings()
 
 table_name_user = load_environment()["JWT_POSTGRES_TABLE_USER"]
 table_name_scope = load_environment()["JWT_POSTGRES_TABLE_SCOPE"]
@@ -64,20 +85,24 @@ async def init_db_pool():
         
         # CRITICAL FIX: Account for multiple workers
         # Gunicorn workers: each creates its own pool
-        num_workers = int(os.getenv("WEB_CONCURRENCY", "1" if env_state == "dev" else "4"))
+        num_workers = int(os.getenv("WEB_CONCURRENCY", "1" if env_state == "dev" else "6"))
         
         # Calculate per-worker sizes to avoid exceeding PostgreSQL limits
-        # Target: ~40-50 total connections across all workers (leaves room for other services)
+        # Increased pool size to handle concurrent ingestion + JWT validation
+        # Target: ~90 total connections across all workers (leaves room for other services)
         if env_state == "dev":
             min_size = 0  # Lazy init - no connections at startup
-            max_size = 5
+            max_size = 10  # Increased from 5 to handle concurrent operations
         else:
-            min_size = 0  # Lazy init - prevents connection stampede
-            # With 4 workers: 8 per worker = 32 total (safe)
-            max_size = max(3, min(8, 50 // num_workers))
+            min_size = 2  # Keep a few connections ready for fast JWT validation
+            # With 6 workers: 15 per worker = 90 total (safe, PostgreSQL default max is 100)
+            max_size = max(10, min(15, 90 // num_workers))
         
         sys.stdout.write(f"[DB POOL INIT] Workers: {num_workers}, min={min_size}, max={max_size} per worker")
         sys.stdout.write(f"[DB POOL INIT] Total potential: {max_size * num_workers} connections")
+        
+        # Log connection details (without password)
+        sys.stdout.write(f"[DB POOL INIT] Connecting to: {DB_SETTINGS['host']}:{DB_SETTINGS['port']}/{DB_SETTINGS['database']} as {DB_SETTINGS['user']}")
 
         pool = await asyncpg.create_pool(
             min_size=min_size,
@@ -125,22 +150,15 @@ async def get_db_connection():
     import asyncio
     pool = await get_db_pool()
     
-    # Get pool status before acquiring
-    pool_size = pool.get_size()
-    idle_size = pool.get_idle_size()
-    in_use = pool_size - idle_size
-    
-    sys.stdout.write(f"[CONN ACQUIRE] Process {os.getpid()}: Acquiring connection... (pool: size={pool_size}, idle={idle_size}, in_use={in_use})")
-    
     # Add timeout to prevent indefinite waiting
+    # Reduced timeout for faster failure when pool is exhausted
     try:
-        conn = await asyncio.wait_for(pool.acquire(), timeout=10.0)
-        sys.stdout.write(f"[CONN ACQUIRE] Connection acquired! (pool now: size={pool.get_size()}, idle={pool.get_idle_size()}, in_use={pool.get_size() - pool.get_idle_size()})")
+        conn = await asyncio.wait_for(pool.acquire(), timeout=5.0)
     except asyncio.TimeoutError:
-        logger.error("Connection acquisition timed out after 10 seconds")
+        logger.error("Connection acquisition timed out after 5 seconds - pool may be exhausted")
         raise HTTPException(
             status_code=503,
-            detail="Database connection timeout. Please try again."
+            detail="Database connection timeout. Please try again in a moment."
         )
     except asyncpg.exceptions.TooManyConnectionsError as e:
         logger.error(f"Too many database connections: {str(e)}")
@@ -154,9 +172,6 @@ async def get_db_connection():
     finally:
         # Always release connection back to pool (not closed, just returned to pool)
         await pool.release(conn)
-        pool_size_after = pool.get_size()
-        idle_size_after = pool.get_idle_size()
-        sys.stdout.write(f"[CONN RELEASE] Connection released back to pool! (pool now: size={pool_size_after}, idle={idle_size_after}, in_use={pool_size_after - idle_size_after})")
 
 # FastAPI dependency for automatic connection management in routes
 async def get_db() -> AsyncGenerator[asyncpg.Connection, None]:
@@ -503,6 +518,43 @@ async def insert_job_result(
             )
 
 
+async def batch_insert_job_results(
+    job_id: str,
+    results: List[Dict[str, Any]],
+) -> None:
+    """
+    Batch insert multiple job results in a single transaction.
+    This is much more efficient than calling insert_job_result multiple times.
+    """
+    if not results:
+        return
+    
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            # Use executemany for efficient batch insert
+            await conn.executemany(
+                """
+                INSERT INTO job_results
+                (job_id, file_name, ext, size_bytes, elapsed_s, http_status, success, bps, response_body)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """,
+                [
+                    (
+                        job_id,
+                        r["file"],
+                        r["ext"],
+                        r["size_bytes"],
+                        r["elapsed_s"],
+                        r["http_status"],
+                        bool(r["success"]),
+                        r["bps"],
+                        r["response_body"],
+                    )
+                    for r in results
+                ],
+            )
+
+
 async def update_job_progress(
     job_id: str,
     success_increment: int = 0,
@@ -523,6 +575,77 @@ async def update_job_progress(
                 fail_increment,
                 job_id,
             )
+
+
+async def batch_update_job_completion(
+    job_id: str,
+    file_name: str,
+    ext: str,
+    size_bytes: int,
+    elapsed_s: float,
+    http_status: int,
+    success: bool,
+    bps: float,
+    response_body: str,
+    status: str,
+    end_time: Optional[float] = None,
+) -> None:
+    """
+    Batch operation: Insert job result AND update job status AND update progress in a single transaction.
+    This reduces connection overhead from 3 separate calls to 1.
+    """
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            # Insert job result
+            await conn.execute(
+                """
+                INSERT INTO job_results
+                (job_id, file_name, ext, size_bytes, elapsed_s, http_status, success, bps, response_body)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """,
+                job_id,
+                file_name,
+                ext,
+                size_bytes,
+                elapsed_s,
+                http_status,
+                success,
+                bps,
+                response_body,
+            )
+            # Update job status and progress in a single query
+            if end_time is not None:
+                await conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = $1,
+                        end_time = $2,
+                        processed_files = processed_files + 1,
+                        success_count = success_count + $3,
+                        fail_count = fail_count + $4
+                    WHERE job_id = $5
+                    """,
+                    status,
+                    end_time,
+                    1 if success else 0,
+                    0 if success else 1,
+                    job_id,
+                )
+            else:
+                await conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = $1,
+                        processed_files = processed_files + 1,
+                        success_count = success_count + $2,
+                        fail_count = fail_count + $3
+                    WHERE job_id = $4
+                    """,
+                    status,
+                    1 if success else 0,
+                    0 if success else 1,
+                    job_id,
+                )
 
 
 async def get_job_results(job_id: str) -> List[Dict[str, Any]]:

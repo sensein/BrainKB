@@ -22,3 +22,5 @@ asyncpg==0.29.0
 #pin to bcrypt < 4.x to prevent error password cannot be longer than 72 bytes
 bcrypt==3.2.2
 httpx==0.27.0
+gunicorn==21.2.0
+uvicorn[standard]==0.29.0
