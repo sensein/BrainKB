@@ -13,6 +13,7 @@ router = APIRouter()
 
 @router.post("/register", status_code=201)
 async def register(user: UserIn, conn=Depends(get_db)):
+
     if await get_user(conn=conn, email=user.email):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -21,11 +22,11 @@ async def register(user: UserIn, conn=Depends(get_db)):
     hashed_password = get_password_hash(user.password)
 
     return await insert_data(
-        conn=conn, fullname=user.full_name, email=user.email, password=hashed_password
+        fullname=user.full_name, email=user.email, password=hashed_password, conn=conn
     )
 
 
-@router.post("/token", include_in_schema=True)
+@router.post("/token")
 async def login(user: LoginUserIn, conn=Depends(get_db)):
     user = await authenticate_user(user.email, user.password, conn)
     scopes = await get_scopes_by_user(user_id=user["id"])

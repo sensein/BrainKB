@@ -8,6 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+logs
 build/
 develop-eggs/
 dist/
@@ -111,6 +112,9 @@ venv.bak/
 .idea/
 *.iml
 
+#ignoring any changes to other microservices for time being
+chat_service
+usermanagement_service
 # macOS specific
 .DS_Store
 .AppleDouble

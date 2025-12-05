@@ -17,8 +17,10 @@
 # @Software: PyCharm
 from __future__ import annotations
 import yaml
-from pydantic import BaseModel, Field, ValidationError
-from typing import List, Dict, Any
+from core.configuration import load_environment
+from pydantic import ValidationError
+import time
+import sys
 import re
 import os
 from rdflib import Graph, URIRef, Literal, RDF, XSD , DCTERMS , PROV
@@ -26,8 +28,8 @@ import datetime
 import uuid
 from rdflib import Namespace
 import requests
-
-from typing import Dict, Any, List
+from rdflib import ConjunctiveGraph
+from typing import Dict, Any, List, Optional
 
 
 try:
@@ -45,99 +47,6 @@ class ValueNotSetException(Exception):
         return self.message
 
 
-# Model for handling basic SPARQL query response
-class HeadModel(BaseModel):
-    """Represents the header of a SPARQL query result."""
-
-    vars: List[str]
-
-
-class BindingCategoryModel(BaseModel):
-    """Represents the category for a binding in a SPARQL query result."""
-
-    value: str
-
-
-class BindingModel(BaseModel):
-    """Represents the binding in a SPARQL query result."""
-
-    categories: BindingCategoryModel
-
-
-class ResultsModel(BaseModel):
-    """Represents the list of bindings in a SPARQL query result."""
-
-    bindings: List[BindingModel]
-
-
-class MessageModel(BaseModel):
-    """Encapsulates the header and results for a SPARQL query response."""
-
-    head: HeadModel
-    results: ResultsModel
-
-
-class DataModel(BaseModel):
-    """Represents the top-level SPARQL query response."""
-
-    status: str
-    message: MessageModel
-
-
-# Model for handling concatenated predicate-object responses
-class BindingPredicateObjectModel(BaseModel):
-    """Represents subject, predicates, and objects binding."""
-
-    subject: Dict[str, Any]
-    predicates: Dict[str, Any]
-    objects: Dict[str, Any]
-
-
-class ResultsPredicateObjectModel(BaseModel):
-    """Represents the list of predicate-object bindings."""
-
-    bindings: List[BindingPredicateObjectModel]
-
-
-class MessagePredicateObjectModel(BaseModel):
-    """Encapsulates results for concatenated predicate-object responses."""
-
-    results: ResultsPredicateObjectModel
-
-
-class ResponsePredicateObjectModel(BaseModel):
-    """Represents the top-level response for predicate-object data."""
-
-    status: str
-    message: MessagePredicateObjectModel
-
-
-# Model for handling statistics (count) responses
-class CountBindingModel(BaseModel):
-    """Represents the count binding in a SPARQL statistics query."""
-
-    count: Dict[str, Any]
-
-
-class ResultsCountModel(BaseModel):
-    """Represents the list of count bindings."""
-
-    bindings: List[CountBindingModel]
-
-
-class MessageCountModel(BaseModel):
-    """Encapsulates results for count-based responses."""
-
-    results: ResultsCountModel
-
-
-class DataModelCount(BaseModel):
-    """Represents the top-level response for count data."""
-
-    status: str
-    message: MessageCountModel
-
-
 def convert_to_turtle(jsonlddata):
     return Graph().parse(data=jsonlddata, format="json-ld").serialize(format="turtle")
 
@@ -152,10 +61,10 @@ def read_yaml_config(source_path: str) -> Dict[str, Any]:
             return yaml.load(file, Loader=Loader)
 
     except FileNotFoundError:
-        print(f"Error: The file {source_path} was not found.")
+        sys.stdout.write(f"Error: The file {source_path} was not found.\n")
         return {}
     except yaml.YAMLError as e:
-        print(f"Error: Failed to parse YAML file. {e}")
+        sys.stdout.write(f"Error: Failed to parse YAML file. {e}\n")
         return {}
 
 
@@ -167,7 +76,7 @@ def yaml_config_list_to_query_dict(
 ) -> List[Dict[str, Any]]:
     """Converts a YAML list into a list of dictionaries for key-value pairs."""
     if yaml_list_key not in yaml_data:
-        print(f"Error: Key '{yaml_list_key}' not found in YAML data.")
+        sys.stdout.write(f"Error: Key '{yaml_list_key}' not found in YAML data.\n")
         return []
 
     try:
@@ -177,7 +86,7 @@ def yaml_config_list_to_query_dict(
             if dict_key_item in item and dict_value_item in item
         ]
     except KeyError as e:
-        print(f"Error: Missing key {e} in one of the items.")
+        sys.stdout.write(f"Error: Missing key {e} in one of the items.\n")
         return []
 
 
@@ -215,14 +124,14 @@ def yaml_config_single_dict_to_query(
               GROUP BY ?s
     """
     if superkey not in yaml_data:
-        print(f"Error: '{superkey}' not found in YAML data.")
+        sys.stdout.write(f"Error: '{superkey}' not found in YAML data.\n")
         return None
 
     # Extract the SPARQL query using the provided key
     sparql_query = yaml_data.get(superkey, {}).get(sparql_query_key)
 
     if sparql_query is None:
-        print(f"Error: '{sparql_query_key}' not found under '{superkey}'.")
+        sys.stdout.write(f"Error: '{sparql_query_key}' not found under '{superkey}'.\n")
 
     return sparql_query
 
@@ -239,6 +148,7 @@ def contains_ip(string):
 
 
 def transform_data_categories(data: Dict[str, Any]):
+    from core.pydantic_schema import DataModel
     try:
         # Validate input data using the DataModel schema
         validated_data = DataModel(**data)
@@ -262,6 +172,7 @@ def transform_data_categories(data: Dict[str, Any]):
 
 # Define the clean_response_concatenated_predicate_object function using Pydantic
 def clean_response_concatenated_predicate_object(response: Dict[str, Any]):
+    from core.pydantic_schema import ResponsePredicateObjectModel
     try:
         # Validate input response
         validated_response = ResponsePredicateObjectModel(**response)
@@ -287,6 +198,7 @@ def clean_response_concatenated_predicate_object(response: Dict[str, Any]):
 
 
 def clean_response_statistics(response: List[Dict[str, Any]]):
+    from core.pydantic_schema import DataModelCount
     cleaned_data = {}
 
     try:
@@ -403,6 +315,45 @@ def convert_ttl_to_named_graph(ttl_str: str, named_graph_uri: str = "https://bra
     return n3_named_graph_data
 
 
+def chunk_ttl_to_named_graphs(ttl_str: str, named_graph_uri: str = "https://brainkb.org/test", chunk_size: int = 1000) -> list[str]:
+    """
+    Converts a large Turtle (TTL) file to multiple Named Graph chunks for batch insertion.
+    This is useful for large files that might timeout during insertion.
+
+    :param ttl_str: A string containing Turtle (TTL) formatted RDF data.
+    :param named_graph_uri: URI of the named graph.
+    :param chunk_size: Number of triples per chunk. 
+                       Default: 1000 for medium files, use 500 for very large files (50-60MB).
+    :return: A list of strings, each containing a chunk in Named Graph format.
+    """
+    g = Graph()
+    g.parse(data=ttl_str, format="turtle")
+    
+    # Get all triples
+    triples = list(g)
+    
+    if len(triples) <= chunk_size:
+        # If file is small enough, return as single chunk
+        return [convert_ttl_to_named_graph(ttl_str, named_graph_uri)]
+    
+    # Split into chunks
+    chunks = []
+    for i in range(0, len(triples), chunk_size):
+        chunk_triples = triples[i:i + chunk_size]
+        # Create a temporary graph with this chunk
+        chunk_graph = Graph()
+        chunk_graph += chunk_triples
+        
+        # Convert to named graph format
+        n3_named_graph_data = f"Graph <{named_graph_uri}> {{\n"
+        n3_named_graph_data += chunk_graph.serialize(format="nt")
+        n3_named_graph_data += "}\n"
+        
+        chunks.append(n3_named_graph_data)
+    
+    return chunks
+
+
 def named_graph_metadata(named_graph_url, description):
     """
         Generates metadata for a named graph using the PROV and DCTERMS ontologies.
@@ -429,7 +380,6 @@ def named_graph_metadata(named_graph_url, description):
 
         Example:
             >>> metadata = named_graph_metadata("https://example.org/mygraph", "This is a sample named graph.")
-            >>> print(metadata)  # Outputs the RDF metadata as a named graph in ntriple format
     """
     g = Graph()
     prov_entity = URIRef(named_graph_url)
@@ -499,7 +449,6 @@ def create_tree(taxon_children):
 
 def update_childrens(children_list, parent_id, taxon_children_dict):
     """ modyfies children_list"""
-    #print("in add children, parent_id", parent_id)
     if parent_id in taxon_children_dict:
         for child_id in taxon_children_dict[parent_id]["childrens_id"]:
             #print("child id", child_id)
@@ -517,3 +466,318 @@ def taxonomy_postprocessing(items):
     # creating a simple function for one level of children for testing the figure:
     fig_dict = create_tree(taxon_children)
     return fig_dict
+
+
+
+def human_size(num_bytes: float) -> str:
+    """Return human readable size: KB, MB, GB, ..."""
+    units = ["B", "KB", "MB", "GB", "TB"]
+    for unit in units:
+        if num_bytes < 1024 or unit == units[-1]:
+            return f"{num_bytes:.2f} {unit}"
+        num_bytes /= 1024
+    return f"{num_bytes:.2f} PB"
+
+
+def human_rate(bytes_per_sec: float) -> str:
+    """Return human readable throughput per second."""
+    units = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"]
+    for unit in units:
+        if bytes_per_sec < 1024 or unit == units[-1]:
+            return f"{bytes_per_sec:.2f} {unit}"
+        bytes_per_sec /= 1024
+    return f"{bytes_per_sec:.2f} PB/s"
+
+
+def get_ext(filename: str) -> str:
+    """Extract file extension from filename."""
+    return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+
+def get_content_type_for_ext(ext: str) -> str:
+    """
+    Content types for payload we actually send to Oxigraph.
+    For jsonld we convert to N-Triples, so we use application/n-triples.
+    """
+    ext = ext.lower()
+    if ext == "jsonld":
+        return "application/n-triples"
+    
+    CONTENT_TYPES = {
+        "ttl": "text/turtle",
+        "nt": "application/n-triples",
+        "nq": "application/n-quads",
+        "trig": "application/trig",
+        "rdf": "application/rdf+xml",
+        "owl": "application/rdf+xml",
+    }
+    return CONTENT_TYPES.get(ext, "application/octet-stream")
+
+
+def convert_jsonld_to_ntriples_flat(data: bytes) -> bytes:
+    """
+    Convert JSON-LD bytes -> N-Triples bytes using rdflib, flattening named graphs.
+    """
+
+    cg = ConjunctiveGraph()
+    cg.parse(data=data, format="json-ld")
+    g = Graph()
+    for s, p, o, _ctx in cg.quads((None, None, None, None)):
+        g.add((s, p, o))
+    return g.serialize(format="nt").encode('utf-8')
+
+
+def detect_raw_format(text: str) -> str:
+    """
+    Very simple heuristic to decide how to treat raw input:
+    - Starts with '{' or '[' -> JSON-LD
+    - Contains '@prefix' or '@base' -> Turtle
+    - Otherwise -> N-Triples (raw KG triples)
+    """
+    stripped = text.lstrip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        return "jsonld"
+    if "@prefix" in text or "@base" in text:
+        return "ttl"
+    # fallback: raw triples in N-Triples-like syntax
+    return "nt"
+
+
+def compute_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute summary statistics from job results."""
+    total_files = len(results)
+    success_results = [r for r in results if r.get("success")]
+    fail_results = [r for r in results if not r.get("success")]
+    total_bytes = sum(r.get("size_bytes", 0) for r in results)
+    total_success_bytes = sum(r.get("size_bytes", 0) for r in success_results)
+    
+    if results:
+        overall_elapsed = max(r.get("elapsed_s", 0.0) for r in results)
+    else:
+        overall_elapsed = 0.0
+    overall_elapsed = max(overall_elapsed, 1e-6)
+    
+    avg_file_size = total_bytes / total_files if total_files else 0.0
+    avg_success_file_size = (
+        total_success_bytes / len(success_results) if success_results else 0.0
+    )
+    overall_bps = total_bytes / overall_elapsed if overall_elapsed else 0.0
+    success_bps = total_success_bytes / overall_elapsed if overall_elapsed else 0.0
+    
+    if results:
+        max_result = max(results, key=lambda r: r.get("size_bytes", 0))
+        min_result = min(results, key=lambda r: r.get("size_bytes", 0))
+        max_file_size = max_result.get("size_bytes", 0)
+        max_file_name = max_result.get("file", "")
+        min_file_size = min_result.get("size_bytes", 0)
+        min_file_name = min_result.get("file", "")
+    else:
+        max_file_size = min_file_size = 0
+        max_file_name = min_file_name = ""
+    
+    per_ext: Dict[str, Dict[str, float]] = {}
+    for r in results:
+        ext = r.get("ext", "")
+        d = per_ext.setdefault(ext, {"count": 0, "bytes": 0})
+        d["count"] += 1
+        d["bytes"] += r.get("size_bytes", 0)
+    
+    for ext, d in per_ext.items():
+        d["avg_size"] = d["bytes"] / d["count"] if d["count"] else 0.0
+    
+    success_count = len(success_results)
+    fail_count = len(fail_results)
+    success_rate = (100.0 * success_count / total_files) if total_files else 0.0
+    
+    failures = [
+        {
+            "file": r.get("file", ""),
+            "http_status": r.get("http_status", 0),
+            "response_body": r.get("response_body", ""),
+        }
+        for r in fail_results
+    ]
+    
+    summary = {
+        "total_files": total_files,
+        "success_count": success_count,
+        "fail_count": fail_count,
+        "success_rate_percent": round(success_rate, 2),
+        "total_bytes": total_bytes,
+        "total_success_bytes": total_success_bytes,
+        "total_bytes_human": human_size(total_bytes),
+        "total_success_bytes_human": human_size(total_success_bytes),
+        "avg_file_size_bytes": avg_file_size,
+        "avg_file_size_human": human_size(avg_file_size),
+        "avg_success_file_size_bytes": avg_success_file_size,
+        "avg_success_file_size_human": human_size(avg_success_file_size),
+        "max_file_name": max_file_name,
+        "max_file_size_bytes": max_file_size,
+        "max_file_size_human": human_size(max_file_size),
+        "min_file_name": min_file_name,
+        "min_file_size_bytes": min_file_size,
+        "min_file_size_human": human_size(min_file_size),
+        "overall_elapsed_s": round(overall_elapsed, 3),
+        "overall_bps": overall_bps,
+        "overall_rate_human": human_rate(overall_bps),
+        "success_bps": success_bps,
+        "success_rate_human": human_rate(success_bps),
+        "per_extension": {
+            ext: {
+                "count": d["count"],
+                "total_bytes": d["bytes"],
+                "total_bytes_human": human_size(d["bytes"]),
+                "avg_size_bytes": d["avg_size"],
+                "avg_size_human": human_size(d["avg_size"]),
+            }
+            for ext, d in per_ext.items()
+        },
+        "failures": failures,
+    }
+    return summary
+
+
+def extract_base_namespace(graph: Graph) -> Namespace:
+    """
+    Extract the base namespace from an RDF graph.
+    Looks for common namespace patterns or uses a default.
+    
+    Args:
+        graph: RDFlib Graph object
+        
+    Returns:
+        Namespace: The base namespace for the graph
+    """
+    # Try to find a common namespace pattern
+    # Look for namespaces that might indicate the base
+    for prefix, namespace in graph.namespaces():
+        if prefix == "" or prefix.lower() in ["", "base", "default"]:
+            return Namespace(str(namespace))
+        # Check for common base patterns
+        if "brain-bican" in str(namespace).lower() or "identifiers.org" in str(namespace):
+            return Namespace(str(namespace))
+    
+    # Default to brain-bican namespace if nothing found
+    return Namespace("https://identifiers.org/brain-bican/vocab/")
+
+
+def attach_provenance(user: str, ttl_data: str) -> str:
+    """
+    Attach the provenance information about the ingestion activity. Saying, we received this triple by X user on XXXX date.
+    It appends provenance triples externally while keeping the original triples intact.
+
+    Parameters:
+    - user (str): The username of the person posting the data.
+    - ttl_data (str): The existing Turtle (TTL) RDF data.
+
+    Returns:
+    - str: Combined RDF (Turtle format) containing original data and provenance metadata.
+    """
+    # Validate input parameters
+    if not isinstance(user, str) or not user.strip():
+        raise ValueError("User must be a non-empty string.")
+    if not isinstance(ttl_data, str) or not ttl_data.strip():
+        raise ValueError("TTL data must be a non-empty string.")
+
+    try:
+        original_graph = Graph()
+        original_graph.parse(data=ttl_data, format="turtle")
+    except Exception as e:
+        raise RuntimeError(f"Error parsing TTL data: {e}")
+
+    try:
+        BASE = extract_base_namespace(original_graph)
+    except Exception as e:
+        raise RuntimeError(f"Failed to extract base namespace: {e}")
+
+    try:
+        # Create provenance graph
+        prov_graph = Graph()
+        
+        # Generate timestamps (ISO 8601 format, UTC)
+        start_time = datetime.datetime.utcnow().isoformat() + "Z"
+        
+        # Generate a unique UUID for provenance entity
+        provenance_uuid = str(uuid.uuid4())
+        prov_entity = URIRef(BASE[f"provenance/{provenance_uuid}"])
+        ingestion_activity = URIRef(BASE[f"ingestionActivity/{provenance_uuid}"])
+        user_uri = URIRef(BASE[f"agent/{user}"])
+
+        # Define provenance entity
+        prov_graph.add((prov_entity, RDF.type, PROV.Entity))
+        prov_graph.add((prov_entity, PROV.generatedAtTime, Literal(start_time, datatype=XSD.dateTime)))
+        prov_graph.add((prov_entity, PROV.wasAttributedTo, user_uri))
+        prov_graph.add((prov_entity, PROV.wasGeneratedBy, ingestion_activity))
+
+        # Define ingestion activity
+        # here we say IngestionActivity is an activity of type prov:Activity
+        prov_graph.add((ingestion_activity, RDF.type, PROV.Activity))
+        prov_graph.add((ingestion_activity, RDF.type, BASE["IngestionActivity"]))
+        prov_graph.add((ingestion_activity, PROV.generatedAtTime, Literal(start_time, datatype=XSD.dateTime)))
+        prov_graph.add((ingestion_activity, PROV.wasAssociatedWith, user_uri))
+
+        # Attach provenance to original triples
+        # OPTIMIZATION: Use set to avoid duplicate checks and limit to first 1000 entities for performance
+        # For very large graphs, we don't need to link every single entity
+        entity_count = 0
+        max_entities = 1000  # Limit to prevent excessive CPU usage on huge graphs
+        seen_entities = set()
+        
+        for entity in original_graph.subjects():
+            if entity_count >= max_entities:
+                break
+            if isinstance(entity, URIRef) and entity not in seen_entities:
+                seen_entities.add(entity)
+                prov_graph.add((ingestion_activity, PROV.wasAssociatedWith, entity))
+                entity_count += 1
+
+        # add a Dublin Core provenance statement -- this is the new addition to say it's ingested by user
+        prov_graph.add((prov_entity, DCTERMS.provenance, Literal(f"Data ingested by {user} on {start_time}")))
+
+        # Combine both graphs (original + provenance) so that we have new provenance information attached.
+        final_graph = original_graph + prov_graph
+
+        return final_graph.serialize(format="turtle")
+    except Exception as e:
+        raise RuntimeError(f"Error generating provenance RDF: {e}")
+
+
+def get_oxigraph_endpoint() -> str:
+    """
+    Get the Oxigraph Graph Store HTTP endpoint URL from configuration.
+    Constructs the full endpoint URL based on hostname and port.
+
+    Returns:
+        str: The full endpoint URL (e.g., "http://oxigraph:7878/store")
+    """
+
+    env = load_environment()
+    hostname = env.get("GRAPHDATABASE_HOSTNAME", "http://localhost")
+    port = env.get("GRAPHDATABASE_PORT", 7878)
+
+
+    if hostname.startswith("http://") or hostname.startswith("https://"):
+        base_url = hostname
+    elif contains_ip(hostname):
+        base_url = f"http://{hostname}:{port}"
+    else:
+        # Docker service name or hostname - construct full URL
+        base_url = f"http://{hostname}:{port}"
+
+    # Use Graph Store HTTP endpoint. This is specific for oxigraph
+    endpoint = f"{base_url}/store"
+    return endpoint
+
+
+def get_oxigraph_auth() -> Optional[tuple]:
+    """
+    Get Oxigraph authentication credentials from configuration.
+    
+    Returns:
+        tuple: (username, password) if credentials are set, None otherwise
+    """
+    env = load_environment()
+    username = env.get("GRAPHDATABASE_USERNAME")
+    password = env.get("GRAPHDATABASE_PASSWORD")
+    return (username, password) if username and password else None
+

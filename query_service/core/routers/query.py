@@ -17,7 +17,7 @@
 # @Software: PyCharm
 
 from fastapi import APIRouter
-from core.graph_database_connection_manager import  fetch_data_gdb
+from core.graph_database_connection_manager import fetch_data_gdb_async, check_named_graph_exists
 import logging
 from typing import Annotated
 from core.models.user import LoginUserIn
@@ -43,7 +43,11 @@ async def get_named_graphs():
           } 
         }
     """
-    response =  fetch_data_gdb(query_named_graph)
+    response = await fetch_data_gdb_async(query_named_graph)
+
+    if response.get("status") != "success":
+        logger.error(f"Failed to fetch named graphs: {response.get('message')}")
+        return {"error": "Failed to fetch named graphs", "details": response.get("message")}
 
     response_graph = {}
     for graphs_info in response["message"]["results"]["bindings"]:
@@ -55,15 +59,20 @@ async def get_named_graphs():
     return response_graph
 
 
-@router.get("/query/sparql/")
+@router.get("/query/sparql/",
+            dependencies=[Depends(require_scopes(["write","admin"]))],
+            )
 async def sparql_query(
     user: Annotated[LoginUserIn, Depends(get_current_user)], sparql_query: str
 ):
-    response = fetch_data_gdb(sparql_query)
+    response = await fetch_data_gdb_async(sparql_query)
     return response
 
-@router.get("/query/taxonomy")
-async def get_taxonomy():
+@router.get("/query/taxonomy",
+            dependencies=[Depends(require_scopes(["read"]))],)
+async def get_taxonomy(
+        user: Annotated[LoginUserIn, Depends(get_current_user)]
+):
     query_taxonomy = """
         PREFIX rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
@@ -86,7 +95,12 @@ async def get_taxonomy():
             }   
         }
     """
-    response = fetch_data_gdb(query_taxonomy)
+    response = await fetch_data_gdb_async(query_taxonomy)
+    
+    if response.get("status") != "success":
+        logger.error(f"Failed to fetch taxonomy: {response.get('message')}")
+        return {"error": "Failed to fetch taxonomy", "details": response.get("message")}
+    
     response_taxonomy = {}
     for taxon_info in response["message"]["results"]["bindings"]:
         response_taxonomy[taxon_info["id"]["value"]] = {

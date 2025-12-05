@@ -18,10 +18,8 @@
 
 from fastapi import APIRouter, Request, HTTPException, status
 from core.graph_database_connection_manager import (
-    fetch_data_gdb,
+    fetch_data_gdb_async,
     concurrent_query,
-    convert_to_turtle,
-    insert_data_gdb,
 )
 import json
 import logging
@@ -68,7 +66,7 @@ async def get_categories(limit=10, offset=1):
     query = yaml_config_single_dict_to_query(data, "all_categories_list")
     updated_query = query.replace("REPLACE_LIMIT", str(limit))
     updated_query = updated_query.replace("REPLACE_OFFSET", str(offset))
-    response = transform_data_categories(fetch_data_gdb(updated_query))
+    response = transform_data_categories(await fetch_data_gdb_async(updated_query))
     return response
 
 
@@ -87,6 +85,6 @@ async def get_data_by_category(category_name, limit=10, offset=1):
     corrected_query = corrected_query.replace("REPLACE_LIMIT", str(limit))
     corrected_query = corrected_query.replace("REPLACE_OFFSET", str(offset))
     response = clean_response_concatenated_predicate_object(
-        fetch_data_gdb(corrected_query)
+        await fetch_data_gdb_async(corrected_query)
     )
     return response
