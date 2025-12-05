@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 from core.graph_database_connection_manager import insert_data_gdb, insert_data_gdb_async
 import logging
 from core.pydantic_schema import InputKGTripleSchema, NamedGraphSchema
-from typing import Annotated, List, Dict, Any, Optional
+from typing import Annotated, List, Dict, Any, Optional, Tuple
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
 from fastapi import Depends
@@ -77,34 +77,116 @@ os.makedirs(JOB_BASE_DIR, exist_ok=True)
 
 
 
+async def process_file_with_provenance(
+    filepath: str,
+    user_id: str,
+    ext: str,
+) -> Tuple[str, bool]:
+    """
+    Process a file by attaching provenance if it's a text-based RDF format.
+    Returns (processed_filepath, success).
+    For text-based formats, creates a new file with provenance attached.
+    For binary formats, returns original filepath unchanged.
+    """
+    filename = os.path.basename(filepath)
+    
+    # Only process text-based RDF formats
+    if ext not in ["ttl", "turtle", "nt", "nq", "jsonld", "json", "rdf", "owl"]:
+        # Binary formats - no provenance, use original file
+        return filepath, True
+    
+    # Read file and attach provenance
+    try:
+        # Read file in chunks to handle large files
+        file_data_chunks = []
+        with open(filepath, "rb") as f:
+            while True:
+                chunk = f.read(10 * 1024 * 1024)  # 10 MB chunks
+                if not chunk:
+                    break
+                file_data_chunks.append(chunk)
+        
+        # Decode to text
+        try:
+            file_data = b"".join(file_data_chunks).decode("utf-8")
+        except UnicodeDecodeError:
+            file_data = b"".join(file_data_chunks).decode("utf-8", errors="ignore")
+        
+        # Determine format
+        if ext in ["ttl", "turtle"]:
+            format_type = "ttl"
+        elif ext in ["nt", "nq"]:
+            format_type = "nt"
+        elif ext in ["jsonld", "json"]:
+            format_type = "jsonld"
+        elif ext == "rdf":
+            format_type = "rdf"
+        elif ext == "owl":
+            format_type = "owl"
+        else:
+            format_type = "ttl"
+        
+        # Process in thread pool to avoid blocking
+        def parse_and_attach_provenance_sync():
+            """Synchronous function to parse RDF and attach provenance."""
+            temp_graph = Graph()
+            if format_type == "jsonld":
+                temp_graph.parse(data=file_data, format="json-ld")
+            elif format_type == "nt":
+                temp_graph.parse(data=file_data, format="nt")
+            elif format_type in ["rdf", "owl"]:
+                temp_graph.parse(data=file_data, format="xml")
+            else:  # "ttl"
+                temp_graph.parse(data=file_data, format="turtle")
+            
+            ttl_data = temp_graph.serialize(format="turtle")
+            return attach_provenance(user_id, ttl_data)
+        
+        loop = asyncio.get_event_loop()
+        ttl_data_with_provenance = await loop.run_in_executor(None, parse_and_attach_provenance_sync)
+        
+        # Save processed file (with provenance) to a new file
+        processed_filepath = filepath + ".processed.ttl"
+        with open(processed_filepath, "w", encoding="utf-8") as f:
+            f.write(ttl_data_with_provenance)
+        
+        return processed_filepath, True
+        
+    except Exception as e:
+        logger.warning(f"Failed to attach provenance to {filename}: {e}. Using original file.", exc_info=True)
+        # Return original filepath if processing fails
+        return filepath, False
+
+
 async def upload_single_file_path(
     client: httpx.AsyncClient,
     filepath: str,
     original_size: int,
     graph: str,
+    user_id: str,
 ) -> Dict[str, Any]:
     """
     Upload a single local file to Oxigraph via Graph Store HTTP.
+    Processes file (attaches provenance) before uploading if needed.
     Uses graph provided by caller.
-    Files with provenance are saved as Turtle format, so we read them as text.
     """
     filename = os.path.basename(filepath)
     ext = get_ext(filename)
+    
+    # Process file (attach provenance if text-based RDF format)
+    processed_filepath, provenance_success = await process_file_with_provenance(filepath, user_id, ext)
     
     # Get Oxigraph endpoint and auth from configuration
     endpoint = get_oxigraph_endpoint()
     url = f"{endpoint}?graph={graph}"
     auth = get_oxigraph_auth()
     
-    # Files with provenance are saved as Turtle format (text)
-    # All text-based RDF formats (ttl, nt, jsonld, rdf/xml, owl) get provenance attached
+    # Read processed file for upload
     if ext in ["ttl", "turtle", "nt", "nq", "jsonld", "json", "rdf", "owl"]:
-        # Read as text (files with provenance are saved as Turtle text)
-        # All text-based files with provenance are in Turtle format, regardless of original extension
+        # Text-based formats - read as text (processed files are in Turtle format)
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
+            with open(processed_filepath, "r", encoding="utf-8") as f:
                 file_data = f.read()
-            # Send as Turtle (all text files with provenance are saved as Turtle)
             payload = file_data.encode("utf-8")
             content_type = "text/turtle"
         except Exception as e:
@@ -116,12 +198,12 @@ async def upload_single_file_path(
                 "http_status": 0,
                 "success": False,
                 "bps": 0.0,
-                "response_body": f"Error reading text file: {e}",
+                "response_body": f"Error reading processed file: {e}",
             }
     else:
-        # Other formats (trig, etc.) - read as binary
+        # Binary formats - read as binary
         content_type = get_content_type_for_ext(ext)
-        with open(filepath, "rb") as f:
+        with open(processed_filepath, "rb") as f:
             payload = f.read()
     
     start = time.time()
@@ -135,6 +217,13 @@ async def upload_single_file_path(
     elapsed = max(end - start, 1e-6)
     success = resp.status_code in (200, 201, 204)
     bps = original_size / elapsed
+    
+    # Clean up processed file if it's different from original
+    if processed_filepath != filepath and os.path.exists(processed_filepath):
+        try:
+            os.remove(processed_filepath)
+        except Exception:
+            pass
     
     try:
         resp_text = resp.text
@@ -160,20 +249,25 @@ async def upload_single_file_path(
 async def run_ingest_job(
     job_id: str,
     max_concurrency: int,
+    user_id: str,
 ):
-    """Background job runner for file ingestion."""
+    """Background job runner for file ingestion.
+    Processes files (attaches provenance) and uploads them to Oxigraph.
+    """
     try:
-        # Mark job as running and get job_dir + graph
-        await update_job_status(job_id, "running", start_time=time.time())
+        # Mark job as running (start_time was already set when job was created)
+        await update_job_status(job_id, "running")
         job_details = await get_job_details(job_id)
         if not job_details:
             return
         job_dir = job_details["job_dir"]
         graph = job_details["graph"]
         
-        # Collect files in job_dir
+        # Collect files in job_dir (exclude .processed files)
         file_infos: List[Dict[str, Any]] = []
         for name in os.listdir(job_dir):
+            if name.endswith(".processed.ttl"):
+                continue  # Skip processed files
             path = os.path.join(job_dir, name)
             if not os.path.isfile(path):
                 continue
@@ -198,6 +292,7 @@ async def run_ingest_job(
                         filepath,
                         size,
                         graph,
+                        user_id,
                     )
                     # Insert job result and update progress
                     await insert_job_result(
@@ -237,6 +332,7 @@ async def insert_knowledge_graph_triples(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
     user_id: Annotated[str, Query(..., description="User identifier (who is sending the raw data)")],
     data: Annotated[str, Body(..., media_type="text/plain")],
+    background_tasks: BackgroundTasks,
     named_graph_iri: Annotated[str, Query(description="Named graph IRI to ingest into")] = DEFAULT_GRAPH,
 ):
     """
@@ -247,9 +343,10 @@ async def insert_knowledge_graph_triples(
       - starts with '{' or '[' -> JSON-LD
       - contains '@prefix' or '@base' -> Turtle
       - otherwise -> N-Triples (raw triples)
-    - Creates a job record + job_results
+    - Saves data to disk immediately and processes in background.
+    - Creates a job record for tracking progress.
     - Validates that the named graph is registered before ingestion.
-    - Attaches provenance information to the ingested data.
+    - Attaches provenance information to the ingested data in background.
     """
     # First, check if the named graph is registered
     if not await check_named_graph_exists(named_graph_iri):
@@ -278,171 +375,59 @@ async def insert_knowledge_graph_triples(
     
     detected = detect_raw_format(data)
     
-    # Attach provenance to the data before ingestion
-    # Convert to Turtle format if needed (provenance attachment requires Turtle)
-    # Run RDF parsing in thread pool to avoid blocking event loop
-    try:
-        def parse_and_attach_provenance():
-            """Synchronous function to parse RDF and attach provenance."""
-            if detected == "jsonld":
-                # Convert JSON-LD to Turtle first
-                temp_graph = Graph()
-                temp_graph.parse(data=data, format="json-ld")
-                ttl_data = temp_graph.serialize(format="turtle")
-            elif detected == "nt":
-                # Convert N-Triples to Turtle for provenance
-                temp_graph = Graph()
-                temp_graph.parse(data=data, format="nt")
-                ttl_data = temp_graph.serialize(format="turtle")
-            else:  # "ttl" - already in Turtle format
-                ttl_data = data
-            
-            # Attach provenance (who ingested the data)
-            return attach_provenance(user_id, ttl_data)
-        
-        # Run CPU-intensive RDF parsing in thread pool
-        loop = asyncio.get_event_loop()
-        data_with_provenance = await loop.run_in_executor(None, parse_and_attach_provenance)
-        # Use Turtle format with provenance (Oxigraph accepts Turtle)
-        data = data_with_provenance
-        detected = "ttl"  # Update format after provenance attachment
-    except Exception as e:
-        logger.warning(f"Failed to attach provenance: {e}. Continuing without provenance.", exc_info=True)
-        # Continue with original data if provenance attachment fails
+    # Create job directory and save raw data to disk immediately (no processing)
+    job_dir = os.path.join(JOB_BASE_DIR, user_id, f"job_{job_id}")
+    os.makedirs(job_dir, exist_ok=True)
     
-    # Create job in "running" state
-    start_wall = time.time()
+    # Save raw data to disk immediately (fast, no processing)
+    raw_filepath = os.path.join(job_dir, f"raw_payload.{detected}")
+    try:
+        with open(raw_filepath, "w", encoding="utf-8") as f:
+            f.write(data)
+    except Exception as e:
+        return JSONResponse(
+            {
+                "error": f"Failed to save raw data to disk: {e}",
+            },
+            status_code=500,
+        )
+    
+    # Create job in "pending" state (will be processed in background)
+    # Set start_time immediately when job is created (when user submits request)
+    job_start_time = time.time()
     await create_job(
         job_id=job_id,
         user_id=user_id,
-        status="running",
+        status="pending",
         total_files=1,
         processed_files=0,
         success_count=0,
         fail_count=0,
         endpoint=endpoint,
         graph=named_graph_iri,
-        job_dir=f"RAW:{user_id}",
-        start_time=start_wall,
+        job_dir=job_dir,
+        start_time=job_start_time,
         end_time=None,
     )
-
-    # Prepare payload with provenance (data is now in Turtle format)
-    try:
-        # After provenance attachment, data is always in Turtle format
-        payload = data.encode("utf-8")
-        content_type = "text/turtle"
-    except Exception as e:
-        result = {
-            "file": "raw_payload",
-            "ext": detected,
-            "size_bytes": 0,
-            "elapsed_s": 0.0,
-            "http_status": 0,
-            "success": False,
-            "bps": 0.0,
-            "response_body": f"Failed to prepare payload (detected={detected}): {e}",
-        }
-        summary = compute_summary([result])
-        await insert_job_result(
-            job_id=job_id,
-            file_name=result["file"],
-            ext=result["ext"],
-            size_bytes=result["size_bytes"],
-            elapsed_s=result["elapsed_s"],
-            http_status=result["http_status"],
-            success=bool(result["success"]),
-            bps=result["bps"],
-            response_body=result["response_body"],
-        )
-        await update_job_status(job_id, "error", end_time=time.time())
-        await update_job_progress(job_id, success_increment=0, fail_increment=1)
-        return JSONResponse(
-            {
-                "job_id": job_id,
-                "user_id": user_id,
-                "named_graph_iri": named_graph_iri,
-                "status": "error",
-                "summary": summary,
-            },
-            status_code=400,
-        )
     
-    url = f"{endpoint}?graph={named_graph_iri}"
-    
-    # Get auth from configuration
-    auth = get_oxigraph_auth()
-    
-    async with httpx.AsyncClient(timeout=None) as client:
-        start_time = time.time()
-        resp = await client.post(
-            url,
-            content=payload,
-            headers={"Content-Type": content_type},
-            auth=auth,
-        )
-        end_time = time.time()
-    
-    elapsed = max(end_time - start_time, 1e-6)
-    size_bytes = len(payload)
-    bps = size_bytes / elapsed
-    rate_human = human_rate(bps)
-    size_human = human_size(size_bytes)
-    
-    try:
-        resp_text = resp.text
-    except Exception:
-        resp_text = ""
-    
-    max_len = 2000
-    if resp_text and len(resp_text) > max_len:
-        resp_text = resp_text[:max_len] + "... [truncated]"
-    
-    success = resp.status_code in (200, 201, 204)
-    result = {
-        "file": "raw_payload",
-        "ext": detected,
-        "size_bytes": size_bytes,
-        "elapsed_s": elapsed,
-        "http_status": resp.status_code,
-        "success": success,
-        "bps": bps,
-        "response_body": resp_text,
-    }
-    
-    summary = compute_summary([result])
-    
-    # Batch all database operations into a single transaction (much faster!)
-    await batch_update_job_completion(
-        job_id=job_id,
-        file_name=result["file"],
-        ext=result["ext"],
-        size_bytes=result["size_bytes"],
-        elapsed_s=result["elapsed_s"],
-        http_status=result["http_status"],
-        success=bool(result["success"]),
-        bps=result["bps"],
-        response_body=result["response_body"],
-        status="done" if success else "error",
-        end_time=end_time,
+    # Start background processing job
+    background_tasks.add_task(
+        run_ingest_job,
+        job_id,
+        1,  # max_concurrency for single file
+        user_id,
     )
     
     return {
         "job_id": job_id,
         "user_id": user_id,
-        "status": "done" if success else "error",
-        "endpoint": endpoint,
         "named_graph_iri": named_graph_iri,
+        "status": "pending",
         "detected_format": detected,
-        "size_bytes": size_bytes,
-        "size_human": size_human,
-        "elapsed_s": round(elapsed, 6),
-        "bps": bps,
-        "rate_human": rate_human,
-        "http_status": resp.status_code,
-        "success": success,
-        "response_body": resp_text,
-        "summary": summary,
+        "size_bytes": len(raw_bytes),
+        "size_human": human_size(len(raw_bytes)),
+        "message": "Data saved to disk. Processing (provenance + ingestion) started in background.",
+        "status_url": f"/api/query/jobs?job_id={job_id}&user_id={user_id}",
     }
 
 @router.post("/insert/files/knowledge-graph-triples",
@@ -510,107 +495,12 @@ async def insert_file_knowledge_graph_triples(
         size = 0
         too_large = False
         
-        # For text-based formats, read into memory and attach provenance before saving
-        # For binary formats, save directly to disk
-        if ext in ["ttl", "turtle", "nt", "nq", "jsonld", "json", "rdf", "owl"]:
-            # Read uploaded file into memory (text-based)
-            file_data_chunks = []
-            try:
-                while True:
-                    chunk = await uf.read(2 * 1024 * 1024)  # 2 MB
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    if size > MAX_FILE_SIZE_BYTES:
-                        too_large = True
-                        break
-                    file_data_chunks.append(chunk)
-                
-                if too_large:
-                    pre_results.append(
-                        {
-                            "file": filename,
-                            "ext": ext,
-                            "size_bytes": size,
-                            "elapsed_s": 0.0,
-                            "http_status": 413,
-                            "success": False,
-                            "bps": 0.0,
-                            "response_body": (
-                                f"File exceeds max allowed size {MAX_FILE_SIZE_BYTES} bytes (~1.5 GB)"
-                            ),
-                        }
-                    )
-                    continue
-                
-                # Decode chunks to text
-                try:
-                    file_data = b"".join(file_data_chunks).decode("utf-8")
-                except UnicodeDecodeError:
-                    # Try with errors='ignore' if UTF-8 fails
-                    file_data = b"".join(file_data_chunks).decode("utf-8", errors="ignore")
-                
-                # Determine format
-                if ext in ["ttl", "turtle"]:
-                    format_type = "ttl"
-                elif ext in ["nt", "nq"]:
-                    format_type = "nt"
-                elif ext in ["jsonld", "json"]:
-                    format_type = "jsonld"
-                elif ext == "rdf":
-                    format_type = "rdf"
-                elif ext == "owl":
-                    format_type = "owl"
-                else:
-                    format_type = "ttl"  # Default to turtle
-                
-                # Process RDF and attach provenance in thread pool to avoid blocking
-                def process_file_with_provenance():
-                    """Synchronous function to parse RDF and attach provenance."""
-                    # Convert to Turtle if needed for provenance
-                    if format_type == "jsonld":
-                        temp_graph = Graph()
-                        temp_graph.parse(data=file_data, format="json-ld")
-                        ttl_data = temp_graph.serialize(format="turtle")
-                    elif format_type == "nt":
-                        temp_graph = Graph()
-                        temp_graph.parse(data=file_data, format="nt")
-                        ttl_data = temp_graph.serialize(format="turtle")
-                    elif format_type == "rdf":
-                        # RDF/XML format
-                        temp_graph = Graph()
-                        temp_graph.parse(data=file_data, format="xml")
-                        ttl_data = temp_graph.serialize(format="turtle")
-                    elif format_type == "owl":
-                        # OWL format (also XML-based)
-                        temp_graph = Graph()
-                        temp_graph.parse(data=file_data, format="xml")
-                        ttl_data = temp_graph.serialize(format="turtle")
-                    else:  # "ttl"
-                        ttl_data = file_data
-                    
-                    # Attach provenance (returns Turtle format)
-                    return attach_provenance(user_id, ttl_data)
-                
-                # Run CPU-intensive RDF parsing in thread pool
-                loop = asyncio.get_event_loop()
-                ttl_data_with_provenance = await loop.run_in_executor(None, process_file_with_provenance)
-                
-                # Save once with provenance (Turtle format)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(ttl_data_with_provenance)
-                
-            except Exception as e:
-                logger.warning(f"Failed to attach provenance to {filename}: {e}. Saving without provenance.", exc_info=True)
-                # If provenance fails, save original data
-                with open(path, "wb") as out:
-                    for chunk in file_data_chunks:
-                        out.write(chunk)
-        else:
-            # Binary formats - save directly to disk (no provenance)
+        # Save file to disk immediately (chunked write, no processing)
+        # Processing (provenance + ingestion) will happen in background
+        try:
             with open(path, "wb") as out:
                 while True:
-                    chunk = await uf.read(2 * 1024 * 1024)  # 2 MB
+                    chunk = await uf.read(2 * 1024 * 1024)  # 2 MB chunks
                     if not chunk:
                         break
                     size += len(chunk)
@@ -639,6 +529,21 @@ async def insert_file_knowledge_graph_triples(
                     }
                 )
                 continue
+        except Exception as e:
+            logger.error(f"Failed to save file {filename} to disk: {e}", exc_info=True)
+            pre_results.append(
+                {
+                    "file": filename,
+                    "ext": ext,
+                    "size_bytes": 0,
+                    "elapsed_s": 0.0,
+                    "http_status": 500,
+                    "success": False,
+                    "bps": 0.0,
+                    "response_body": f"Failed to save file to disk: {e}",
+                }
+            )
+            continue
         
         # Files that pass all checks will be ingested later by run_ingest_job
     
@@ -653,6 +558,8 @@ async def insert_file_knowledge_graph_triples(
     success_count = sum(1 for r in pre_results if r["success"])
     fail_count = len(pre_results) - success_count
     
+    # Set start_time immediately when job is created (when user submits request)
+    job_start_time = time.time()
     await create_job(
         job_id=job_id,
         user_id=user_id,
@@ -664,7 +571,7 @@ async def insert_file_knowledge_graph_triples(
         endpoint=endpoint,
         graph=named_graph_iri,
         job_dir=job_dir,
-        start_time=None,
+        start_time=job_start_time,
         end_time=None,
     )
     
@@ -677,6 +584,7 @@ async def insert_file_knowledge_graph_triples(
         run_ingest_job,
         job_id,
         max_concurrency,
+        user_id,
     )
     
     return {
