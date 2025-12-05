@@ -395,6 +395,7 @@ async def insert_knowledge_graph_triples(
     # Create job in "pending" state (will be processed in background)
     # Set start_time immediately when job is created (when user submits request)
     job_start_time = time.time()
+    logger.info(f"[insert_knowledge_graph_triples] Creating job {job_id} with start_time={job_start_time} (Unix epoch seconds)")
     await create_job(
         job_id=job_id,
         user_id=user_id,
@@ -560,6 +561,7 @@ async def insert_file_knowledge_graph_triples(
     
     # Set start_time immediately when job is created (when user submits request)
     job_start_time = time.time()
+    logger.info(f"[insert_file_knowledge_graph_triples] Creating job {job_id} with start_time={job_start_time} (Unix epoch seconds)")
     await create_job(
         job_id=job_id,
         user_id=user_id,
@@ -600,55 +602,19 @@ async def insert_file_knowledge_graph_triples(
 @router.get("/insert/jobs",
             include_in_schema=True
             )
-async def get_job_status(
+async def list_jobs(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
     user_id: Annotated[str, Query(..., description="User identifier")],
-    job_id: Annotated[Optional[str], Query(description="If provided, return a single job; otherwise list all jobs for this user")] = None,
     limit: Annotated[int, Query(ge=1, le=500, description="Page size when listing jobs")] = 50,
     offset: Annotated[int, Query(ge=0, description="Offset for pagination when listing jobs")] = 0,
-    started_after: Annotated[Optional[float], Query(description="(list mode) jobs with start_time >= this UNIX epoch seconds")] = None,
-    started_before: Annotated[Optional[float], Query(description="(list mode) jobs with start_time <= this UNIX epoch seconds")] = None,
+    started_after: Annotated[Optional[float], Query(description="Filter: jobs with start_time >= this UNIX epoch seconds")] = None,
+    started_before: Annotated[Optional[float], Query(description="Filter: jobs with start_time <= this UNIX epoch seconds")] = None,
 ):
     """
     GET /insert/jobs
-    Two modes:
-    1) Single job mode (job_id provided):
-       - Returns that job for this user, including summary (when done/error)
-    2) List mode (job_id omitted):
-       - Returns a paginated list of jobs for this user
-       - Supports optional started_after / started_before filters
+    List all jobs for a user with pagination and optional time range filters.
+    Returns paginated list of jobs with their basic information.
     """
-    
-    if job_id:
-        job = await get_job_by_id_and_user(job_id, user_id)
-        if not job:
-            return JSONResponse({"error": "Job not found"}, status_code=404)
-        
-        total = job["total_files"]
-        processed = job["processed_files"]
-        progress = (100.0 * processed / total) if total else 0.0
-        
-        resp: Dict[str, Any] = {
-            "job_id": job_id,
-            "user_id": user_id,
-            "status": job["status"],
-            "total_files": total,
-            "processed_files": processed,
-            "progress_percent": round(progress, 2),
-            "success_count": job["success_count"],
-            "fail_count": job["fail_count"],
-            "endpoint": job["endpoint"],
-            "named_graph_iri": job["graph"],
-        }
-        
-        # Only pull full summary when job is finished/errored
-        if job["status"] in ("done", "error"):
-            results = await get_job_results(job_id)
-            resp["summary"] = compute_summary(results)
-        
-        return resp
-    
-    # Mode 2: List all jobs for user
     return await list_user_jobs(
         user_id=user_id,
         limit=limit,
@@ -658,29 +624,48 @@ async def get_job_status(
     )
 
 
-@router.get("/insert/user/jobs",
+@router.get("/insert/user/jobs/detail",
             include_in_schema=True
             )
-async def list_user_jobs_endpoint(
+async def get_job_detail(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
     user_id: Annotated[str, Query(..., description="User identifier")],
-    limit: Annotated[int, Query(ge=1, le=500, description="Maximum number of jobs to return")] = 50,
-    offset: Annotated[int, Query(ge=0, description="Number of jobs to skip")] = 0,
-    started_after: Annotated[Optional[float], Query(description="Filter: jobs with start_time >= this UNIX epoch seconds")] = None,
-    started_before: Annotated[Optional[float], Query(description="Filter: jobs with start_time <= this UNIX epoch seconds")] = None,
-
+    job_id: Annotated[str, Query(..., description="Job identifier to fetch details for")],
 ):
     """
-    List all jobs for a user, with pagination and optional time range filters.
-    Returns saved statistics for all jobs.
+    GET /insert/user/jobs/detail
+    Get detailed information for a single job by job_id and user_id.
+    Returns full job details including summary (when job is done/error).
     """
-    return await list_user_jobs(
-        user_id=user_id,
-        limit=limit,
-        offset=offset,
-        started_after=started_after,
-        started_before=started_before,
-    )
+    job = await get_job_by_id_and_user(job_id, user_id)
+    if not job:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    
+    total = job["total_files"]
+    processed = job["processed_files"]
+    progress = (100.0 * processed / total) if total else 0.0
+    
+    resp: Dict[str, Any] = {
+        "job_id": job_id,
+        "user_id": user_id,
+        "status": job["status"],
+        "total_files": total,
+        "processed_files": processed,
+        "progress_percent": round(progress, 2),
+        "success_count": job["success_count"],
+        "fail_count": job["fail_count"],
+        "endpoint": job["endpoint"],
+        "named_graph_iri": job["graph"],
+        "start_time": job.get("start_time"),
+        "end_time": job.get("end_time"),
+    }
+    
+    # Only pull full summary when job is finished/errored
+    if job["status"] in ("done", "error"):
+        results = await get_job_results(job_id)
+        resp["summary"] = compute_summary(results)
+    
+    return resp
 
 
 @router.post("/register-named-graph")
