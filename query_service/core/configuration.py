@@ -72,4 +72,6 @@ def load_environment(env_name="production"):
         "GRAPHDATABASE_REPOSITORY": os.getenv("GRAPHDATABASE_REPOSITORY"),
         # Data release
         "RAPID_RELEASE_FILE": os.getenv("RAPID_RELEASE_FILE"),
+        # Default named graph for ingestion
+        "DEFAULT_NAMED_GRAPH": os.getenv("DEFAULT_NAMED_GRAPH", "https:test.brainkb.org/"),
     }
