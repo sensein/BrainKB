@@ -58,7 +58,7 @@ chmod=0700
 
 [supervisord]
 nodaemon=true
-user=root
+user=nobody
 logfile=/var/log/supervisor/supervisord.log
 pidfile=/var/run/supervisord.pid
 
@@ -136,7 +136,7 @@ set -e
 
 # Ensure supervisor socket directory exists and is writable
 mkdir -p /var/run
-chmod 777 /var/run
+chmod 755 /var/run
 
 # Wait for PostgreSQL to be ready
 echo "Waiting for PostgreSQL to be ready..."
@@ -187,7 +187,7 @@ fi
 
 # Ensure supervisor socket directory exists and is writable (in case /var/run is tmpfs)
 mkdir -p /var/run
-chmod 777 /var/run
+chmod 755 /var/run
 
 # Start supervisor
 echo "Starting all services..."
