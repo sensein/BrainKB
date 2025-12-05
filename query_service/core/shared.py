@@ -717,11 +717,19 @@ def attach_provenance(user: str, ttl_data: str) -> str:
         prov_graph.add((ingestion_activity, PROV.wasAssociatedWith, user_uri))
 
         # Attach provenance to original triples
+        # OPTIMIZATION: Use set to avoid duplicate checks and limit to first 1000 entities for performance
+        # For very large graphs, we don't need to link every single entity
+        entity_count = 0
+        max_entities = 1000  # Limit to prevent excessive CPU usage on huge graphs
+        seen_entities = set()
+        
         for entity in original_graph.subjects():
-            if isinstance(entity, URIRef):
-                # disabled triple update, now it's just the referencing to the existing triple
-                # prov_graph.add((entity, PROV.wasInformedBy, prov_entity)) #updates the triple to say that particular triple was ingested by some activity, which in our case is the ingestion activity
+            if entity_count >= max_entities:
+                break
+            if isinstance(entity, URIRef) and entity not in seen_entities:
+                seen_entities.add(entity)
                 prov_graph.add((ingestion_activity, PROV.wasAssociatedWith, entity))
+                entity_count += 1
 
         # add a Dublin Core provenance statement -- this is the new addition to say it's ingested by user
         prov_graph.add((prov_entity, DCTERMS.provenance, Literal(f"Data ingested by {user} on {start_time}")))

@@ -20,7 +20,6 @@
 from fastapi import APIRouter, Request, HTTPException, status, UploadFile, File, Form, BackgroundTasks, Query, Body
 from fastapi.responses import JSONResponse
 from core.graph_database_connection_manager import insert_data_gdb, insert_data_gdb_async
-import json
 import logging
 from core.pydantic_schema import InputKGTripleSchema, NamedGraphSchema
 from typing import Annotated, List, Dict, Any, Optional
@@ -35,7 +34,7 @@ from core.shared import (
     compute_summary, contains_ip, attach_provenance,
     get_oxigraph_endpoint, get_oxigraph_auth
 )
-from core.graph_database_connection_manager import fetch_data_gdb, check_named_graph_exists
+from core.graph_database_connection_manager import fetch_data_gdb_async, check_named_graph_exists
 from core.database import (
     create_job,
     update_job_status,
@@ -45,7 +44,10 @@ from core.database import (
     get_job_results,
     get_job_by_id_and_user,
     list_user_jobs,
+    batch_update_job_completion,
+    batch_insert_job_results,
 )
+from core.configuration import load_environment
 import datetime
 import uuid
 import asyncio
@@ -61,9 +63,11 @@ logger = logging.getLogger(__name__)
 # Configuration constants
 MAX_FILE_SIZE_BYTES = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
 MAX_RAW_SIZE_BYTES = MAX_FILE_SIZE_BYTES
-JOB_BASE_DIR = os.getenv("OXI_JOB_DIR", "/tmp/oxigraph_jobs")
-CSV_SUMMARY_FILE = os.getenv("OXI_CSV_SUMMARY", "oxigraph_upload_summary.csv")
-DEFAULT_GRAPH = os.getenv("OXI_GRAPH", "named_graph")
+JOB_BASE_DIR = "/tmp/oxigraph_jobs"  # Default directory for temporary job files
+
+# Get default graph from configuration
+# load_environment() is now robust and handles Docker environments gracefully
+DEFAULT_GRAPH = load_environment().get("DEFAULT_NAMED_GRAPH", "named_graph")
 
 # Supported file extensions
 SUPPORTED_EXTS = {"ttl", "turtle", "nt", "nq", "trig", "rdf", "owl", "jsonld", "json"}
@@ -82,6 +86,7 @@ async def upload_single_file_path(
     """
     Upload a single local file to Oxigraph via Graph Store HTTP.
     Uses graph provided by caller.
+    Files with provenance are saved as Turtle format, so we read them as text.
     """
     filename = os.path.basename(filepath)
     ext = get_ext(filename)
@@ -91,13 +96,17 @@ async def upload_single_file_path(
     url = f"{endpoint}?graph={graph}"
     auth = get_oxigraph_auth()
     
-    if ext == "jsonld":
+    # Files with provenance are saved as Turtle format (text)
+    # All text-based RDF formats (ttl, nt, jsonld, rdf/xml, owl) get provenance attached
+    if ext in ["ttl", "turtle", "nt", "nq", "jsonld", "json", "rdf", "owl"]:
+        # Read as text (files with provenance are saved as Turtle text)
+        # All text-based files with provenance are in Turtle format, regardless of original extension
         try:
-            with open(filepath, "rb") as f:
-                data = f.read()
-            #current oxigraph doesn't support jsonld ingestion directly so convert to nt
-            payload = convert_jsonld_to_ntriples_flat(data)
-            content_type = "application/n-triples"
+            with open(filepath, "r", encoding="utf-8") as f:
+                file_data = f.read()
+            # Send as Turtle (all text files with provenance are saved as Turtle)
+            payload = file_data.encode("utf-8")
+            content_type = "text/turtle"
         except Exception as e:
             return {
                 "file": filename,
@@ -107,9 +116,10 @@ async def upload_single_file_path(
                 "http_status": 0,
                 "success": False,
                 "bps": 0.0,
-                "response_body": f"JSON-LD to N-Triples conversion error (rdflib): {e}",
+                "response_body": f"Error reading text file: {e}",
             }
     else:
+        # Other formats (trig, etc.) - read as binary
         content_type = get_content_type_for_ext(ext)
         with open(filepath, "rb") as f:
             payload = f.read()
@@ -221,10 +231,10 @@ async def run_ingest_job(
 
 @router.post("/insert/raw/knowledge-graph-triples",
              include_in_schema=True,
-# dependencies=[Depends(require_scopes(["write"]))],
+dependencies=[Depends(require_scopes(["write"]))],
              )
 async def insert_knowledge_graph_triples(
-    # user: Annotated[LoginUserIn, Depends(get_current_user)],
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
     user_id: Annotated[str, Query(..., description="User identifier (who is sending the raw data)")],
     data: Annotated[str, Body(..., media_type="text/plain")],
     named_graph_iri: Annotated[str, Query(description="Named graph IRI to ingest into")] = DEFAULT_GRAPH,
@@ -237,12 +247,12 @@ async def insert_knowledge_graph_triples(
       - starts with '{' or '[' -> JSON-LD
       - contains '@prefix' or '@base' -> Turtle
       - otherwise -> N-Triples (raw triples)
-    - Creates a job record + job_results + CSV summary (single-file job).
+    - Creates a job record + job_results
     - Validates that the named graph is registered before ingestion.
     - Attaches provenance information to the ingested data.
     """
     # First, check if the named graph is registered
-    if not check_named_graph_exists(named_graph_iri):
+    if not await check_named_graph_exists(named_graph_iri):
         return JSONResponse(
             {
                 "error": f"Named graph '{named_graph_iri}' is not registered. Please register it first using /api/register-named-graph",
@@ -269,40 +279,33 @@ async def insert_knowledge_graph_triples(
     detected = detect_raw_format(data)
     
     # Attach provenance to the data before ingestion
+    # Convert to Turtle format if needed (provenance attachment requires Turtle)
+    # Run RDF parsing in thread pool to avoid blocking event loop
     try:
-        # Convert data to Turtle format if needed for provenance attachment
-        if detected == "jsonld":
-            # Convert JSON-LD to Turtle first
-
-            temp_graph = Graph()
-            temp_graph.parse(data=data, format="json-ld")
-            ttl_data = temp_graph.serialize(format="turtle")
-        elif detected == "nt":
-            # Convert N-Triples to Turtle for provenance
-
-            temp_graph = Graph()
-            temp_graph.parse(data=data, format="nt")
-            ttl_data = temp_graph.serialize(format="turtle")
-        else:  # "ttl" - already in Turtle format
-            ttl_data = data
+        def parse_and_attach_provenance():
+            """Synchronous function to parse RDF and attach provenance."""
+            if detected == "jsonld":
+                # Convert JSON-LD to Turtle first
+                temp_graph = Graph()
+                temp_graph.parse(data=data, format="json-ld")
+                ttl_data = temp_graph.serialize(format="turtle")
+            elif detected == "nt":
+                # Convert N-Triples to Turtle for provenance
+                temp_graph = Graph()
+                temp_graph.parse(data=data, format="nt")
+                ttl_data = temp_graph.serialize(format="turtle")
+            else:  # "ttl" - already in Turtle format
+                ttl_data = data
+            
+            # Attach provenance (who ingested the data)
+            return attach_provenance(user_id, ttl_data)
         
-        # Attach provenance
-        ttl_data_with_provenance = attach_provenance(user_id, ttl_data)
-        
-        # Convert back to the original format if needed
-        if detected == "jsonld":
-            # Keep as Turtle after provenance (or convert back to JSON-LD if needed)
-            # For now, we'll use Turtle format
-            data = ttl_data_with_provenance
-            detected = "ttl"  # Update format after provenance attachment
-        elif detected == "nt":
-            # Convert back to N-Triples
-
-            temp_graph = Graph()
-            temp_graph.parse(data=ttl_data_with_provenance, format="turtle")
-            data = temp_graph.serialize(format="nt")
-        else:  # "ttl"
-            data = ttl_data_with_provenance
+        # Run CPU-intensive RDF parsing in thread pool
+        loop = asyncio.get_event_loop()
+        data_with_provenance = await loop.run_in_executor(None, parse_and_attach_provenance)
+        # Use Turtle format with provenance (Oxigraph accepts Turtle)
+        data = data_with_provenance
+        detected = "ttl"  # Update format after provenance attachment
     except Exception as e:
         logger.warning(f"Failed to attach provenance: {e}. Continuing without provenance.", exc_info=True)
         # Continue with original data if provenance attachment fails
@@ -323,18 +326,12 @@ async def insert_knowledge_graph_triples(
         start_time=start_wall,
         end_time=None,
     )
-    
-    # Decide payload + content-type
+
+    # Prepare payload with provenance (data is now in Turtle format)
     try:
-        if detected == "jsonld":
-            payload = convert_jsonld_to_ntriples_flat(raw_bytes)
-            content_type = "application/n-triples"
-        elif detected == "ttl":
-            payload = raw_bytes
-            content_type = "text/turtle"
-        else:  # "nt"
-            payload = raw_bytes
-            content_type = "application/n-triples"
+        # After provenance attachment, data is always in Turtle format
+        payload = data.encode("utf-8")
+        content_type = "text/turtle"
     except Exception as e:
         result = {
             "file": "raw_payload",
@@ -415,8 +412,8 @@ async def insert_knowledge_graph_triples(
     
     summary = compute_summary([result])
     
-    # Record job_results and update job in pgdb
-    await insert_job_result(
+    # Batch all database operations into a single transaction (much faster!)
+    await batch_update_job_completion(
         job_id=job_id,
         file_name=result["file"],
         ext=result["ext"],
@@ -426,16 +423,8 @@ async def insert_knowledge_graph_triples(
         success=bool(result["success"]),
         bps=result["bps"],
         response_body=result["response_body"],
-    )
-    await update_job_status(
-        job_id,
-        "done" if success else "error",
+        status="done" if success else "error",
         end_time=end_time,
-    )
-    await update_job_progress(
-        job_id,
-        success_increment=1 if success else 0,
-        fail_increment=0 if success else 1,
     )
     
     return {
@@ -458,10 +447,10 @@ async def insert_knowledge_graph_triples(
 
 @router.post("/insert/files/knowledge-graph-triples",
              include_in_schema=True,
-# dependencies=[Depends(require_scopes(["write"]))],
+dependencies=[Depends(require_scopes(["write"]))],
              )
 async def insert_file_knowledge_graph_triples(
-    # user: Annotated[LoginUserIn, Depends(get_current_user)],
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
     user_id: Annotated[str, Query(..., description="User identifier for job isolation")],
     files: Annotated[list[UploadFile], File(...)],
     background_tasks: BackgroundTasks,
@@ -476,7 +465,7 @@ async def insert_file_knowledge_graph_triples(
     Attaches provenance information to ingested files.
     """
     # First, check if the named graph is registered
-    if not check_named_graph_exists(named_graph_iri):
+    if not await check_named_graph_exists(named_graph_iri):
         return JSONResponse(
             {
                 "error": f"Named graph '{named_graph_iri}' is not registered. Please register it first using /api/register-named-graph",
@@ -521,52 +510,45 @@ async def insert_file_knowledge_graph_triples(
         size = 0
         too_large = False
         
-        # Save file first
-        with open(path, "wb") as out:
-            while True:
-                chunk = await uf.read(2 * 1024 * 1024)  # 2 MB
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > MAX_FILE_SIZE_BYTES:
-                    too_large = True
-                    break
-                out.write(chunk)
-        
-        if too_large:
+        # For text-based formats, read into memory and attach provenance before saving
+        # For binary formats, save directly to disk
+        if ext in ["ttl", "turtle", "nt", "nq", "jsonld", "json", "rdf", "owl"]:
+            # Read uploaded file into memory (text-based)
+            file_data_chunks = []
             try:
-                os.remove(path)
-            except OSError:
-                pass
-            pre_results.append(
-                {
-                    "file": filename,
-                    "ext": ext,
-                    "size_bytes": size,
-                    "elapsed_s": 0.0,
-                    "http_status": 413,
-                    "success": False,
-                    "bps": 0.0,
-                    "response_body": (
-                        f"File exceeds max allowed size {MAX_FILE_SIZE_BYTES} bytes (~1.5 GB)"
-                    ),
-                }
-            )
-            continue
-        
-        # Attach provenance to files that pass validation
-        # Only attach provenance to text-based RDF formats (ttl, nt, jsonld)
-        if ext in ["ttl", "turtle", "nt", "nq", "jsonld", "json"]:
-            try:
-                # Read the saved file and attach provenance
-                # Try text first, fall back to binary if needed
+                while True:
+                    chunk = await uf.read(2 * 1024 * 1024)  # 2 MB
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > MAX_FILE_SIZE_BYTES:
+                        too_large = True
+                        break
+                    file_data_chunks.append(chunk)
+                
+                if too_large:
+                    pre_results.append(
+                        {
+                            "file": filename,
+                            "ext": ext,
+                            "size_bytes": size,
+                            "elapsed_s": 0.0,
+                            "http_status": 413,
+                            "success": False,
+                            "bps": 0.0,
+                            "response_body": (
+                                f"File exceeds max allowed size {MAX_FILE_SIZE_BYTES} bytes (~1.5 GB)"
+                            ),
+                        }
+                    )
+                    continue
+                
+                # Decode chunks to text
                 try:
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        file_data = f.read()
-                except (UnicodeDecodeError, ValueError):
-                    # If text reading fails, try binary and decode
-                    with open(path, "rb") as f:
-                        file_data = f.read().decode("utf-8", errors="ignore")
+                    file_data = b"".join(file_data_chunks).decode("utf-8")
+                except UnicodeDecodeError:
+                    # Try with errors='ignore' if UTF-8 fails
+                    file_data = b"".join(file_data_chunks).decode("utf-8", errors="ignore")
                 
                 # Determine format
                 if ext in ["ttl", "turtle"]:
@@ -575,43 +557,88 @@ async def insert_file_knowledge_graph_triples(
                     format_type = "nt"
                 elif ext in ["jsonld", "json"]:
                     format_type = "jsonld"
+                elif ext == "rdf":
+                    format_type = "rdf"
+                elif ext == "owl":
+                    format_type = "owl"
                 else:
                     format_type = "ttl"  # Default to turtle
                 
-                # Convert to Turtle if needed for provenance
-                if format_type == "jsonld":
-                    temp_graph = Graph()
-                    temp_graph.parse(data=file_data, format="json-ld")
-                    ttl_data = temp_graph.serialize(format="turtle")
-                elif format_type == "nt":
-                    temp_graph = Graph()
-                    temp_graph.parse(data=file_data, format="nt")
-                    ttl_data = temp_graph.serialize(format="turtle")
-                else:  # "ttl"
-                    ttl_data = file_data
+                # Process RDF and attach provenance in thread pool to avoid blocking
+                def process_file_with_provenance():
+                    """Synchronous function to parse RDF and attach provenance."""
+                    # Convert to Turtle if needed for provenance
+                    if format_type == "jsonld":
+                        temp_graph = Graph()
+                        temp_graph.parse(data=file_data, format="json-ld")
+                        ttl_data = temp_graph.serialize(format="turtle")
+                    elif format_type == "nt":
+                        temp_graph = Graph()
+                        temp_graph.parse(data=file_data, format="nt")
+                        ttl_data = temp_graph.serialize(format="turtle")
+                    elif format_type == "rdf":
+                        # RDF/XML format
+                        temp_graph = Graph()
+                        temp_graph.parse(data=file_data, format="xml")
+                        ttl_data = temp_graph.serialize(format="turtle")
+                    elif format_type == "owl":
+                        # OWL format (also XML-based)
+                        temp_graph = Graph()
+                        temp_graph.parse(data=file_data, format="xml")
+                        ttl_data = temp_graph.serialize(format="turtle")
+                    else:  # "ttl"
+                        ttl_data = file_data
+                    
+                    # Attach provenance (returns Turtle format)
+                    return attach_provenance(user_id, ttl_data)
                 
-                # Attach provenance
-                ttl_data_with_provenance = attach_provenance(user_id, ttl_data)
+                # Run CPU-intensive RDF parsing in thread pool
+                loop = asyncio.get_event_loop()
+                ttl_data_with_provenance = await loop.run_in_executor(None, process_file_with_provenance)
                 
-                # Convert back to original format and save
-                if format_type == "jsonld":
-                    # Keep as Turtle after provenance
-                    file_data = ttl_data_with_provenance
-                    with open(path, "w", encoding="utf-8") as f:
-                        f.write(file_data)
-                elif format_type == "nt":
-                    # Convert back to N-Triples
-                    temp_graph = Graph()
-                    temp_graph.parse(data=ttl_data_with_provenance, format="turtle")
-                    file_data = temp_graph.serialize(format="nt")
-                    with open(path, "w", encoding="utf-8") as f:
-                        f.write(file_data)
-                else:  # "ttl"
-                    with open(path, "w", encoding="utf-8") as f:
-                        f.write(ttl_data_with_provenance)
+                # Save once with provenance (Turtle format)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(ttl_data_with_provenance)
+                
             except Exception as e:
-                logger.warning(f"Failed to attach provenance to {filename}: {e}. Continuing without provenance.", exc_info=True)
-                # File remains as-is if provenance attachment fails
+                logger.warning(f"Failed to attach provenance to {filename}: {e}. Saving without provenance.", exc_info=True)
+                # If provenance fails, save original data
+                with open(path, "wb") as out:
+                    for chunk in file_data_chunks:
+                        out.write(chunk)
+        else:
+            # Binary formats - save directly to disk (no provenance)
+            with open(path, "wb") as out:
+                while True:
+                    chunk = await uf.read(2 * 1024 * 1024)  # 2 MB
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > MAX_FILE_SIZE_BYTES:
+                        too_large = True
+                        break
+                    out.write(chunk)
+            
+            if too_large:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                pre_results.append(
+                    {
+                        "file": filename,
+                        "ext": ext,
+                        "size_bytes": size,
+                        "elapsed_s": 0.0,
+                        "http_status": 413,
+                        "success": False,
+                        "bps": 0.0,
+                        "response_body": (
+                            f"File exceeds max allowed size {MAX_FILE_SIZE_BYTES} bytes (~1.5 GB)"
+                        ),
+                    }
+                )
+                continue
         
         # Files that pass all checks will be ingested later by run_ingest_job
     
@@ -641,19 +668,9 @@ async def insert_file_knowledge_graph_triples(
         end_time=None,
     )
     
-    # Insert pre-results
-    for r in pre_results:
-        await insert_job_result(
-            job_id=job_id,
-            file_name=r["file"],
-            ext=r["ext"],
-            size_bytes=r["size_bytes"],
-            elapsed_s=r["elapsed_s"],
-            http_status=r["http_status"],
-            success=bool(r["success"]),
-            bps=r["bps"],
-            response_body=r["response_body"],
-        )
+    # Batch insert pre-results (much faster than individual inserts)
+    if pre_results:
+        await batch_insert_job_results(job_id, pre_results)
     
     # Start background ingest job
     background_tasks.add_task(
@@ -676,13 +693,13 @@ async def insert_file_knowledge_graph_triples(
             include_in_schema=True
             )
 async def get_job_status(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
     user_id: Annotated[str, Query(..., description="User identifier")],
-    job_id: Annotated[Optional[str], Query(None, description="If provided, return a single job; otherwise list all jobs for this user")] = None,
-    limit: Annotated[int, Query(50, ge=1, le=500, description="Page size when listing jobs")] = 50,
-    offset: Annotated[int, Query(0, ge=0, description="Offset for pagination when listing jobs")] = 0,
-    started_after: Annotated[Optional[float], Query(None, description="(list mode) jobs with start_time >= this UNIX epoch seconds")] = None,
-    started_before: Annotated[Optional[float], Query(None, description="(list mode) jobs with start_time <= this UNIX epoch seconds")] = None,
-    # user: Annotated[LoginUserIn, Depends(get_current_user)]
+    job_id: Annotated[Optional[str], Query(description="If provided, return a single job; otherwise list all jobs for this user")] = None,
+    limit: Annotated[int, Query(ge=1, le=500, description="Page size when listing jobs")] = 50,
+    offset: Annotated[int, Query(ge=0, description="Offset for pagination when listing jobs")] = 0,
+    started_after: Annotated[Optional[float], Query(description="(list mode) jobs with start_time >= this UNIX epoch seconds")] = None,
+    started_before: Annotated[Optional[float], Query(description="(list mode) jobs with start_time <= this UNIX epoch seconds")] = None,
 ):
     """
     GET /insert/jobs
@@ -693,7 +710,7 @@ async def get_job_status(
        - Returns a paginated list of jobs for this user
        - Supports optional started_after / started_before filters
     """
-    # Mode 1: Single job
+    
     if job_id:
         job = await get_job_by_id_and_user(job_id, user_id)
         if not job:
@@ -737,12 +754,13 @@ async def get_job_status(
             include_in_schema=True
             )
 async def list_user_jobs_endpoint(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
     user_id: Annotated[str, Query(..., description="User identifier")],
-    limit: Annotated[int, Query(50, ge=1, le=500, description="Maximum number of jobs to return")] = 50,
-    offset: Annotated[int, Query(0, ge=0, description="Number of jobs to skip")] = 0,
-    started_after: Annotated[Optional[float], Query(None, description="Filter: jobs with start_time >= this UNIX epoch seconds")] = None,
-    started_before: Annotated[Optional[float], Query(None, description="Filter: jobs with start_time <= this UNIX epoch seconds")] = None,
-    # user: Annotated[LoginUserIn, Depends(get_current_user)]
+    limit: Annotated[int, Query(ge=1, le=500, description="Maximum number of jobs to return")] = 50,
+    offset: Annotated[int, Query(ge=0, description="Number of jobs to skip")] = 0,
+    started_after: Annotated[Optional[float], Query(description="Filter: jobs with start_time >= this UNIX epoch seconds")] = None,
+    started_before: Annotated[Optional[float], Query(description="Filter: jobs with start_time <= this UNIX epoch seconds")] = None,
+
 ):
     """
     List all jobs for a user, with pagination and optional time range filters.
@@ -763,11 +781,12 @@ async def create_named_graph(
         request: NamedGraphSchema
 ):
     try:
-        data = json.loads(request.json())
+        # Access Pydantic model fields directly (request is a NamedGraphSchema, not a Request object)
+        # Convert HttpUrl to string
+        named_graph_url = str(request.named_graph_url)
+        description = request.description
 
         # Ensure named_graph_url ends with '/'
-        named_graph_url = data['named_graph_url']
-        description = data['description']
         if not named_graph_url.endswith('/'):
             named_graph_url += '/'
 
@@ -783,7 +802,7 @@ async def create_named_graph(
           }}
         }}
         """
-        named_graph_exists = fetch_data_gdb(query)
+        named_graph_exists = await fetch_data_gdb_async(query)
         if not named_graph_exists.get("message", {}).get("boolean", False):
             # Register the new named graph
             response = await insert_data_gdb_async(named_graph_metadata(
@@ -793,12 +812,13 @@ async def create_named_graph(
             )
             return response
         else:
-            return "Graph is already registered."
-    except json.JSONDecodeError as e:
-        logger.error("JSON decoding failed", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid JSON format {e}"
-        )
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={
+                    "status": "fail",
+                    "message": "Graph is already registered."
+                }
+            )
     except Exception as e:
         logger.error("An error occurred", exc_info=True)
         raise HTTPException(
