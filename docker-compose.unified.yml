@@ -1,23 +1,21 @@
-version: '3.8'
-
 services:
   # PostgreSQL Database for APItokenmanager and JWT services
   postgres:
     image: postgres:15
     container_name: brainkb-postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-brainkb}
+      POSTGRES_USER: ${JWT_POSTGRES_DATABASE_USER:-postgres}
+      POSTGRES_PASSWORD: ${JWT_POSTGRES_DATABASE_PASSWORD:-postgres}
+      POSTGRES_DB: ${JWT_POSTGRES_DATABASE_NAME:-brainkb}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${JWT_POSTGRES_DATABASE_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - brainkb-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U ${JWT_POSTGRES_DATABASE_USER:-postgres}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -43,6 +41,15 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # Resource limits to utilize available CPUs
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'  # Use up to 8 CPUs (out of 12 available)
+          memory: 16G  # Increase memory limit
+        reservations:
+          cpus: '2.0'  # Reserve 2 CPUs minimum
+          memory: 4G
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/ || exit 1"]
       interval: 30s
@@ -53,7 +60,7 @@ services:
   # Oxigraph SPARQL Database (separate service)
   # Note: Oxigraph is not directly exposed - access through oxigraph-nginx service
   oxigraph:
-    image: ghcr.io/oxigraph/oxigraph:0.4.0-rc.1
+    image: ghcr.io/oxigraph/oxigraph:latest
     container_name: brainkb-oxigraph
     # No port mapping - only accessible through oxigraph-nginx
     volumes:
@@ -63,9 +70,16 @@ services:
       - TMPDIR=/tmp
     ulimits:
       fsize: -1
+      nofile: 65536  # Increase file descriptor limit for concurrent connections
     networks:
       - brainkb-network
     restart: unless-stopped
+    # Note: For resource limits, use Docker run flags or configure in your orchestration platform
+    # Recommended: 8GB memory, 4 CPUs for large concurrent uploads
+    # Example: docker update --memory=8g --cpus=4.0 brainkb-oxigraph
+    # Note: Healthcheck removed - oxigraph uses distroless image without shell/tools
+    # The service is working (check logs: docker logs brainkb-oxigraph)
+    # oxigraph-nginx will handle connection failures gracefully
 
   # Nginx reverse proxy with HTTP Basic Authentication for Oxigraph
   oxigraph-nginx:
@@ -84,8 +98,14 @@ services:
       - brainkb-network
     depends_on:
       - oxigraph
-      # Note: No health condition - will start when oxigraph starts, but won't wait for it to be ready
+      # Note: oxigraph uses distroless image, so no healthcheck available
+      # Nginx will start when oxigraph container starts and handle connection failures gracefully
     restart: unless-stopped
+    # Note: For resource limits, use Docker run flags or configure in your orchestration platform
+    # Recommended: 2GB memory, 2 CPUs for handling concurrent uploads
+    # Example: docker update --memory=2g --cpus=2.0 brainkb-oxigraph-nginx
+    ulimits:
+      nofile: 65536  # Increase file descriptor limit for concurrent connections
     entrypoint: >
       sh -c 'echo -n "$$OXIGRAPH_USER:" > /etc/nginx/.htpasswd &&
       echo "$$OXIGRAPH_PASSWORD" | openssl passwd -stdin -apr1 >> /etc/nginx/.htpasswd &&
@@ -103,10 +123,10 @@ services:
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
       # PostgreSQL connection details for auto-configuration
       POSTGRES_HOST: postgres
-      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
-      POSTGRES_DB: ${POSTGRES_DB:-brainkb}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PORT: ${JWT_POSTGRES_DATABASE_PORT:-5432}
+      POSTGRES_DB: ${JWT_POSTGRES_DATABASE_NAME:-brainkb}
+      POSTGRES_USER: ${JWT_POSTGRES_DATABASE_USER:-postgres}
+      POSTGRES_PASSWORD: ${JWT_POSTGRES_DATABASE_PASSWORD:-postgres}
       PGADMIN_SERVER_NAME: ${PGADMIN_SERVER_NAME:-BrainKB PostgreSQL}
     ports:
       - "${PGADMIN_PORT:-5051}:80"
