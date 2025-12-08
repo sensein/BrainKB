@@ -116,17 +116,9 @@ services:
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: brainkb-pgadmin
-    env_file:
-      - .env
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@brainkb.org}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
-      # PostgreSQL connection details for auto-configuration
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: ${JWT_POSTGRES_DATABASE_PORT:-5432}
-      POSTGRES_DB: ${JWT_POSTGRES_DATABASE_NAME:-brainkb}
-      POSTGRES_USER: ${JWT_POSTGRES_DATABASE_USER:-postgres}
-      POSTGRES_PASSWORD: ${JWT_POSTGRES_DATABASE_PASSWORD:-postgres}
       PGADMIN_SERVER_NAME: ${PGADMIN_SERVER_NAME:-BrainKB PostgreSQL}
     ports:
       - "${PGADMIN_PORT:-5051}:80"
@@ -140,6 +132,9 @@ services:
         condition: service_healthy
     restart: unless-stopped
     # Note: PostgreSQL server is automatically configured on startup
+    # Note: You may see periodic "database postgres_admin does not exist" errors in PostgreSQL logs.
+    # These are harmless - they come from pgAdmin's internal health checks that don't use MaintenanceDB.
+    # pgAdmin correctly uses MaintenanceDB: "brainkb" from servers.json for actual operations.
 
 volumes:
   postgres_data:

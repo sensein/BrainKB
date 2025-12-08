@@ -58,7 +58,6 @@ chmod=0700
 
 [supervisord]
 nodaemon=true
-user=nobody
 logfile=/var/log/supervisor/supervisord.log
 pidfile=/var/run/supervisord.pid
 
@@ -116,7 +115,8 @@ EOF
 
 # Create directories for logs and data
 # Ensure supervisor socket directory exists and is writable
-RUN mkdir -p /var/log/supervisor /data /app/oxigraph /var/run
+RUN mkdir -p /var/log/supervisor /data /app/oxigraph /var/run && \
+    chmod 777 /var/run /var/log/supervisor
 
 # Create oxigraph fallback script
 # Note: Oxigraph binary extraction from distroless image is not possible
