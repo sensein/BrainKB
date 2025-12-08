@@ -64,7 +64,7 @@ services:
     container_name: brainkb-oxigraph
     # No port mapping - only accessible through oxigraph-nginx
     volumes:
-      - oxigraph_data:/data
+      - /fsx/brainkb-kg-repo:/data
       - /tmp:/tmp
     environment:
       - TMPDIR=/tmp
