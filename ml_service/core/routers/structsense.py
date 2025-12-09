@@ -30,7 +30,7 @@ from core.shared import upsert_ner_annotations
 from core.shared import (_is_safe_path, run_kickoff_with_config, JobStatus, _job_storage,
                          _handle_websocket_connection, _get_job)
 from core.configuration import load_environment
-from pymongo import MongoClient
+from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Optional
 from bson import ObjectId
 
@@ -38,7 +38,7 @@ from bson import ObjectId
 logger = logging.getLogger(__name__)
 
 
-def get_mongo_client(request: Request) -> MongoClient:
+def get_mongo_client(request: Request) -> AsyncIOMotorClient:
     """
     Dependency to get MongoDB client from app state.
     The client is initialized once during app startup and reused for all requests.
@@ -299,14 +299,14 @@ async def get_job_status(task_id: str):
 async def save_ner_result(
     request: Request,
     user: Annotated[LoginUserIn, Depends(get_current_user)],
-    client: MongoClient = Depends(get_mongo_client)
+    client: AsyncIOMotorClient = Depends(get_mongo_client)
 ):
     try:
         data = await request.json()
         env = load_environment()
         db_name = env.get("NER_DATABASE")
         collection_name = env.get("NER_COLLECTION")
-        result = upsert_ner_annotations(
+        result = await upsert_ner_annotations(
             input_data=data,
             client=client,
             db_name=db_name,
@@ -323,7 +323,7 @@ async def save_ner_result(
 async def save_structured_resource(
         request: Request,
         user: Annotated[LoginUserIn, Depends(get_current_user)],
-        client: MongoClient = Depends(get_mongo_client)
+        client: AsyncIOMotorClient = Depends(get_mongo_client)
 ):
     try:
         data = await request.json()
@@ -358,7 +358,7 @@ async def save_structured_resource(
         
         env = load_environment()
         db_name = env.get("NER_DATABASE")
-        result = upsert_structured_resources(
+        result = await upsert_structured_resources(
             input_data=input_data,
             client=client,
             db_name=db_name,
@@ -375,7 +375,7 @@ async def save_structured_resource(
 
 
 async def _get_documents_from_collection(
-    client: MongoClient,
+    client: AsyncIOMotorClient,
     db_name: str,
     collection_name: str,
     document_name: Optional[str] = None,
@@ -420,12 +420,12 @@ async def _get_documents_from_collection(
         # Limit max results
         limit = min(limit, 1000)
         
-        # Query database
+        # Query database (async)
         cursor = collection.find(query_filter).sort("updated_at", -1).skip(skip).limit(limit)
-        results = list(cursor)
+        results = await cursor.to_list(length=limit)
         
-        # Get total count for pagination
-        total_count = collection.count_documents(query_filter)
+        # Get total count for pagination (async)
+        total_count = await collection.count_documents(query_filter)
         
         # Serialize all documents (convert ObjectId and datetime to JSON-serializable format)
         serialized_results = [serialize_mongo_document(result) for result in results]
@@ -447,7 +447,7 @@ async def _get_documents_from_collection(
 
 
 @router.get("/ner",
-            # dependencies=[Depends(require_scopes(["read"]))],
+            dependencies=[Depends(require_scopes(["read"]))],
             summary="Get saved NER annotations",
             description="""
             Retrieves saved NER annotations from MongoDB.
@@ -455,8 +455,8 @@ async def _get_documents_from_collection(
             """)
 async def get_ner_annotations(
     request: Request,
-    # user: Annotated[LoginUserIn, Depends(get_current_user)],
-    client: MongoClient = Depends(get_mongo_client),
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    client: AsyncIOMotorClient = Depends(get_mongo_client),
     document_name: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -503,7 +503,7 @@ async def get_ner_annotations(
 
 
 @router.get("/structured-resource",
-            # dependencies=[Depends(require_scopes(["read"]))],
+            dependencies=[Depends(require_scopes(["read"]))],
             summary="Get saved structured resources",
             description="""
             Retrieves saved structured resources from MongoDB.
@@ -511,8 +511,8 @@ async def get_ner_annotations(
             """)
 async def get_structured_resources(
     request: Request,
-    # user: Annotated[LoginUserIn, Depends(get_current_user)], 
-    client: MongoClient = Depends(get_mongo_client),
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    client: AsyncIOMotorClient = Depends(get_mongo_client),
     document_name: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,

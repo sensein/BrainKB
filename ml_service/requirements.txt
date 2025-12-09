@@ -27,7 +27,10 @@ bcrypt==3.2.2
 # Databases
 psycopg==3.1.18
 asyncpg==0.29.0
-pymongo[srv]==4.12.0
+motor==3.3.2
+pymongo==4.6.1
+httpx==0.27.0
+aiofiles==23.2.1
 
 websockets==15.0.1
 # Real-time communication

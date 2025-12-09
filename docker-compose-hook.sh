@@ -32,12 +32,19 @@
 #
 # -----------------------------------------------------------------------------
 if [ -f "pgadmin-init/generate-servers-json.sh" ]; then
-    # Only generate if file doesn't exist or is older than .env
-    if [ ! -f "pgadmin-init/servers.json" ] || [ "pgadmin-init/servers.json" -ot ".env" ]; then
+    # Only generate if file doesn't exist, is a directory, or is older than .env
+    if [ ! -f "pgadmin-init/servers.json" ] || [ -d "pgadmin-init/servers.json" ] || [ "pgadmin-init/servers.json" -ot ".env" ]; then
         echo "🔄 Auto-generating servers.json from environment variables..."
-        bash pgadmin-init/generate-servers-json.sh pgadmin-init > /dev/null 2>&1
+        # Remove if it's a directory
+        if [ -d "pgadmin-init/servers.json" ]; then
+            rm -rf "pgadmin-init/servers.json"
+        fi
+        # Generate servers.json (script outputs to its directory by default, or use argument)
+        bash pgadmin-init/generate-servers-json.sh > /dev/null 2>&1
         if [ $? -eq 0 ]; then
-            echo "✅ servers.json generated successfully"
+            echo "servers.json generated successfully"
+        else
+            echo "  Warning: Failed to generate servers.json"
         fi
     fi
 fi
