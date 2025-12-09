@@ -43,14 +43,18 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Source the hook script if it exists
-if [ -f ".docker-compose-hook.sh" ]; then
-    source .docker-compose-hook.sh
-fi
-
-# Load environment variables from .env file
+# Load environment variables from .env file FIRST
+# This ensures the hook script has access to the correct environment variables
 if [ -f ".env" ]; then
     export $(grep -v '^#' .env | xargs)
+fi
+
+# Source the hook script if it exists (try both naming conventions)
+# Hook script runs AFTER .env is loaded so it can use the correct values
+if [ -f "docker-compose-hook.sh" ]; then
+    source docker-compose-hook.sh
+elif [ -f ".docker-compose-hook.sh" ]; then
+    source .docker-compose-hook.sh
 fi
 
 # Function to handle Ollama operations

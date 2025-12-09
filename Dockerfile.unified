@@ -139,8 +139,16 @@ mkdir -p /var/run
 chmod 755 /var/run
 
 # Wait for PostgreSQL to be ready
+# Use JWT_POSTGRES_DATABASE_USER if available, otherwise fall back to DB_USER
+# This ensures we use the same user that PostgreSQL was initialized with
+PG_USER="${JWT_POSTGRES_DATABASE_USER:-${DB_USER:-postgres}}"
+PG_PASSWORD="${JWT_POSTGRES_DATABASE_PASSWORD:-${DB_PASSWORD}}"
+PG_HOST="${JWT_POSTGRES_DATABASE_HOST_URL:-${DB_HOST:-postgres}}"
+PG_DB="${JWT_POSTGRES_DATABASE_NAME:-${DB_NAME:-brainkb}}"
+
 echo "Waiting for PostgreSQL to be ready..."
-until PGPASSWORD=$DB_PASSWORD psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; do
+echo "Connecting as user: ${PG_USER} to database: ${PG_DB} on host: ${PG_HOST}"
+until PGPASSWORD="$PG_PASSWORD" psql -h "$PG_HOST" -U "$PG_USER" -d "$PG_DB" -c '\q' 2>/dev/null; do
     echo "PostgreSQL is unavailable - sleeping"
     sleep 2
 done

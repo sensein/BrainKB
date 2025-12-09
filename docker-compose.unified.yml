@@ -68,8 +68,10 @@ services:
       # For production with shared storage, set OXIGRAPH_DATA_PATH=/fsx/brainkb-kg-repo in .env
       - ${OXIGRAPH_DATA_PATH:-oxigraph_data}:/data
       - ${OXIGRAPH_TMP_PATH:-oxigraph_tmp}:/tmp
+ 
     environment:
       - TMPDIR=/tmp
+    command: ["serve", "--location", "/data", "--bind", "0.0.0.0:7878"]
     ulimits:
       fsize: -1
       nofile: 65536  # Increase file descriptor limit for concurrent connections
@@ -82,6 +84,12 @@ services:
     # Note: Healthcheck removed - oxigraph uses distroless image without shell/tools
     # The service is working (check logs: docker logs brainkb-oxigraph)
     # oxigraph-nginx will handle connection failures gracefully
+    # Note: Old Oxigraph storage format data in /fsx/brainkb-kg-repo should load automatically
+    # If data doesn't load, check:
+    # 1. Permissions: Ensure /fsx/brainkb-kg-repo is readable by container (chmod -R 755 /fsx/brainkb-kg-repo)
+    # 2. Path exists: Verify /fsx/brainkb-kg-repo exists on host
+    # 3. Data location: Old data should be directly in /data (not in subdirectories)
+    # 4. Version compatibility: Old Oxigraph data should be compatible with latest version
 
   # Nginx reverse proxy with HTTP Basic Authentication for Oxigraph
   oxigraph-nginx:

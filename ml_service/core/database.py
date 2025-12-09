@@ -52,11 +52,11 @@ async def init_db_pool():
     print(f"[DB POOL INIT] Pool instance before: {id(pool) if pool is not None else 'None'}")
     
     if pool is not None:
-        print(f"[DB POOL INIT] ⚠️  WARNING: Pool already exists! Instance ID: {id(pool)}")
+        print(f"[DB POOL INIT] WARNING: Pool already exists! Instance ID: {id(pool)}")
         print("=" * 80)
         return pool
     
-    print(f"[DB POOL INIT] ✅ Creating NEW pool instance...")
+    print(f"[DB POOL INIT] Creating NEW pool instance...")
     
     try:
         env_state = load_environment().get("ENV_STATE", "production").lower()
@@ -66,14 +66,16 @@ async def init_db_pool():
         num_workers = int(os.getenv("WEB_CONCURRENCY", "1" if env_state == "development" else "4"))
         
         # Calculate per-worker sizes to avoid exceeding PostgreSQL limits
-        # Target: ~40-50 total connections across all workers (leaves room for other services)
+        # Increased pool size to handle concurrent JWT token requests and other operations
+        # Target: ~90 total connections across all workers (leaves room for other services)
         if env_state == "development":
             min_size = 0  # Lazy init - no connections at startup
-            max_size = 5
+            max_size = 10
         else:
-            min_size = 0  # Lazy init - prevents connection stampede
-            # With 4 workers: 8 per worker = 32 total (safe)
-            max_size = max(3, min(8, 50 // num_workers))
+            min_size = 2  # Keep a few connections ready for fast JWT validation
+            # With 6 workers: 15 per worker = 90 total (safe, PostgreSQL default max is 100)
+            # Increased from 8 to 15 to handle bursts of concurrent requests
+            max_size = max(10, min(15, 90 // num_workers))
         
         print(f"[DB POOL INIT] Workers: {num_workers}, min={min_size}, max={max_size} per worker")
         print(f"[DB POOL INIT] Total potential: {max_size * num_workers} connections")
@@ -85,12 +87,12 @@ async def init_db_pool():
             command_timeout=60,
             **DB_SETTINGS
         )
-        print(f"[DB POOL INIT] ✅ Pool created! Instance ID: {id(pool)}")
+        print(f"[DB POOL INIT] Pool created! Instance ID: {id(pool)}")
         print("=" * 80)
         logger.info(f"Database connection pool initialized (workers={num_workers}, min={min_size}, max={max_size} per worker)")
         return pool
     except Exception as e:
-        print(f"[DB POOL INIT] ❌ ERROR: {str(e)}")
+        print(f"[DB POOL INIT] ERROR: {str(e)}")
         print("=" * 80)
         logger.error(f"Failed to initialize database connection pool: {str(e)}")
         raise
@@ -132,11 +134,12 @@ async def get_db_connection():
     print(f"[CONN ACQUIRE] Process {os.getpid()}: Acquiring connection... (pool: size={pool_size}, idle={idle_size}, in_use={in_use})")
     
     # Add timeout to prevent indefinite waiting
+    # Increased timeout to 30s to handle temporary pool exhaustion during bursts
     try:
-        conn = await asyncio.wait_for(pool.acquire(), timeout=10.0)
-        print(f"[CONN ACQUIRE] ✅ Connection acquired! (pool now: size={pool.get_size()}, idle={pool.get_idle_size()}, in_use={pool.get_size() - pool.get_idle_size()})")
+        conn = await asyncio.wait_for(pool.acquire(), timeout=30.0)
+        print(f"[CONN ACQUIRE] Connection acquired! (pool now: size={pool.get_size()}, idle={pool.get_idle_size()}, in_use={pool.get_size() - pool.get_idle_size()})")
     except asyncio.TimeoutError:
-        logger.error("Connection acquisition timed out after 10 seconds")
+        logger.error("Connection acquisition timed out after 30 seconds")
         raise HTTPException(
             status_code=503,
             detail="Database connection timeout. Please try again."
@@ -155,7 +158,7 @@ async def get_db_connection():
         await pool.release(conn)
         pool_size_after = pool.get_size()
         idle_size_after = pool.get_idle_size()
-        print(f"[CONN RELEASE] ✅ Connection released back to pool! (pool now: size={pool_size_after}, idle={idle_size_after}, in_use={pool_size_after - idle_size_after})")
+        print(f"[CONN RELEASE] Connection released back to pool! (pool now: size={pool_size_after}, idle={idle_size_after}, in_use={pool_size_after - idle_size_after})")
 
 # FastAPI dependency for automatic connection management in routes
 async def get_db() -> AsyncGenerator[asyncpg.Connection, None]:
