@@ -17,6 +17,10 @@ BrainKB serves as a knowledge base platform that provides scientists worldwide w
 
 ## Running
 
+### Quick Start
+
+For detailed platform-specific instructions (macOS, Windows, Linux), see **[LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md)**.
+
 #### 1. Setup Environment variables
 
 ```bash
@@ -27,14 +31,15 @@ cp env.template .env
 nano .env  # or use your preferred editor
 ```
 
+**Important**: Change default passwords in `.env` for security.
 
 #### 2. Start Services
 
 **Recommended: Use the wrapper script (includes Ollama setup + pgAdmin config):**
 ```bash
+chmod +x start_services.sh
 ./start_services.sh
 ```
-
 
 #### 3. Access Services
 
@@ -43,11 +48,15 @@ Once started, services are accessible at:
 - **API Token Manager (Django)**: `http://localhost:8000/`
   - Once you register JWT user you need to activate it using token manager. You can also assign permission.
 - **Query Service (FastAPI)**: `http://localhost:8010/`
-- Now supports ingestion than just querying.
+  - Now supports ingestion than just querying.
 - **ML Service (FastAPI)**: `http://localhost:8007/`
   - Integrates StructSense
 - **Oxigraph SPARQL**: `http://localhost:7878/` (password protected) graph database
 - **pgAdmin**: `http://localhost:5051/`
+
+### Troubleshooting
+
+If you encounter Docker mount errors or issues with file sharing, please refer to the [Troubleshooting section in LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md#troubleshooting).
 
 
 

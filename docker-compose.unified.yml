@@ -64,8 +64,10 @@ services:
     container_name: brainkb-oxigraph
     # No port mapping - only accessible through oxigraph-nginx
     volumes:
-      - /fsx/brainkb-kg-repo:/data
-      - /tmp:/tmp
+      # Use named volume for local development, or custom path via OXIGRAPH_DATA_PATH
+      # For production with shared storage, set OXIGRAPH_DATA_PATH=/fsx/brainkb-kg-repo in .env
+      - ${OXIGRAPH_DATA_PATH:-oxigraph_data}:/data
+      - ${OXIGRAPH_TMP_PATH:-oxigraph_tmp}:/tmp
     environment:
       - TMPDIR=/tmp
     ulimits:
