@@ -173,7 +173,8 @@ handle_ollama() {
             ;;
     esac
 }
-
+echo "Creating docker network external - brainkb-network"
+docker network create brainkb-network
 # Function to setup and start Ollama (for automatic setup on 'up' commands)
 setup_ollama() {
     handle_ollama up
