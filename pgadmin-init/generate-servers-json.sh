@@ -44,14 +44,20 @@ else
 fi
 SERVERS_JSON="${OUTPUT_DIR}/servers.json"
 
-# Remove if it's a directory (shouldn't happen, but just in case)
-if [ -d "$SERVERS_JSON" ]; then
-    echo "Warning: ${SERVERS_JSON} is a directory, removing it..."
-    rm -rf "$SERVERS_JSON"
-fi
-
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
+
+# Remove servers.json if it exists (whether file or directory)
+# This prevents issues where it might have been created as a directory
+if [ -e "$SERVERS_JSON" ]; then
+    if [ -d "$SERVERS_JSON" ]; then
+        echo "Warning: ${SERVERS_JSON} is a directory, removing it..."
+        rm -rf "$SERVERS_JSON"
+    else
+        # It's a file, just remove it
+        rm -f "$SERVERS_JSON"
+    fi
+fi
 
 # Generate servers.json
 cat > "$SERVERS_JSON" << EOF
