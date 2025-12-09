@@ -39,10 +39,8 @@ async def lifespan(app: FastAPI):
     try:
         # Initialize database connection pool
         await init_db_pool()
-        print(f"[APP STARTUP] ✅ Database pool initialization completed")
         logger.info("Database connection pool initialized successfully")
     except Exception as e:
-        print(f"[APP STARTUP] ❌ ERROR: Failed to initialize database pool: {e}")
         logger.error(f"Failed to initialize database pool: {e}")
         raise
 
@@ -58,13 +56,10 @@ async def lifespan(app: FastAPI):
                 maxPoolSize=50,  # Connection pool size
                 minPoolSize=5    # Minimum connections to maintain
             )
-            print(f"[APP STARTUP] ✅ MongoDB client initialized")
             logger.info("MongoDB client initialized successfully")
         else:
-            print(f"[APP STARTUP] ⚠️  MongoDB URL not configured, skipping client initialization")
             app.state.mongo_client = None
     except Exception as e:
-        print(f"[APP STARTUP] ⚠️  WARNING: Failed to initialize MongoDB client: {e}")
         logger.warning(f"Failed to initialize MongoDB client: {e}")
         app.state.mongo_client = None
 
@@ -91,22 +86,18 @@ async def lifespan(app: FastAPI):
             try:
                 # Try graceful close with timeout
                 await asyncio.wait_for(pool.close(), timeout=10.0)
-                print(f"[APP SHUTDOWN] ✅ Pool closed gracefully - all connections closed")
                 logger.info("Database connection pool closed gracefully")
             except asyncio.TimeoutError:
                 logger.warning("Database pool closure timed out after 10 seconds")
                 logger.warning("Forcing termination of remaining connections...")
                 await pool.terminate()
-                print(f"[APP SHUTDOWN] ⚠️  Pool terminated forcefully")
                 logger.info("Database connection pool terminated")
             except Exception as e:
                 logger.error(f"Error during pool closure: {e}")
                 logger.info("Attempting forced termination...")
                 await pool.terminate()
-                print(f"[APP SHUTDOWN] ⚠️  Pool terminated after error")
                 logger.info("Database connection pool terminated")
         else:
-            print(f"[APP SHUTDOWN] ⚠️  No pool found to close")
             logger.warning("No database pool found during shutdown")
         
         print("=" * 80)
@@ -118,7 +109,6 @@ async def lifespan(app: FastAPI):
         if hasattr(app.state, 'mongo_client') and app.state.mongo_client:
             print(f"[APP SHUTDOWN] Closing MongoDB client...")
             app.state.mongo_client.close()
-            print(f"[APP SHUTDOWN] ✅ MongoDB client closed")
             logger.info("MongoDB client closed successfully")
     except Exception as e:
         logger.error(f"Error closing MongoDB client: {e}")

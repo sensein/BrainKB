@@ -119,7 +119,6 @@ async def upsert_ner_annotations(input_data, client=None, db_name=None, collecti
                     break
         
         if not judge_terms:
-            print(f"⚠️  No NER data found in input_data. Available keys: {list(input_data.keys())}")
             return {
                 "Inserted": 0,
                 "Updated": 0,
