@@ -17,7 +17,7 @@ from core.routers.jwt_auth import router as jwt_router
 from core.routers.structsense import router as structsense_router
 from core.database import init_db_pool, get_db_pool, debug_pool_status
 from core.configuration import load_environment
-from pymongo import MongoClient
+from motor.motor_asyncio import AsyncIOMotorClient
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
         env = load_environment()
         mongo_url = env.get("MONGO_DB_URL")
         if mongo_url:
-            app.state.mongo_client = MongoClient(
+            app.state.mongo_client = AsyncIOMotorClient(
                 mongo_url,
                 serverSelectionTimeoutMS=5000,
                 connectTimeoutMS=5000,

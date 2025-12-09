@@ -19,7 +19,6 @@
 
 import json
 from rdflib import Graph
-import requests
 import logging
 from core.configuration import load_environment
 import yaml
@@ -31,28 +30,24 @@ import httpx
 import os
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-import os
 from fastapi import WebSocket, WebSocketDisconnect
 logger = logging.getLogger(__name__)
 import fitz
 from io import BytesIO
-import requests
 import asyncio
 from enum import Enum
-import yaml
 from structsense import kickoff
 from pathlib import Path
-from core.shared import load_environment  # adjust this import to your setup
-import json
-from pymongo import MongoClient, ReturnDocument
+from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime, timezone
 import tempfile
+import aiofiles
 
 # for multi-agent
 UPLOAD_DIR = Path("uploads").resolve()
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-def upsert_ner_annotations(input_data, client=None, db_name=None, collection_name=None):
+async def upsert_ner_annotations(input_data, client=None, db_name=None, collection_name=None):
     """
     Upserts NER annotations into a MongoDB collection with versioning and history.
     Dynamically detects the key containing NER data (any key with dict of lists structure).
@@ -71,7 +66,7 @@ def upsert_ner_annotations(input_data, client=None, db_name=None, collection_nam
         mongo_url = env.get("MONGO_DB_URL")
         if not mongo_url:
             raise ValueError("MongoDB URL not configured and no client provided")
-        client = MongoClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+        client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
         should_close_client = True
     
     try:
@@ -179,14 +174,14 @@ def upsert_ner_annotations(input_data, client=None, db_name=None, collection_nam
 
         for group_key, annotations in judge_terms.items():
             if not isinstance(annotations, list):
-                print(f"⚠️  Skipping non-list annotations for group {group_key}")
+                print(f"Skipping non-list annotations for group {group_key}")
                 continue
                 
             print(f"Processing group {group_key} with {len(annotations)} annotations")
             
             for ann_idx, ann in enumerate(annotations):
                 if not isinstance(ann, dict):
-                    print(f"⚠️  Skipping non-dict annotation at group {group_key}, index {ann_idx}")
+                    print(f"Skipping non-dict annotation at group {group_key}, index {ann_idx}")
                     continue
 
                 # Handle fields that might be lists (extract first value if list)
@@ -229,12 +224,12 @@ def upsert_ner_annotations(input_data, client=None, db_name=None, collection_nam
                 filter_criteria = {k: v for k, v in filter_criteria.items() if v}
 
                 if not filter_criteria or not entity:
-                    print(f"⚠️  Skipping annotation with empty filter criteria: {ann.get('entity', 'unknown')}")
+                    print(f"Skipping annotation with empty filter criteria: {ann.get('entity', 'unknown')}")
                     continue
 
                 print(f"Upserting annotation: entity='{entity}', doi='{doi}', paper_title='{paper_title[:50]}...'")
 
-                existing_doc = collection.find_one(filter_criteria)
+                existing_doc = await collection.find_one(filter_criteria)
                 version = 1
                 if existing_doc:
                     version = existing_doc.get("version", 1) + 1
@@ -265,7 +260,7 @@ def upsert_ner_annotations(input_data, client=None, db_name=None, collection_nam
                     },
                 }
 
-                result = collection.find_one_and_update(
+                result = await collection.find_one_and_update(
                     filter_criteria,
                     {
                         "$set": update_fields,
@@ -273,13 +268,13 @@ def upsert_ner_annotations(input_data, client=None, db_name=None, collection_nam
                         "$push": {"history": history_entry}
                     },
                     upsert=True,
-                    return_document=ReturnDocument.AFTER
+                    return_document=True
                 )
                 
                 if result:
-                    print(f"  ✅ Successfully saved annotation with _id: {result.get('_id')}")
+                    print(f"  Successfully saved annotation with _id: {result.get('_id')}")
                 else:
-                    print(f"  ⚠️  Upsert completed but no document returned")
+                    print(f" Upsert completed but no document returned")
 
         print(f"NER upsert complete: Inserted={inserted}, Updated={updated}")
 
@@ -289,7 +284,7 @@ def upsert_ner_annotations(input_data, client=None, db_name=None, collection_nam
             "Total_Processed": inserted + updated
         }
     except Exception as e:
-        print(f"❌ Exception in upsert_ner_annotations: {str(e)}")
+        print(f" Exception in upsert_ner_annotations: {str(e)}")
         print(f"Exception type: {type(e)}")
         import traceback
         traceback.print_exc()
@@ -304,7 +299,7 @@ def upsert_ner_annotations(input_data, client=None, db_name=None, collection_nam
                 print(f"Error closing MongoDB client: {close_error}")
 
 
-def upsert_structured_resources(input_data, client=None, db_name=None, collection_name=None):
+async def upsert_structured_resources(input_data, client=None, db_name=None, collection_name=None):
     """
     Upserts structured resource extraction results into a MongoDB collection with versioning and history.
     Dynamically handles any structure keys and nested objects.
@@ -323,7 +318,7 @@ def upsert_structured_resources(input_data, client=None, db_name=None, collectio
         mongo_url = env.get("MONGO_DB_URL")
         if not mongo_url:
             raise ValueError("MongoDB URL not configured and no client provided")
-        client = MongoClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+        client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
         should_close_client = True
 
     try:
@@ -384,7 +379,7 @@ def upsert_structured_resources(input_data, client=None, db_name=None, collectio
 
             print(f"Filter criteria: {filter_criteria}")
 
-            existing_doc = collection.find_one(filter_criteria)
+            existing_doc = await collection.find_one(filter_criteria)
             version = 1
             if existing_doc:
                 version = existing_doc.get("version", 1) + 1
@@ -412,7 +407,7 @@ def upsert_structured_resources(input_data, client=None, db_name=None, collectio
             print(f"Update fields keys: {list(update_fields.keys())}")
             print(f"History entry has {len(history_entry['updated_fields'])} updated fields")
 
-            result = collection.find_one_and_update(
+            result = await collection.find_one_and_update(
                 filter_criteria,
                 {
                     "$set": update_fields,
@@ -420,13 +415,13 @@ def upsert_structured_resources(input_data, client=None, db_name=None, collectio
                     "$push": {"history": history_entry}
                 },
                 upsert=True,
-                return_document=ReturnDocument.AFTER
+                return_document=True
             )
             
             if result:
-                print(f"✅ Successfully upserted document with _id: {result.get('_id')}")
+                print(f"Successfully upserted document with _id: {result.get('_id')}")
             else:
-                print(f"⚠️  Upsert completed but no document returned")
+                print(f" Upsert completed but no document returned")
 
         return {
             "Inserted": inserted,
@@ -600,7 +595,7 @@ def extract_and_flatten_nested_data(data, max_depth=10, current_depth=0):
         Flattened dictionary with all extracted data
     """
     if current_depth >= max_depth:
-        print(f"⚠️  Max depth {max_depth} reached, returning data as-is")
+        print(f" Max depth {max_depth} reached, returning data as-is")
         return data if isinstance(data, dict) else {}
     
     if not isinstance(data, dict):
@@ -765,7 +760,7 @@ def parse_yaml_or_json(input_str: Optional[Union[str, dict]], file_or_model_type
 #     biolink:in_taxon_label "Sus scrofa" .
 #
 # This function ensures that the base IRI is used, correcting the issue.
-def _get_base_from_context(jsonld_data):
+async def _get_base_from_context(jsonld_data):
     """
     Extracts the @base value from the @context.
     Handles both inline contexts (dictionaries) and external contexts (strings).
@@ -777,10 +772,11 @@ def _get_base_from_context(jsonld_data):
     # If @context is a string, fetch the external context
     if isinstance(context, str):
         try:
-            response = requests.get(context)
-            response.raise_for_status()
-            context = response.json()
-        except requests.exceptions.RequestException as e:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(context)
+                response.raise_for_status()
+                context = response.json()
+        except httpx.RequestError as e:
             logger.error(f"Failed to fetch the external context from {context}: {e}")
             raise ValueError(f"Failed to fetch the external context from {context}: {e}")
 
@@ -803,7 +799,7 @@ def _get_base_from_context(jsonld_data):
     return base
 
 
-def convert_to_turtle(jsonld_data):
+async def convert_to_turtle(jsonld_data):
     """
     Converts JSON-LD data to Turtle format.
     Returns:
@@ -811,7 +807,7 @@ def convert_to_turtle(jsonld_data):
         - False if an error occurs.
     """
     logger.info("Converting JSON-LD data to Turtle format")
-    base = _get_base_from_context(jsonld_data)
+    base = await _get_base_from_context(jsonld_data)
     try:
         graph = Graph()
         if base is not None:
@@ -854,7 +850,7 @@ def check_if_url_wellformed(url:str):
 
 
 
-def named_graph_exists(named_graph_iri: str) -> dict:
+async def named_graph_exists(named_graph_iri: str) -> dict:
     """
     Checks whether a named graph exists in the registered named graphs list.
 
@@ -877,21 +873,22 @@ def named_graph_exists(named_graph_iri: str) -> dict:
         }
 
     try:
-        response = requests.get(endpoint)
-        response.raise_for_status()  # Raise an error for bad responses (4xx, 5xx)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(endpoint)
+            response.raise_for_status()  # Raise an error for bad responses (4xx, 5xx)
 
-        registered_graphs = response.json()
-        formatted_iri= check_url_for_slash(named_graph_iri)
-        if formatted_iri in registered_graphs:
+            registered_graphs = response.json()
+            formatted_iri= check_url_for_slash(named_graph_iri)
+            if formatted_iri in registered_graphs:
+                return {
+                    "status": True,
+                    "formatted_iri": formatted_iri
+                }
             return {
-                "status": True,
-                "formatted_iri": formatted_iri
-            }
-        return {
-                "status": False,
-                "message": f"The graph is not registered. Available graphs: {list(registered_graphs.keys())}"
-            }
-    except requests.exceptions.RequestException as e:
+                    "status": False,
+                    "message": f"The graph is not registered. Available graphs: {list(registered_graphs.keys())}"
+                }
+    except httpx.RequestError as e:
         return {
             "status": "error",
             "message": f"Error connecting to query service: {str(e)}"
@@ -904,7 +901,7 @@ def is_valid_doi(doi: str) -> bool:
     return re.match(doi_pattern, doi, re.IGNORECASE) is not None
 
 
-def fetch_open_access_pdf(doi: str) -> bytes | str:
+async def fetch_open_access_pdf(doi: str) -> bytes | str:
     doi = doi.strip()
     if not doi.startswith("http"):
         if not is_valid_doi(doi):
@@ -914,27 +911,30 @@ def fetch_open_access_pdf(doi: str) -> bytes | str:
         doi_url = doi
 
     try:
-        response = requests.get(doi_url, allow_redirects=True, timeout=10)
-        response.raise_for_status()
-        final_url = response.url
-    except requests.RequestException:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            response = await client.get(doi_url)
+            response.raise_for_status()
+            final_url = str(response.url)
+            response_text = response.text
+    except httpx.RequestError:
         return "Failed to resolve DOI."
 
     try:
-        soup = BeautifulSoup(response.text, "html.parser")
+        soup = BeautifulSoup(response_text, "html.parser")
         for link in soup.find_all("a", href=True):
             href = link["href"]
             if ".pdf" in href.lower():
                 pdf_url = urljoin(final_url, href)
-                pdf_response = requests.get(pdf_url, stream=True)
-                if pdf_response.status_code == 200:
-                    return pdf_response.content
-                else:
-                    return "Failed to download PDF."
+                async with httpx.AsyncClient(timeout=30.0) as pdf_client:
+                    pdf_response = await pdf_client.get(pdf_url)
+                    if pdf_response.status_code == 200:
+                        return pdf_response.content
+                    else:
+                        return "Failed to download PDF."
         return "No PDF link found on page."
     except Exception as e:
         return f"Error occurred: {e}"
-def extract_full_text_fitz(pdf_bytes):
+async def extract_full_text_fitz(pdf_bytes):
     """
     Extract full text from PDF bytes.
     First tries external GROBID service if enabled, falls back to local PyMuPDF extraction.
@@ -964,14 +964,16 @@ def extract_full_text_fitz(pdf_bytes):
             
             # Send PDF file to external service
             # Try field name 'file' (common for file uploads)
-            with open(temp_file_path, 'rb') as pdf_file:
-                files = {'file': ('document.pdf', pdf_file, 'application/pdf')}
-                response = requests.post(
-                    grobid_url,
-                    files=files,
-                    timeout=30,  # 30 second timeout
-                    headers={'Accept': 'text/plain'}
-                )
+            async with aiofiles.open(temp_file_path, 'rb') as pdf_file:
+                pdf_content = await pdf_file.read()
+                # httpx uses a tuple format: (filename, content, content_type)
+                files = {'file': ('document.pdf', pdf_content, 'application/pdf')}
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        grobid_url,
+                        files=files,
+                        headers={'Accept': 'text/plain'}
+                    )
             
             if response.status_code == 200:
                 extracted_text = response.text
@@ -982,11 +984,11 @@ def extract_full_text_fitz(pdf_bytes):
                     f"External service returned status {response.status_code}: {response.text[:200]}. "
                     "Falling back to local extraction from PDF bytes."
                 )
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             logger.warning("External service request timed out. Falling back to local extraction from PDF bytes.")
-        except requests.exceptions.ConnectionError as e:
+        except httpx.ConnectError as e:
             logger.warning(f"Could not connect to external service: {e}. Falling back to local extraction from PDF bytes.")
-        except requests.exceptions.RequestException as e:
+        except httpx.RequestError as e:
             logger.warning(f"Error calling external service: {e}. Falling back to local extraction from PDF bytes.")
         except Exception as e:
             logger.warning(f"Unexpected error calling external service: {e}. Falling back to local extraction from PDF bytes.")
@@ -1000,11 +1002,16 @@ def extract_full_text_fitz(pdf_bytes):
                     logger.warning(f"Failed to cleanup temporary file {temp_file_path}: {cleanup_error}")
     
     # Step 2: Fallback to local extraction from PDF bytes using PyMuPDF (if external service fails or not enabled)
+    # Run blocking PDF extraction in thread pool
     try:
         logger.info("Using local PyMuPDF extraction from PDF bytes")
-        doc = fitz.open(stream=BytesIO(pdf_bytes), filetype="pdf")
-        full_text = "\n".join(page.get_text() for page in doc)
-        doc.close()
+        def _extract_text():
+            doc = fitz.open(stream=BytesIO(pdf_bytes), filetype="pdf")
+            full_text = "\n".join(page.get_text() for page in doc)
+            doc.close()
+            return full_text
+        
+        full_text = await asyncio.to_thread(_extract_text)
         logger.info(f"Successfully extracted text using PyMuPDF ({len(full_text)} chars)")
         return full_text
     except Exception as e:
@@ -1114,7 +1121,7 @@ def load_env_vars_from_ui(env_vars: dict):
     logger.info(f"EXTERNAL_PDF_EXTRACTION_SERVICE = {os.getenv('EXTERNAL_PDF_EXTRACTION_SERVICE')}")
     logger.info("*" * 100)
 
-def load_config(config: Union[str, Path, Dict], type: str) -> dict:
+async def load_config(config: Union[str, Path, Dict], type: str) -> dict:
     """
     Loads the configuration from a YAML file
 
@@ -1165,9 +1172,10 @@ def load_config(config: Union[str, Path, Dict], type: str) -> dict:
         raise ValueError(error_msg)
 
     try:
-        with open(config_path, "r", encoding="utf-8") as file:
-            config_file_content = yaml.safe_load(file)
-            logger.info(f"file processing - {file}, type: {type}")
+        async with aiofiles.open(config_path, "r", encoding="utf-8") as file:
+            content = await file.read()
+            config_file_content = yaml.safe_load(content)
+            logger.info(f"file processing - {config_path}, type: {type}")
             return config_file_content
 
     except FileNotFoundError:
@@ -1185,14 +1193,14 @@ def _is_safe_path(p: Path, base: Path) -> bool:
         base_res = base.resolve()
         return str(p_res).startswith(str(base_res) + str(Path.sep))
 
-def run_kickoff_with_config(
+async def run_kickoff_with_config(
     config_path: str,
     input_source: Union[str, dict],
     api_key: str,
     chunking: bool,
 ):
     # Load all sections from your config file
-    all_config = load_config(config_path, "all")
+    all_config = await load_config(config_path, "all")
 
     agent_config = all_config.get("agent_config", {})
     embedder_config = all_config.get("embedder_config", {})
@@ -1203,9 +1211,10 @@ def run_kickoff_with_config(
     # Convert to string if needed
     input_source_str = str(input_source) if input_source else ""
 
-    # Call your new kickoff
-    try:
-        result = kickoff(
+    # Call kickoff in a thread pool since it's synchronous and may use asyncio.run() internally
+    # This prevents "asyncio.run() cannot be called from a running event loop" errors
+    def _run_kickoff():
+        return kickoff(
             agentconfig=agent_config,
             taskconfig=task_config,
             embedderconfig=embedder_config,
@@ -1215,6 +1224,9 @@ def run_kickoff_with_config(
             api_key=api_key,
             enable_chunking=chunking,
         )
+    
+    try:
+        result = await asyncio.to_thread(_run_kickoff)
         return True, result
     except Exception as e:
         return False, str(e)
@@ -1322,15 +1334,12 @@ async def _process_job_background(
             env = load_environment()
             api_key = env.get("OPENROUTER_API_KEY")
 
-        def _run():
-            return run_kickoff_with_config(
-                config_path=config_path,
-                input_source=input_source,
-                api_key=api_key,
-                chunking=chunking,
-            )
-
-        status, result = await asyncio.to_thread(_run)
+        status, result = await run_kickoff_with_config(
+            config_path=config_path,
+            input_source=input_source,
+            api_key=api_key,
+            chunking=chunking,
+        )
 
         if status:
             _update_job_status(task_id, JobStatus.COMPLETED, result=result)
@@ -1466,7 +1475,7 @@ async def _handle_websocket_connection(websocket: WebSocket, client_id: str, def
                         # Handle DOI input
                         try:
                             await websocket.send_text(_json_sendable({"type": "status", "message": "Fetching PDF from DOI..."}))
-                            pdf_bytes = await asyncio.to_thread(fetch_open_access_pdf, doi)
+                            pdf_bytes = await fetch_open_access_pdf(doi)
                             
                             if isinstance(pdf_bytes, str):
                                 # Error occurred
@@ -1475,7 +1484,7 @@ async def _handle_websocket_connection(websocket: WebSocket, client_id: str, def
                             
                             # First try GROBID service (if enabled) - sends PDF bytes directly
                             await websocket.send_text(_json_sendable({"type": "status", "message": "Attempting text extraction via GROBID service..."}))
-                            input_source = await asyncio.to_thread(extract_full_text_fitz, pdf_bytes)
+                            input_source = await extract_full_text_fitz(pdf_bytes)
                             filename = f"doi_{doi.replace('/', '_')}.txt"
                         except Exception as e:
                             await websocket.send_text(_json_sendable({"type": "error", "message": f"Error processing DOI: {str(e)}"}))
