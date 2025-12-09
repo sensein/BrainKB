@@ -23,15 +23,15 @@ For detailed platform-specific instructions (macOS, Windows, Linux), see **[LOCA
 
 #### 1. Setup Environment variables
 
+**Important**: Change default passwords in `.env` for security.
+
 ```bash
 # Copy the environment template
 cp env.template .env
 
-# Edit .env with your configuration
+# Edit .env with your configuration (make sure to change passwords!)
 nano .env  # or use your preferred editor
 ```
-
-**Important**: Change default passwords in `.env` for security.
 
 #### 2. Start Services
 

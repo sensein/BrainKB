@@ -467,7 +467,7 @@ docker system prune -a
 
 - **Documentation**: https://sensein.group/brainkbdocs/
 - **Issues**: https://github.com/sensein/BrainKB/issues
-- **Contact**: Tek Raj Chhetri <tekraj@mit.edu>
+- **Contact**: For questions or support, please open an issue on GitHub or refer to the main repository README
 
 ---
 
