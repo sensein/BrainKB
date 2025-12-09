@@ -143,6 +143,8 @@ volumes:
     driver: local
   oxigraph_data:
     driver: local
+  oxigraph_tmp:
+    driver: local
   pgadmin_data:
     driver: local
 
