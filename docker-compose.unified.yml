@@ -64,10 +64,11 @@ services:
     container_name: brainkb-oxigraph
     # No port mapping - only accessible through oxigraph-nginx
     volumes:
-      # Direct bind mount to FSx - DO NOT use named volume for FSx mounts
-      # This ensures data syncs correctly with the FSx filesystem
-      - /:/data
-      - /:/tmp
+      # Use named volume for local development, or custom path via OXIGRAPH_DATA_PATH
+      # For production with shared storage, set OXIGRAPH_DATA_PATH=/fsx/brainkb-kg-repo in .env
+      - ${OXIGRAPH_DATA_PATH:-oxigraph_data}:/data
+      - ${OXIGRAPH_TMP_PATH:-oxigraph_tmp}:/tmp
+ 
     environment:
       - TMPDIR=/tmp
     command: ["serve", "--location", "/data", "--bind", "0.0.0.0:7878"]
@@ -148,8 +149,10 @@ services:
 volumes:
   postgres_data:
     driver: local
-  # oxigraph_data: Not used - we use direct bind mount to /fsx/brainkb-kg-repo
-  # Direct bind mounts are required for FSx filesystems to ensure proper data sync
+  oxigraph_data:
+    driver: local
+  oxigraph_tmp:
+    driver: local
   pgadmin_data:
     driver: local
 

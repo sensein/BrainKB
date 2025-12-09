@@ -3,10 +3,10 @@ services:
   oxigraph:
     image: ghcr.io/oxigraph/oxigraph:0.4.0-rc.1
     volumes:
-      #fsx for storage
-      - /fsx/brainkb-kg-repo:/data
+      # Use named volume for local development, or custom path via OXIGRAPH_DATA_PATH
+      - ${OXIGRAPH_DATA_PATH:-oxigraph_data}:/data
       # NEW: give Oxigraph a real, large /tmp
-      - /srv/oxigraph-tmp:/tmp
+      - ${OXIGRAPH_TMP_PATH:-oxigraph_tmp}:/tmp
     environment:
       # Make sure any temp use points at the big /tmp
       - TMPDIR=/tmp
@@ -32,3 +32,9 @@ services:
     depends_on:
       - oxigraph
     restart: unless-stopped
+
+volumes:
+  oxigraph_data:
+    driver: local
+  oxigraph_tmp:
+    driver: local
