@@ -19,8 +19,6 @@ BrainKB serves as a knowledge base platform that provides scientists worldwide w
 
 ### Quick Start
 
-For detailed platform-specific instructions (macOS, Windows, Linux), see **[LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md)**.
-
 #### 1. Setup Environment variables
 
 **Important**: Change default passwords in `.env` for security.
