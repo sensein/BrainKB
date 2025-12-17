@@ -219,6 +219,11 @@ setup_ollama() {
 check_services_health() {
     local unified_container="brainkb-unified"
     
+    # API endpoint constants
+    local API_TOKEN_ENDPOINT="http://localhost:8000/"
+    local QUERY_SERVICE_ENDPOINT="http://localhost:8010/api/"
+    local ML_SERVICE_ENDPOINT="http://localhost:8007/api/"
+    
     # Wait a bit for services to start
     echo ""
     echo "Waiting for services to start..."
@@ -266,16 +271,16 @@ check_services_health() {
     echo "--------------------------"
     
     # API Token Manager (port 8000)
-    if curl -s -f http://localhost:8000/ > /dev/null 2>&1; then
-        echo "  ✓ API Token Manager: http://localhost:8000/ (accessible)"
+    if curl -s -f "$API_TOKEN_ENDPOINT" > /dev/null 2>&1; then
+        echo "  ✓ API Token Manager: $API_TOKEN_ENDPOINT (accessible)"
     else
-        echo "  ✗ API Token Manager: http://localhost:8000/ (not responding yet)"
+        echo "  ✗ API Token Manager: $API_TOKEN_ENDPOINT (not responding yet)"
         echo "    This service may still be starting. Check logs:"
         echo "    docker exec ${unified_container} tail -n 50 /var/log/supervisor/api_tokenmanager.err.log"
     fi
     
     # Query Service (port 8010)
-    if curl -s -f http://localhost:8010/api/ > /dev/null 2>&1; then
+    if curl -s -f "$QUERY_SERVICE_ENDPOINT" > /dev/null 2>&1; then
         echo "  ✓ Query Service: http://localhost:8010/ (accessible)"
     else
         echo "  ✗ Query Service: http://localhost:8010/ (not responding yet)"
@@ -284,7 +289,7 @@ check_services_health() {
     fi
     
     # ML Service (port 8007)
-    if curl -s -f http://localhost:8007/api/ > /dev/null 2>&1; then
+    if curl -s -f "$ML_SERVICE_ENDPOINT" > /dev/null 2>&1; then
         echo "  ✓ ML Service: http://localhost:8007/ (accessible)"
     else
         echo "  ✗ ML Service: http://localhost:8007/ (not responding yet)"
@@ -574,8 +579,9 @@ else
     exit 1
 fi
 
-# Execute docker-compose command
-$DOCKER_COMPOSE_CMD "${FINAL_ARGS[@]}"
+# Execute docker-compose command with proper quoting
+# Note: DOCKER_COMPOSE_CMD is safe here as it's set by us, not user input
+eval "$DOCKER_COMPOSE_CMD \"\${FINAL_ARGS[@]}\""
 COMPOSE_EXIT_CODE=$?
 
 # If this was an 'up' command and it succeeded, check service health
