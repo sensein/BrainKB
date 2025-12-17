@@ -43,6 +43,38 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Check if .env file exists, if not provide helpful error message
+if [ ! -f ".env" ]; then
+    echo "ERROR: .env file not found!"
+    echo ""
+    echo "Please create a .env file from the template:"
+    echo "  cp env.template .env"
+    echo ""
+    echo "Then edit .env with your configuration:"
+    echo "  - Change all default passwords (POSTGRES_PASSWORD, DJANGO_SUPERUSER_PASSWORD, etc.)"
+    echo "  - Configure Ollama settings if needed"
+    echo "  - Review other settings as needed"
+    echo ""
+    echo "You can validate your configuration with:"
+    echo "  ./validate_env.sh"
+    echo ""
+    echo "See env.template for all available options and documentation."
+    exit 1
+fi
+
+# Validate .env file (only for 'up' commands, skip for other operations)
+# This helps catch configuration issues early
+if [[ "$1" == "up" ]] || [[ "$1" == "" ]]; then
+    if [ -f "./validate_env.sh" ]; then
+        # Run validation but don't exit on warnings (only on errors)
+        if ! ./validate_env.sh; then
+            echo ""
+            echo "Please fix the configuration errors above before starting services."
+            exit 1
+        fi
+    fi
+fi
+
 # Load environment variables from .env file FIRST
 # This ensures the hook script has access to the correct environment variables
 if [ -f ".env" ]; then
@@ -177,9 +209,98 @@ if ! docker network inspect brainkb-network >/dev/null 2>&1; then
     echo "Creating docker network external - brainkb-network"
     docker network create brainkb-network
 fi
+
 # Function to setup and start Ollama (for automatic setup on 'up' commands)
 setup_ollama() {
     handle_ollama up
+}
+
+# Function to check if services are accessible after startup
+check_services_health() {
+    local unified_container="brainkb-unified"
+    
+    # API endpoint constants
+    local API_TOKEN_ENDPOINT="http://localhost:8000/"
+    local QUERY_SERVICE_ENDPOINT="http://localhost:8010/api/"
+    local ML_SERVICE_ENDPOINT="http://localhost:8007/api/"
+    
+    # Wait a bit for services to start
+    echo ""
+    echo "Waiting for services to start..."
+    sleep 5
+    
+    # Check if container is running
+    if ! docker ps --format '{{.Names}}' | grep -q "^${unified_container}$"; then
+        echo "WARNING: Container '${unified_container}' is not running"
+        return 1
+    fi
+    
+    echo "Checking service health..."
+    
+    # Check supervisor status
+    local supervisor_status=$(docker exec ${unified_container} supervisorctl status 2>&1)
+    
+    if [ $? -ne 0 ]; then
+        echo "WARNING: Cannot connect to supervisor in '${unified_container}'"
+        echo "The container may still be starting up. Please wait a moment and check:"
+        echo "  docker logs ${unified_container}"
+        return 1
+    fi
+    
+    # Parse supervisor status and show service states
+    echo ""
+    echo "Service Status:"
+    echo "---------------"
+    echo "$supervisor_status" | while IFS= read -r line; do
+        service_name=$(echo "$line" | awk '{print $1}')
+        service_state=$(echo "$line" | awk '{print $2}')
+        
+        if [ "$service_state" = "RUNNING" ]; then
+            echo "  ✓ $service_name: $service_state"
+        else
+            echo "  ✗ $service_name: $service_state"
+            if [ "$service_name" = "query_service" ] || [ "$service_name" = "ml_service" ] || [ "$service_name" = "api_tokenmanager" ]; then
+                echo "    To view logs: docker exec ${unified_container} tail -n 50 /var/log/supervisor/${service_name}.err.log"
+            fi
+        fi
+    done
+    
+    # Check if services are accessible via HTTP
+    echo ""
+    echo "Checking HTTP endpoints..."
+    echo "--------------------------"
+    
+    # API Token Manager (port 8000)
+    if curl -s -f "$API_TOKEN_ENDPOINT" > /dev/null 2>&1; then
+        echo "  ✓ API Token Manager: $API_TOKEN_ENDPOINT (accessible)"
+    else
+        echo "  ✗ API Token Manager: $API_TOKEN_ENDPOINT (not responding yet)"
+        echo "    This service may still be starting. Check logs:"
+        echo "    docker exec ${unified_container} tail -n 50 /var/log/supervisor/api_tokenmanager.err.log"
+    fi
+    
+    # Query Service (port 8010)
+    if curl -s -f "$QUERY_SERVICE_ENDPOINT" > /dev/null 2>&1; then
+        echo "  ✓ Query Service: http://localhost:8010/ (accessible)"
+    else
+        echo "  ✗ Query Service: http://localhost:8010/ (not responding yet)"
+        echo "    This service may still be starting. Check logs:"
+        echo "    docker exec ${unified_container} tail -n 50 /var/log/supervisor/query_service.err.log"
+    fi
+    
+    # ML Service (port 8007)
+    if curl -s -f "$ML_SERVICE_ENDPOINT" > /dev/null 2>&1; then
+        echo "  ✓ ML Service: http://localhost:8007/ (accessible)"
+    else
+        echo "  ✗ ML Service: http://localhost:8007/ (not responding yet)"
+        echo "    This service may still be starting. Check logs:"
+        echo "    docker exec ${unified_container} tail -n 50 /var/log/supervisor/ml_service.err.log"
+    fi
+    
+    echo ""
+    echo "Note: Services may take 30-90 seconds to fully start."
+    echo "If services are not accessible after 2 minutes, check the logs using the commands above."
+    echo ""
 }
 
 # If no arguments provided, default to "up -d"
@@ -447,15 +568,29 @@ fi
 
 # Detect which docker-compose command is available
 # Try docker compose (plugin, newer) first, then docker-compose (standalone, older)
+DOCKER_COMPOSE_CMD=""
 if docker compose version >/dev/null 2>&1; then
-    # Use docker compose (plugin version)
-    exec docker compose "${FINAL_ARGS[@]}"
+    DOCKER_COMPOSE_CMD="docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then
-    # Use docker-compose (standalone version)
-    exec docker-compose "${FINAL_ARGS[@]}"
+    DOCKER_COMPOSE_CMD="docker-compose"
 else
     echo " Error: Neither 'docker compose' nor 'docker-compose' found in PATH"
     echo " Please install Docker Compose: https://docs.docker.com/compose/install/"
     exit 1
 fi
+
+# Execute docker-compose command with proper quoting
+# Note: DOCKER_COMPOSE_CMD is safe here as it's set by us, not user input
+eval "$DOCKER_COMPOSE_CMD \"\${FINAL_ARGS[@]}\""
+COMPOSE_EXIT_CODE=$?
+
+# If this was an 'up' command and it succeeded, check service health
+if [ $COMPOSE_EXIT_CODE -eq 0 ]; then
+    # Check if this was an 'up' command (not for individual services)
+    if [[ " ${FINAL_ARGS[@]} " =~ " up " ]] && [ -z "$SERVICE_NAME" ]; then
+        check_services_health
+    fi
+fi
+
+exit $COMPOSE_EXIT_CODE
 

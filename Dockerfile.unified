@@ -127,10 +127,96 @@ RUN echo '#!/bin/bash' > /app/oxigraph/oxigraph_server && \
     echo 'exit 1' >> /app/oxigraph/oxigraph_server && \
     chmod +x /app/oxigraph/oxigraph_server
 
+# Create healthcheck script
+RUN cat > /app/healthcheck.sh << 'EOF'
+#!/bin/bash
+# Healthcheck script to verify all services are running
+
+# Check if supervisor is running
+if ! pgrep supervisord > /dev/null; then
+    echo "ERROR: supervisord is not running"
+    exit 1
+fi
+
+# Check if supervisor socket is accessible
+if ! supervisorctl status > /dev/null 2>&1; then
+    echo "ERROR: Cannot connect to supervisor"
+    exit 1
+fi
+
+# Check each service status
+for service in api_tokenmanager query_service ml_service; do
+    status=$(supervisorctl status $service 2>/dev/null | awk '{print $2}')
+    if [ "$status" != "RUNNING" ]; then
+        echo "ERROR: Service $service is not running (status: $status)"
+        echo "Check logs at: /var/log/supervisor/${service}.err.log"
+        exit 1
+    fi
+done
+
+# Check if services are listening on their ports
+# Give services time to bind to ports if they just started
+sleep 2
+
+# Check API Token Manager (port 8000)
+if ! curl -s -f http://localhost:8000/ > /dev/null 2>&1; then
+    echo "WARNING: API Token Manager (port 8000) is not responding"
+fi
+
+# Check Query Service (port 8010)
+if ! curl -s -f http://localhost:8010/api/ > /dev/null 2>&1; then
+    echo "WARNING: Query Service (port 8010) is not responding"
+fi
+
+# Check ML Service (port 8007)
+if ! curl -s -f http://localhost:8007/api/ > /dev/null 2>&1; then
+    echo "WARNING: ML Service (port 8007) is not responding"
+fi
+
+# If we got here, at least supervisor and services are running
+exit 0
+EOF
+
+RUN chmod +x /app/healthcheck.sh
+
 # Create startup script
 RUN cat > /app/start.sh << 'EOF'
 #!/bin/bash
 set -e
+
+echo "=========================================="
+echo "BrainKB Unified Container Startup"
+echo "=========================================="
+echo ""
+
+# Check critical environment variables
+echo "Checking environment configuration..."
+MISSING_VARS=()
+
+# Check JWT/Database configuration
+if [ -z "$JWT_POSTGRES_DATABASE_USER" ] && [ -z "$DB_USER" ]; then
+    MISSING_VARS+=("JWT_POSTGRES_DATABASE_USER or DB_USER")
+fi
+if [ -z "$JWT_POSTGRES_DATABASE_PASSWORD" ] && [ -z "$DB_PASSWORD" ]; then
+    MISSING_VARS+=("JWT_POSTGRES_DATABASE_PASSWORD or DB_PASSWORD")
+fi
+if [ -z "$QUERY_SERVICE_JWT_SECRET_KEY" ]; then
+    MISSING_VARS+=("QUERY_SERVICE_JWT_SECRET_KEY")
+fi
+if [ -z "$ML_SERVICE_JWT_SECRET_KEY" ]; then
+    MISSING_VARS+=("ML_SERVICE_JWT_SECRET_KEY")
+fi
+
+if [ ${#MISSING_VARS[@]} -gt 0 ]; then
+    echo "WARNING: Missing critical environment variables:"
+    for var in "${MISSING_VARS[@]}"; do
+        echo "  - $var"
+    done
+    echo ""
+    echo "Services may fail to start without these variables."
+    echo "Please ensure your .env file is properly configured."
+    echo ""
+fi
 
 # Note: Oxigraph runs as a separate service in docker-compose
 
@@ -198,7 +284,26 @@ mkdir -p /var/run
 chmod 755 /var/run
 
 # Start supervisor
-echo "Starting all services..."
+echo ""
+echo "Starting all services via supervisord..."
+echo "=========================================="
+echo ""
+echo "Services being started:"
+echo "  - API Token Manager (port 8000)"
+echo "  - Query Service (port 8010)"
+echo "  - ML Service (port 8007)"
+echo ""
+echo "Logs are available at:"
+echo "  - /var/log/supervisor/api_tokenmanager.err.log"
+echo "  - /var/log/supervisor/query_service.err.log"
+echo "  - /var/log/supervisor/ml_service.err.log"
+echo ""
+echo "From host, view logs with:"
+echo "  docker exec brainkb-unified tail -f /var/log/supervisor/query_service.err.log"
+echo ""
+echo "=========================================="
+echo ""
+
 # Use our config file that includes socket configuration
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
 EOF
