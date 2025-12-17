@@ -51,11 +51,11 @@ services:
           cpus: '2.0'  # Reserve 2 CPUs minimum
           memory: 4G
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/ || exit 1"]
+      test: ["CMD-SHELL", "/app/healthcheck.sh"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
 
   # Oxigraph SPARQL Database (separate service)
   # Note: Oxigraph is not directly exposed - access through oxigraph-nginx service
