@@ -62,10 +62,6 @@ PYTHON_SCRIPT
     echo "Django migrations completed"
 fi
 
-# Ensure supervisor socket directory exists and is writable (in case /var/run is tmpfs)
-mkdir -p /var/run
-chmod 755 /var/run
-
 # Start supervisor
 echo "Starting all services..."
 # Use our config file that includes socket configuration
