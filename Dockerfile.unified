@@ -68,7 +68,7 @@ RUN echo '#!/bin/bash' > /app/oxigraph/oxigraph_server && \
     chmod +x /app/oxigraph/oxigraph_server
 
 # Create startup script
-COPY supervisord.conf /app/start.sh
+COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
 # Expose ports
