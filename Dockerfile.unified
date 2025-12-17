@@ -51,67 +51,7 @@ RUN pip install --use-deprecated=legacy-resolver "structsense==0.0.4" || \
 
 # Create supervisor configuration
 RUN mkdir -p /etc/supervisor/conf.d
-RUN cat > /etc/supervisor/conf.d/supervisord.conf << 'EOF'
-[unix_http_server]
-file=/var/run/supervisor.sock
-chmod=0700
-
-[supervisord]
-nodaemon=true
-logfile=/var/log/supervisor/supervisord.log
-pidfile=/var/run/supervisord.pid
-
-[supervisorctl]
-serverurl=unix:///var/run/supervisor.sock
-
-[rpcinterface:supervisor]
-supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
-
-[program:api_tokenmanager]
-command=gunicorn -b 0.0.0.0:8000 APIAuthManager.wsgi:application
-directory=/app/APItokenmanager
-autostart=true
-autorestart=true
-startsecs=10
-stderr_logfile=/var/log/supervisor/api_tokenmanager.err.log
-stdout_logfile=/var/log/supervisor/api_tokenmanager.out.log
-environment=PATH="/usr/local/bin:/usr/bin:/bin"
-priority=100
-
-[program:query_service]
-command=gunicorn core.main:app --bind 0.0.0.0:8010 --workers 6 --worker-class uvicorn.workers.UvicornWorker --threads 2 --timeout 300 --keep-alive 120 --max-requests 1000 --max-requests-jitter 50
-directory=/app/query_service
-autostart=true
-autorestart=true
-startsecs=30
-stderr_logfile=/var/log/supervisor/query_service.err.log
-stdout_logfile=/var/log/supervisor/query_service.out.log
-environment=PATH="/usr/local/bin:/usr/bin:/bin",WEB_CONCURRENCY="6"
-startretries=10
-stopwaitsecs=10
-priority=200
-
-[program:ml_service]
-command=gunicorn core.main:app --bind 0.0.0.0:8007 --workers 6 --worker-class uvicorn.workers.UvicornWorker --threads 2 --max-requests 1000 --max-requests-jitter 50 --timeout 220 --keep-alive 220 --log-level debug
-directory=/app/ml_service
-autostart=true
-autorestart=true
-startsecs=15
-stderr_logfile=/var/log/supervisor/ml_service.err.log
-stdout_logfile=/var/log/supervisor/ml_service.out.log
-environment=PATH="/usr/local/bin:/usr/bin:/bin",WEB_CONCURRENCY="6"
-
-[program:oxigraph]
-command=/app/oxigraph/oxigraph_server --bind 0.0.0.0:7878 --storage /data
-directory=/app/oxigraph
-autostart=false
-autorestart=false
-stderr_logfile=/var/log/supervisor/oxigraph.err.log
-stdout_logfile=/var/log/supervisor/oxigraph.out.log
-environment=PATH="/usr/local/bin:/usr/bin:/bin",TMPDIR="/tmp"
-startsecs=0
-startretries=0
-EOF
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Create directories for logs and data
 # Ensure supervisor socket directory exists and is writable
@@ -128,81 +68,7 @@ RUN echo '#!/bin/bash' > /app/oxigraph/oxigraph_server && \
     chmod +x /app/oxigraph/oxigraph_server
 
 # Create startup script
-RUN cat > /app/start.sh << 'EOF'
-#!/bin/bash
-set -e
-
-# Note: Oxigraph runs as a separate service in docker-compose
-
-# Ensure supervisor socket directory exists and is writable
-mkdir -p /var/run
-chmod 755 /var/run
-
-# Wait for PostgreSQL to be ready
-# Use JWT_POSTGRES_DATABASE_USER if available, otherwise fall back to DB_USER
-# This ensures we use the same user that PostgreSQL was initialized with
-PG_USER="${JWT_POSTGRES_DATABASE_USER:-${DB_USER:-postgres}}"
-PG_PASSWORD="${JWT_POSTGRES_DATABASE_PASSWORD:-${DB_PASSWORD}}"
-PG_HOST="${JWT_POSTGRES_DATABASE_HOST_URL:-${DB_HOST:-postgres}}"
-PG_DB="${JWT_POSTGRES_DATABASE_NAME:-${DB_NAME:-brainkb}}"
-
-echo "Waiting for PostgreSQL to be ready..."
-echo "Connecting as user: ${PG_USER} to database: ${PG_DB} on host: ${PG_HOST}"
-until PGPASSWORD="$PG_PASSWORD" psql -h "$PG_HOST" -U "$PG_USER" -d "$PG_DB" -c '\q' 2>/dev/null; do
-    echo "PostgreSQL is unavailable - sleeping"
-    sleep 2
-done
-echo "PostgreSQL is ready!"
-
-# Note: Oxigraph is optional - services will handle connection failures gracefully
-# No need to wait for it here - services will retry when needed
-
-# Run Django migrations for APItokenmanager if needed
-cd /app/APItokenmanager
-if [ -f .env ] || [ -n "$DB_NAME" ]; then
-    echo "Running Django migrations..."
-    python manage.py makemigrations || true
-    python manage.py migrate || true
-    python manage.py collectstatic --noinput || true
-    
-    # Create superuser if credentials are provided and user doesn't exist
-    if [ -n "$DJANGO_SUPERUSER_USERNAME" ] && [ -n "$DJANGO_SUPERUSER_EMAIL" ] && [ -n "$DJANGO_SUPERUSER_PASSWORD" ]; then
-        echo "Creating Django superuser..."
-        export DJANGO_SUPERUSER_USERNAME DJANGO_SUPERUSER_EMAIL DJANGO_SUPERUSER_PASSWORD
-        python manage.py shell << 'PYTHON_SCRIPT' || true
-import os
-from django.contrib.auth import get_user_model
-User = get_user_model()
-username = os.environ.get('DJANGO_SUPERUSER_USERNAME')
-email = os.environ.get('DJANGO_SUPERUSER_EMAIL')
-password = os.environ.get('DJANGO_SUPERUSER_PASSWORD')
-if username and email and password:
-    if not User.objects.filter(username=username).exists():
-        User.objects.create_superuser(username, email, password)
-        print(f'Superuser {username} created successfully')
-    else:
-        print(f'Superuser {username} already exists')
-else:
-    print('Error: Missing superuser credentials in environment')
-PYTHON_SCRIPT
-    else
-        echo "Warning: DJANGO_SUPERUSER credentials not provided. Superuser not created."
-        echo "You can create one manually with: python manage.py createsuperuser"
-    fi
-    
-    echo "Django migrations completed"
-fi
-
-# Ensure supervisor socket directory exists and is writable (in case /var/run is tmpfs)
-mkdir -p /var/run
-chmod 755 /var/run
-
-# Start supervisor
-echo "Starting all services..."
-# Use our config file that includes socket configuration
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
-EOF
-
+COPY supervisord.conf /app/start.sh
 RUN chmod +x /app/start.sh
 
 # Expose ports
