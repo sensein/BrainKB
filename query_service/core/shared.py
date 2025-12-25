@@ -393,49 +393,26 @@ def named_graph_metadata(named_graph_url, description):
     )
     return named_graph_metadata
 
-# def taxonomy_postprocessing(items):
-#     # going through the query output and create dictionary with parents_id and lists of childs ids
-#     taxon_dict = {}
-#     for tax_id, el in items.items():
-#         if el['parent'] is None:
-#             par_id = "root"
-#             par_nm = "root"
-#         else:
-#             par_id = el['parent']
-#             par_nm = items[par_id]["name"]
-    
-#         if par_id not in taxon_dict:
-#             taxon_dict[par_id] = {"meta": {"name": par_nm}, "childrens_id": [tax_id]}
-#         else:
-#             taxon_dict[par_id]["childrens_id"].append(tax_id)
-
-
-#     # creating a simple function for one level of children for testing the figure:
-#     fig_dict = {"name": "root",  "nodeColor": "#ffffff",  "children": []}
-#     for child_id in taxon_dict["root"]['childrens_id']:
-#         fig_dict["children"].append({"name": taxon_dict[child_id]["meta"]["name"], "nodeColor": "#ebb3a7", "children": []})
-    
-#     return fig_dict
 def getting_childrens(items):
     # going through the query output and create dictionary with parents_id and lists of childs ids
     taxon_dict = {}
     for tax_id, el in items.items():
         if el['parent'] is None:
             par_id = "root"
-            par_nm, par_col = "root", '#ffffff'
+            par_name, par_color, par_accession_id, par_abbreviations, par_belongs_to_set = "root", '#ffffff', None, [], None    
         else:
             par_id = el['parent']
-            par_nm, par_col = items[par_id]["name"], items[par_id]["hex"]
-    
+            par_name, par_color, par_accession_id, par_abbreviations, par_belongs_to_set = items[par_id]["name"], items[par_id]["hex"], items[par_id]["accession_id"], items[par_id]["abbreviations"].values(), items[par_id]["belongs_to_set"]
+
         if par_id not in taxon_dict:
-            taxon_dict[par_id] = {"meta": {"name": par_nm, "color": par_col}, "childrens_id": [tax_id]}
+            taxon_dict[par_id] = {"meta": {"name": par_name, "color": par_color, "accession_id": par_accession_id, "abbreviations": list(par_abbreviations), "belongs_to_set": par_belongs_to_set}, "childrens_id": [tax_id]}
         else:
             taxon_dict[par_id]["childrens_id"].append(tax_id)
 
     # adding elements without children
     for tax_id, el in items.items():
         if tax_id not in taxon_dict:
-            taxon_dict[tax_id] = {"meta": {"name": items[tax_id]["name"],  "color": items[tax_id]["hex"]}, "childrens_id": []}
+            taxon_dict[tax_id] = {"meta": {"name": items[tax_id]["name"],  "color": items[tax_id]["hex"], "accession_id": items[tax_id]["accession_id"], "abbreviations": list(items[tax_id]["abbreviations"].values()), "belongs_to_set": items[tax_id]["belongs_to_set"]}, "childrens_id": []}
 
     return taxon_dict
 
@@ -454,12 +431,10 @@ def update_childrens(children_list, parent_id, taxon_children_dict):
             #print("child id", child_id)
             children_list_current = []
             update_childrens(children_list_current, child_id, taxon_children_dict)
-            children_list.append({"name": taxon_children_dict[child_id]["meta"]["name"], "nodeColor": taxon_children_dict[child_id]["meta"]["color"], "children": children_list_current})
+            children_list.append({"name": taxon_children_dict[child_id]["meta"]["name"], "nodeColor": taxon_children_dict[child_id]["meta"]["color"], "accession_id": taxon_children_dict[child_id]["meta"]["accession_id"], "abbreviations": taxon_children_dict[child_id]["meta"]["abbreviations"], "belongs_to_set": taxon_children_dict[child_id]["meta"]["belongs_to_set"], "children": children_list_current})
         return
     else:
         return
-
-
 def taxonomy_postprocessing(items):
     taxon_children = getting_childrens(items)
 
