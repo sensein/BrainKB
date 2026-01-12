@@ -54,11 +54,6 @@ Once started, services are accessible at:
 - **Oxigraph SPARQL**: `http://localhost:7878/` (password protected) graph database
 - **pgAdmin**: `http://localhost:5051/`
 
-### Troubleshooting
-
-If you encounter Docker mount errors or issues with file sharing, please refer to the [Troubleshooting section in LOCAL_DEPLOYMENT.md](LOCAL_DEPLOYMENT.md#troubleshooting).
-
-
 
 ## Documentation
 Please refer to the BrainKB documentation below for additional information regarding BrainKB, its rationale, deployment instructions, and lessons learned.
