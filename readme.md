@@ -52,7 +52,7 @@ Once started, services are accessible at:
 - **Oxigraph SPARQL**: `http://localhost:7878/` (password protected) graph database
 - **pgAdmin**: `http://localhost:5051/`
 
-**Please note:** for the Query Service and ML Service, you won’t see anything at `http://localhost:<port>`. To verify that the services are running, open `http://localhost:<port>/docs` instead.
+**Please note:** for the Query Service and ML Service, you won’t see anything at their base URLs. To verify they are running, open their API docs at `http://localhost:8010/docs` and `http://localhost:8007/docs` respectively.
 
 ### Troubleshooting
 
