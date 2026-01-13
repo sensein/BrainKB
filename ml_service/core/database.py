@@ -20,7 +20,7 @@ import logging
 import asyncpg
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 
 from core.configuration import load_environment
 
@@ -66,16 +66,24 @@ async def init_db_pool():
         num_workers = int(os.getenv("WEB_CONCURRENCY", "1" if env_state == "development" else "4"))
         
         # Calculate per-worker sizes to avoid exceeding PostgreSQL limits
-        # Increased pool size to handle concurrent JWT token requests and other operations
-        # Target: ~90 total connections across all workers (leaves room for other services)
+        # Increased pool size to handle high concurrent JWT token requests
+        # After optimization: each token request uses 1 connection (was 2)
+        # Target: support 100+ concurrent requests safely
         if env_state == "development":
             min_size = 0  # Lazy init - no connections at startup
             max_size = 10
         else:
             min_size = 2  # Keep a few connections ready for fast JWT validation
-            # With 6 workers: 15 per worker = 90 total (safe, PostgreSQL default max is 100)
-            # Increased from 8 to 15 to handle bursts of concurrent requests
-            max_size = max(10, min(15, 90 // num_workers))
+            # Calculate pool size to support high concurrency
+            # Target: 100+ concurrent requests across all workers
+            # Formula: ensure at least 20-30 connections per worker, but cap at reasonable limit
+            # Allow environment override via DB_POOL_MAX_SIZE
+            if os.getenv("DB_POOL_MAX_SIZE"):
+                max_size = int(os.getenv("DB_POOL_MAX_SIZE"))
+            else:
+                # Default: 25 per worker (supports 100 concurrent with 4 workers, 150 with 6)
+                # PostgreSQL default max_connections is usually 100, but can be increased
+                max_size = 25
         
         print(f"[DB POOL INIT] Workers: {num_workers}, min={min_size}, max={max_size} per worker")
         print(f"[DB POOL INIT] Total potential: {max_size * num_workers} connections")
@@ -280,6 +288,13 @@ async def insert_data(fullname: str, email: str, password: str, conn: Optional[a
             # Manage our own connection
             async with get_db_connection() as connection:
                 return await _insert_logic(connection)
+    except asyncpg.exceptions.UniqueViolationError as e:
+        # Handle unique constraint violations (e.g., duplicate email) atomically
+        logger.warning(f"Registration attempt with duplicate email {email}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A user with that email already exists"
+        )
     except Exception as e:
         logger.error(f"Error inserting data for user {email}: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -331,10 +346,12 @@ async def select_scope_id(conn: Optional[asyncpg.Connection] = None) -> Optional
         raise HTTPException(status_code=400, detail=str(e))
 
 
-async def get_scopes_by_user(user_id: int):
+async def get_scopes_by_user(user_id: int, conn: Optional[asyncpg.Connection] = None):
     """
     Get all scope names assigned to a user.
     Returns a list of scope names.
+    If conn is provided, uses that connection (caller manages it).
+    Otherwise, manages its own connection.
     """
     query = f"""
     SELECT s.name
@@ -344,11 +361,19 @@ async def get_scopes_by_user(user_id: int):
     """
 
     try:
-        async with get_db_connection() as conn:
+        if conn is not None:
+            # Use provided connection
             results = await conn.fetch(query, user_id)
             assigned_scopes_to_user = [result["name"] for result in results]
             logger.debug(f"Scopes for user {user_id}: {assigned_scopes_to_user}")
             return assigned_scopes_to_user
+        else:
+            # Manage our own connection
+            async with get_db_connection() as connection:
+                results = await connection.fetch(query, user_id)
+                assigned_scopes_to_user = [result["name"] for result in results]
+                logger.debug(f"Scopes for user {user_id}: {assigned_scopes_to_user}")
+                return assigned_scopes_to_user
     except Exception as e:
         logger.error(f"Error getting scopes for user {user_id}: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
