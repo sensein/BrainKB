@@ -99,10 +99,23 @@ async def startup_event():
                             end_time DOUBLE PRECISION,
                             endpoint TEXT NOT NULL,
                             graph TEXT NOT NULL,
-                            job_dir TEXT NOT NULL
+                            job_dir TEXT NOT NULL,
+                            current_file TEXT,
+                            current_stage TEXT,
+                            status_message TEXT
                         )
                         """
                     )
+                    # Add new columns if they don't exist (for existing databases)
+                    # These columns are used for live status update and to track the job status for recovery purpose.
+                    try:
+                        await conn.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS current_file TEXT")
+                        await conn.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS current_stage TEXT")
+                        await conn.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS status_message TEXT")
+                        await conn.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS unrecoverable BOOLEAN DEFAULT FALSE")
+                        await conn.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS unrecoverable_reason TEXT")
+                    except Exception:
+                        pass  # Columns may already exist
                     await conn.execute(
                         """
                         CREATE TABLE IF NOT EXISTS job_results (
@@ -119,6 +132,26 @@ async def startup_event():
                         )
                         """
                     )
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS job_processing_log (
+                            id SERIAL PRIMARY KEY,
+                            job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                            file_name TEXT,
+                            stage TEXT NOT NULL,
+                            status_message TEXT,
+                            timestamp DOUBLE PRECISION NOT NULL,
+                            file_index INTEGER,
+                            total_files INTEGER
+                        )
+                        """
+                    )
+                    # Create index for faster queries
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_job_processing_log_job_id ON job_processing_log(job_id)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_job_processing_log_timestamp ON job_processing_log(timestamp)")
+                    except Exception:
+                        pass  # Indexes may already exist
                     logger.info("Job tracking tables initialized")
                     break  # Success, exit retry loop
                 finally:
@@ -158,6 +191,21 @@ async def startup_event():
             logger.warning("Metadata graph initialization failed, but continuing...")
     except Exception as e:
         logger.warning(f"Failed to initialize metadata graph: {str(e)}. Continuing anyway...")
+    
+    # Recover stuck jobs (jobs that were running when server restarted or crashed)
+    # Use shorter threshold on startup to catch jobs from recent crashes
+    logger.info("Recovering stuck jobs from previous server session...")
+    try:
+        from core.routers.insert import recover_stuck_jobs
+        # On startup, recover jobs that are older than 5 minutes (likely from crash)
+        # This catches jobs that were running when server crashed/restarted
+        recovered_count = await recover_stuck_jobs(max_age_hours=24.0, min_age_minutes=5.0)
+        if recovered_count > 0:
+            logger.warning(f"Recovered {recovered_count} stuck job(s) from previous server session (likely from crash/restart)")
+        else:
+            logger.debug("No stuck jobs found from previous server session")
+    except Exception as e:
+        logger.warning(f"Failed to recover stuck jobs: {str(e)}. Continuing anyway...")
     
     logger.info("FastAPI startup completed successfully")
 
