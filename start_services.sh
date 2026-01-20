@@ -173,6 +173,57 @@ handle_ollama() {
             ;;
     esac
 }
+# Function to validate and prepare Oxigraph volume paths
+validate_oxigraph_volumes() {
+    # Check if OXIGRAPH_DATA_PATH is set (using bind mount instead of named volume)
+    if [ -n "${OXIGRAPH_DATA_PATH}" ]; then
+        # Check if path exists
+        if [ ! -d "${OXIGRAPH_DATA_PATH}" ]; then
+            echo "WARNING: OXIGRAPH_DATA_PATH=${OXIGRAPH_DATA_PATH} does not exist"
+            echo "Creating directory: ${OXIGRAPH_DATA_PATH}"
+            mkdir -p "${OXIGRAPH_DATA_PATH}"
+            if [ $? -ne 0 ]; then
+                echo "ERROR: Failed to create ${OXIGRAPH_DATA_PATH}"
+                echo "Please create the directory manually with appropriate permissions"
+                return 1
+            fi
+        fi
+        
+        # Check if path is writable (basic check)
+        if [ ! -w "${OXIGRAPH_DATA_PATH}" ]; then
+            echo "WARNING: ${OXIGRAPH_DATA_PATH} is not writable"
+            echo "Setting permissions to 755 (adjust if needed for your use case)"
+            chmod 755 "${OXIGRAPH_DATA_PATH}" 2>/dev/null || {
+                echo "ERROR: Cannot set permissions on ${OXIGRAPH_DATA_PATH}"
+                echo "Please fix permissions manually: chmod 755 ${OXIGRAPH_DATA_PATH}"
+                return 1
+            }
+        fi
+        
+        # Check if path is empty (might indicate data loss)
+        if [ -z "$(ls -A ${OXIGRAPH_DATA_PATH} 2>/dev/null)" ]; then
+            echo "INFO: ${OXIGRAPH_DATA_PATH} is empty (this is normal for first-time setup)"
+        else
+            echo "INFO: Found existing data in ${OXIGRAPH_DATA_PATH}"
+        fi
+    else
+        echo "INFO: Using Docker named volume 'oxigraph_data' for Oxigraph data"
+    fi
+    
+    # Check if OXIGRAPH_TMP_PATH is set
+    if [ -n "${OXIGRAPH_TMP_PATH}" ]; then
+        if [ ! -d "${OXIGRAPH_TMP_PATH}" ]; then
+            echo "Creating Oxigraph temp directory: ${OXIGRAPH_TMP_PATH}"
+            mkdir -p "${OXIGRAPH_TMP_PATH}"
+            chmod 1777 "${OXIGRAPH_TMP_PATH}" 2>/dev/null || {
+                echo "WARNING: Cannot set permissions on ${OXIGRAPH_TMP_PATH}"
+            }
+        fi
+    else
+        echo "INFO: Using Docker named volume 'oxigraph_tmp' for Oxigraph temp files"
+    fi
+}
+
 if ! docker network inspect brainkb-network >/dev/null 2>&1; then
     echo "Creating docker network external - brainkb-network"
     docker network create brainkb-network
@@ -402,6 +453,22 @@ if [ -n "$SUPERVISOR_NAME" ]; then
     exit $?
 fi
 
+# Check if user is trying to remove volumes (dangerous operation)
+if [[ "$*" =~ "-v" ]] || [[ "$*" =~ "--volumes" ]]; then
+    echo "WARNING: You are about to remove volumes with -v or --volumes flag!"
+    echo "   This will DELETE all Oxigraph data, PostgreSQL data, and pgAdmin data!"
+    echo ""
+    echo "   If you want to keep data, use: ./start_services.sh down"
+    echo "   If you really want to remove volumes, use: docker-compose -f docker-compose.unified.yml down -v"
+    echo ""
+    read -p "   Are you sure you want to continue? (yes/no): " confirm
+    if [ "$confirm" != "yes" ]; then
+        echo "   Aborted. Volumes were NOT removed."
+        exit 0
+    fi
+    echo "   Proceeding with volume removal..."
+fi
+
 # Check if first argument looks like a service name (not a docker-compose command)
 if [[ ! " $DOCKER_COMPOSE_COMMANDS " =~ " $1 " ]] && [[ "$1" != "-"* ]]; then
     # First argument is likely a service name
@@ -417,8 +484,9 @@ else
     # First argument is a docker-compose command
     COMMAND_ARGS=("$@")
     
-    # Setup Ollama before starting services (only for up/start commands)
+    # Setup Ollama and validate volumes before starting services (only for up/start commands)
     if [[ "$1" == "up" ]] || [[ "$1" == "start" ]]; then
+        validate_oxigraph_volumes
         setup_ollama
     fi
 fi
