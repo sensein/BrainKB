@@ -39,6 +39,7 @@ The goals of this work are to:
 
 3. **Integrate and align with existing cross-project efforts**, including BICAN, BBQS, and Connects. The intent is not to duplicate existing work, but to reuse, connect, and extend shared data, infrastructure, and capabilities across these projects where appropriate.
 
+**Estimated deadline for completion: June, 30 2026.**
 ## Requirements
 
 
