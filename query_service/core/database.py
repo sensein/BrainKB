@@ -21,40 +21,19 @@ import logging
 import asyncpg
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional, Dict, Any, List
-from fastapi import HTTPException
-import sys
+from fastapi import HTTPException, status
+import time
 from core.configuration import load_environment
 
 logger = logging.getLogger(__name__)
 
-# Load environment and validate database settings
-def get_db_settings():
-    """Get database settings with validation and defaults."""
-    env = load_environment()
-    
-    # Validate host - cannot be None or empty
-    host = env.get("JWT_POSTGRES_DATABASE_HOST_URL")
-    if not host or host.strip() == "":
-        logger.warning("JWT_POSTGRES_DATABASE_HOST_URL is not set, defaulting to 'postgres'")
-        host = "postgres"  # Default Docker service name
-    
-    # Validate port - convert to int, default to 5432
-    port = env.get("JWT_POSTGRES_DATABASE_PORT")
-    try:
-        port = int(port) if port else 5432
-    except (ValueError, TypeError):
-        logger.warning(f"Invalid JWT_POSTGRES_DATABASE_PORT '{port}', defaulting to 5432")
-        port = 5432
-    
-    return {
-        "user": env.get("JWT_POSTGRES_DATABASE_USER") or "postgres",
-        "password": env.get("JWT_POSTGRES_DATABASE_PASSWORD") or "",
-        "database": env.get("JWT_POSTGRES_DATABASE_NAME") or "brainkb",
-        "host": host,
-        "port": port,
-    }
-
-DB_SETTINGS = get_db_settings()
+DB_SETTINGS = {
+    "user": load_environment()["JWT_POSTGRES_DATABASE_USER"],
+    "password": load_environment()["JWT_POSTGRES_DATABASE_PASSWORD"],
+    "database": load_environment()["JWT_POSTGRES_DATABASE_NAME"],
+    "host": load_environment()["JWT_POSTGRES_DATABASE_HOST_URL"],
+    "port": load_environment()["JWT_POSTGRES_DATABASE_PORT"],
+}
 
 table_name_user = load_environment()["JWT_POSTGRES_TABLE_USER"]
 table_name_scope = load_environment()["JWT_POSTGRES_TABLE_SCOPE"]
@@ -69,40 +48,46 @@ async def init_db_pool():
     global pool
     
     # CRITICAL: Print to track pool instances
-    sys.stdout.write("=" * 80)
-    sys.stdout.write(f"[DB POOL INIT] Process ID: {os.getpid()}")
-    sys.stdout.write(f"[DB POOL INIT] Pool instance before: {id(pool) if pool is not None else 'None'}")
+    print("=" * 80)
+    print(f"[DB POOL INIT] Process ID: {os.getpid()}")
+    print(f"[DB POOL INIT] Pool instance before: {id(pool) if pool is not None else 'None'}")
     
     if pool is not None:
-        sys.stdout.write(f"[DB POOL INIT] WARNING: Pool already exists! Instance ID: {id(pool)}")
-        sys.stdout.write("=" * 80)
+        print(f"[DB POOL INIT] WARNING: Pool already exists! Instance ID: {id(pool)}")
+        print("=" * 80)
         return pool
     
-    sys.stdout.write(f"[DB POOL INIT] Creating NEW pool instance...")
+    print(f"[DB POOL INIT] Creating NEW pool instance...")
     
     try:
         env_state = load_environment().get("ENV_STATE", "production").lower()
         
         # CRITICAL FIX: Account for multiple workers
         # Gunicorn workers: each creates its own pool
-        num_workers = int(os.getenv("WEB_CONCURRENCY", "1" if env_state == "dev" else "6"))
+        num_workers = int(os.getenv("WEB_CONCURRENCY", "1" if env_state == "development" else "4"))
         
         # Calculate per-worker sizes to avoid exceeding PostgreSQL limits
-        # Increased pool size to handle concurrent ingestion + JWT validation
-        # Target: ~90 total connections across all workers (leaves room for other services)
-        if env_state == "dev":
+        # Increased pool size to handle high concurrent JWT token requests
+        # After optimization: each token request uses 1 connection (was 2)
+        # Target: support 100+ concurrent requests safely
+        if env_state == "development":
             min_size = 0  # Lazy init - no connections at startup
-            max_size = 10  # Increased from 5 to handle concurrent operations
+            max_size = 10
         else:
             min_size = 2  # Keep a few connections ready for fast JWT validation
-            # With 6 workers: 15 per worker = 90 total (safe, PostgreSQL default max is 100)
-            max_size = max(10, min(15, 90 // num_workers))
+            # Calculate pool size to support high concurrency
+            # Target: 100+ concurrent requests across all workers
+            # Formula: ensure at least 20-30 connections per worker, but cap at reasonable limit
+            # Allow environment override via DB_POOL_MAX_SIZE
+            if os.getenv("DB_POOL_MAX_SIZE"):
+                max_size = int(os.getenv("DB_POOL_MAX_SIZE"))
+            else:
+                # Default: 25 per worker (supports 100 concurrent with 4 workers, 150 with 6)
+                # PostgreSQL default max_connections is usually 100, but can be increased
+                max_size = 25
         
-        sys.stdout.write(f"[DB POOL INIT] Workers: {num_workers}, min={min_size}, max={max_size} per worker")
-        sys.stdout.write(f"[DB POOL INIT] Total potential: {max_size * num_workers} connections")
-        
-        # Log connection details (without password)
-        sys.stdout.write(f"[DB POOL INIT] Connecting to: {DB_SETTINGS['host']}:{DB_SETTINGS['port']}/{DB_SETTINGS['database']} as {DB_SETTINGS['user']}")
+        print(f"[DB POOL INIT] Workers: {num_workers}, min={min_size}, max={max_size} per worker")
+        print(f"[DB POOL INIT] Total potential: {max_size * num_workers} connections")
 
         pool = await asyncpg.create_pool(
             min_size=min_size,
@@ -111,13 +96,13 @@ async def init_db_pool():
             command_timeout=60,
             **DB_SETTINGS
         )
-        sys.stdout.write(f"[DB POOL INIT] Pool created! Instance ID: {id(pool)}")
-        sys.stdout.write("=" * 80)
+        print(f"[DB POOL INIT] Pool created! Instance ID: {id(pool)}")
+        print("=" * 80)
         logger.info(f"Database connection pool initialized (workers={num_workers}, min={min_size}, max={max_size} per worker)")
         return pool
     except Exception as e:
-        sys.stdout.write(f"[DB POOL INIT] ERROR: {str(e)}")
-        sys.stdout.write("=" * 80)
+        print(f"[DB POOL INIT] ERROR: {str(e)}")
+        print("=" * 80)
         logger.error(f"Failed to initialize database connection pool: {str(e)}")
         raise
 
@@ -126,7 +111,7 @@ async def get_db_pool():
     import os
     global pool
     
-    sys.stdout.write(f"[GET DB POOL] Process ID: {os.getpid()}, Pool: {id(pool) if pool is not None else 'None'}")
+    print(f"[GET DB POOL] Process ID: {os.getpid()}, Pool: {id(pool) if pool is not None else 'None'}")
     
     if pool is None:
         pool = await init_db_pool()
@@ -150,15 +135,23 @@ async def get_db_connection():
     import asyncio
     pool = await get_db_pool()
     
+    # Get pool status before acquiring
+    pool_size = pool.get_size()
+    idle_size = pool.get_idle_size()
+    in_use = pool_size - idle_size
+    
+    print(f"[CONN ACQUIRE] Process {os.getpid()}: Acquiring connection... (pool: size={pool_size}, idle={idle_size}, in_use={in_use})")
+    
     # Add timeout to prevent indefinite waiting
-    # Reduced timeout for faster failure when pool is exhausted
+    # Increased timeout to 30s to handle temporary pool exhaustion during bursts
     try:
-        conn = await asyncio.wait_for(pool.acquire(), timeout=5.0)
+        conn = await asyncio.wait_for(pool.acquire(), timeout=30.0)
+        print(f"[CONN ACQUIRE] Connection acquired! (pool now: size={pool.get_size()}, idle={pool.get_idle_size()}, in_use={pool.get_size() - pool.get_idle_size()})")
     except asyncio.TimeoutError:
-        logger.error("Connection acquisition timed out after 5 seconds - pool may be exhausted")
+        logger.error("Connection acquisition timed out after 30 seconds")
         raise HTTPException(
             status_code=503,
-            detail="Database connection timeout. Please try again in a moment."
+            detail="Database connection timeout. Please try again."
         )
     except asyncpg.exceptions.TooManyConnectionsError as e:
         logger.error(f"Too many database connections: {str(e)}")
@@ -172,6 +165,9 @@ async def get_db_connection():
     finally:
         # Always release connection back to pool (not closed, just returned to pool)
         await pool.release(conn)
+        pool_size_after = pool.get_size()
+        idle_size_after = pool.get_idle_size()
+        print(f"[CONN RELEASE] Connection released back to pool! (pool now: size={pool_size_after}, idle={idle_size_after}, in_use={pool_size_after - idle_size_after})")
 
 # FastAPI dependency for automatic connection management in routes
 async def get_db() -> AsyncGenerator[asyncpg.Connection, None]:
@@ -293,6 +289,13 @@ async def insert_data(fullname: str, email: str, password: str, conn: Optional[a
             # Manage our own connection
             async with get_db_connection() as connection:
                 return await _insert_logic(connection)
+    except asyncpg.exceptions.UniqueViolationError as e:
+        # Handle unique constraint violations (e.g., duplicate email) atomically
+        logger.warning(f"Registration attempt with duplicate email {email}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A user with that email already exists"
+        )
     except Exception as e:
         logger.error(f"Error inserting data for user {email}: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -344,10 +347,12 @@ async def select_scope_id(conn: Optional[asyncpg.Connection] = None) -> Optional
         raise HTTPException(status_code=400, detail=str(e))
 
 
-async def get_scopes_by_user(user_id: int):
+async def get_scopes_by_user(user_id: int, conn: Optional[asyncpg.Connection] = None):
     """
     Get all scope names assigned to a user.
     Returns a list of scope names.
+    If conn is provided, uses that connection (caller manages it).
+    Otherwise, manages its own connection.
     """
     query = f"""
     SELECT s.name
@@ -357,11 +362,19 @@ async def get_scopes_by_user(user_id: int):
     """
 
     try:
-        async with get_db_connection() as conn:
+        if conn is not None:
+            # Use provided connection
             results = await conn.fetch(query, user_id)
             assigned_scopes_to_user = [result["name"] for result in results]
             logger.debug(f"Scopes for user {user_id}: {assigned_scopes_to_user}")
             return assigned_scopes_to_user
+        else:
+            # Manage our own connection
+            async with get_db_connection() as connection:
+                results = await connection.fetch(query, user_id)
+                assigned_scopes_to_user = [result["name"] for result in results]
+                logger.debug(f"Scopes for user {user_id}: {assigned_scopes_to_user}")
+                return assigned_scopes_to_user
     except Exception as e:
         logger.error(f"Error getting scopes for user {user_id}: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -472,6 +485,40 @@ async def update_job_status(
                 status,
                 job_id,
             )
+
+
+async def update_job_processing_state(
+    job_id: str,
+    current_file: Optional[str] = None,
+    current_stage: Optional[str] = None,
+    status_message: Optional[str] = None,
+) -> None:
+    """Update current processing state for a job (for UI progress tracking)."""
+    async with get_db_connection() as conn:
+        # Build update query dynamically based on provided parameters
+        updates = []
+        params = []
+        param_index = 1
+        
+        if current_file is not None:
+            updates.append(f"current_file = ${param_index}")
+            params.append(current_file)
+            param_index += 1
+        
+        if current_stage is not None:
+            updates.append(f"current_stage = ${param_index}")
+            params.append(current_stage)
+            param_index += 1
+        
+        if status_message is not None:
+            updates.append(f"status_message = ${param_index}")
+            params.append(status_message)
+            param_index += 1
+        
+        if updates:
+            params.append(job_id)
+            query = f"UPDATE jobs SET {', '.join(updates)} WHERE job_id = ${param_index}"
+            await conn.execute(query, *params)
 
 
 async def get_job_details(job_id: str) -> Optional[Dict[str, Any]]:
@@ -682,7 +729,9 @@ async def get_job_by_id_and_user(job_id: str, user_id: str) -> Optional[Dict[str
         row = await conn.fetchrow(
             """
             SELECT job_id, user_id, status, total_files, processed_files,
-                   success_count, fail_count, endpoint, graph, start_time, end_time
+                   success_count, fail_count, endpoint, graph, start_time, end_time,
+                   current_file, current_stage, status_message,
+                   unrecoverable, unrecoverable_reason
             FROM jobs
             WHERE job_id = $1 AND user_id = $2
             """,
@@ -702,8 +751,67 @@ async def get_job_by_id_and_user(job_id: str, user_id: str) -> Optional[Dict[str
                 "graph": row["graph"],
                 "start_time": row["start_time"],
                 "end_time": row["end_time"],
+                "current_file": row.get("current_file"),
+                "current_stage": row.get("current_stage"),
+                "status_message": row.get("status_message"),
+                "unrecoverable": bool(row.get("unrecoverable")),
+                "unrecoverable_reason": row.get("unrecoverable_reason"),
             }
         return None
+
+
+async def insert_processing_log(
+    job_id: str,
+    stage: str,
+    status_message: str,
+    file_name: Optional[str] = None,
+    file_index: Optional[int] = None,
+    total_files: Optional[int] = None,
+) -> None:
+    """Insert a processing log entry to track job history."""
+    async with get_db_connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO job_processing_log
+            (job_id, file_name, stage, status_message, timestamp, file_index, total_files)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
+            job_id,
+            file_name,
+            stage,
+            status_message,
+            time.time(),
+            file_index,
+            total_files,
+        )
+
+
+async def get_processing_log(job_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    """Get processing log history for a job, ordered by timestamp (newest first)."""
+    async with get_db_connection() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT file_name, stage, status_message, timestamp, file_index, total_files
+            FROM job_processing_log
+            WHERE job_id = $1
+            ORDER BY timestamp DESC
+            LIMIT $2
+            """,
+            job_id,
+            limit,
+        )
+        logs = []
+        for r in rows:
+            logs.append({
+                "file_name": r["file_name"],
+                "stage": r["stage"],
+                "status_message": r["status_message"],
+                "timestamp": r["timestamp"],
+                "file_index": r["file_index"],
+                "total_files": r["total_files"],
+                "file_info": f"({r['file_index'] + 1}/{r['total_files']})" if r["file_index"] is not None and r["total_files"] else None,
+            })
+        return logs
 
 
 async def list_user_jobs(
@@ -754,7 +862,7 @@ async def list_user_jobs(
         jobs_sql = f"""
             SELECT job_id, status, total_files, processed_files,
                    success_count, fail_count, start_time, end_time,
-                   endpoint, graph
+                   endpoint, graph, unrecoverable, unrecoverable_reason
             FROM jobs
             WHERE {where_sql}
             ORDER BY COALESCE(start_time, 0) DESC, job_id DESC
@@ -763,19 +871,52 @@ async def list_user_jobs(
         params.extend([limit, offset])
         jobs_rows = await conn.fetch(jobs_sql, *params)
         
+        # Calculate elapsed time and recovery eligibility
+        current_time = time.time()
         jobs_list = []
         for r in jobs_rows:
+            start_time = r["start_time"]
+            end_time = r["end_time"]
+            elapsed_seconds = None
+            if start_time:
+                if end_time:
+                    elapsed_seconds = end_time - start_time
+                else:
+                    elapsed_seconds = current_time - start_time
+            
+            # Calculate progress
+            total = r["total_files"]
+            processed = r["processed_files"]
+            progress = (100.0 * processed / total) if total else 0.0
+            
+            # Determine if job can be recovered/retried
+            # - Error jobs can be retried (unless marked unrecoverable)
+            # - Running jobs older than 5 minutes can be recovered (unless marked unrecoverable)
+            # - Jobs marked as unrecoverable cannot be recovered
+            can_recover = False
+            if r.get("unrecoverable"):
+                can_recover = False  # Explicitly marked as unrecoverable
+            elif r["status"] == "error":
+                can_recover = True
+            elif r["status"] == "running" and elapsed_seconds and elapsed_seconds > 300:  # 5 minutes
+                can_recover = True
+            
             jobs_list.append({
                 "job_id": r["job_id"],
                 "status": r["status"],
                 "total_files": r["total_files"],
                 "processed_files": r["processed_files"],
+                "progress_percent": round(progress, 2),
                 "success_count": r["success_count"],
                 "fail_count": r["fail_count"],
                 "start_time": r["start_time"],
                 "end_time": r["end_time"],
+                "elapsed_seconds": round(elapsed_seconds, 2) if elapsed_seconds else None,
                 "endpoint": r["endpoint"],
                 "named_graph_iri": r["graph"],
+                "can_recover": can_recover,  # Indicates if retry/recover is available
+                "unrecoverable": bool(r.get("unrecoverable")),
+                "unrecoverable_reason": r.get("unrecoverable_reason"),
             })
         
         return {

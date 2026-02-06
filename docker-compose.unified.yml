@@ -14,6 +14,7 @@ services:
     networks:
       - brainkb-network
     restart: unless-stopped
+    command: postgres -c max_connections=200 -c shared_buffers=256MB
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${JWT_POSTGRES_DATABASE_USER:-postgres}"]
       interval: 10s
@@ -66,6 +67,8 @@ services:
     volumes:
       # Use named volume for local development, or custom path via OXIGRAPH_DATA_PATH
       # For production with shared storage, set OXIGRAPH_DATA_PATH=/fsx/brainkb-kg-repo in .env
+      # IMPORTANT: If using bind mount (OXIGRAPH_DATA_PATH set), ensure the path exists and has correct permissions
+      # The start_services.sh script will validate and create the path if needed
       - ${OXIGRAPH_DATA_PATH:-oxigraph_data}:/data
       - ${OXIGRAPH_TMP_PATH:-oxigraph_tmp}:/tmp
  

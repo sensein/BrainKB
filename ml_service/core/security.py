@@ -18,6 +18,7 @@
 
 import datetime
 import logging
+import asyncio
 from typing import Annotated, List, Optional, Dict
 
 from fastapi import Depends, HTTPException, status, WebSocket
@@ -56,12 +57,14 @@ def create_access_token(email: str, scopes: List[str]) -> str:
     return encoded_jwt
 
 
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+async def get_password_hash(password: str) -> str:
+    """Hash password asynchronously to avoid blocking the event loop."""
+    return await asyncio.to_thread(pwd_context.hash, password)
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+async def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify password asynchronously to avoid blocking the event loop."""
+    return await asyncio.to_thread(pwd_context.verify, plain_password, hashed_password)
 
 
 async def authenticate_user(email, password, conn):
@@ -69,7 +72,7 @@ async def authenticate_user(email, password, conn):
     user = await get_user(conn=conn, email=email)
     if not user:
         raise credentials_exception
-    if not verify_password(password, user["password"]):
+    if not await verify_password(password, user["password"]):
         raise credentials_exception
     return user
 
