@@ -13,7 +13,7 @@ The figures (from @tekrajchhetri and @Sulstice) below illustrate components of t
 ![](img/poc-stats-brainkb.png)
 ![](img/bbqs-projects.png)
 
-By bringing together concepts discussed across channels, PoC artifacts, and related efforts, this document aims to align define scope, tasks and connect parallel work streams. 
+By bringing together concepts discussed across channels, PoC artifacts, and related efforts, this document aims to align on scope, define tasks, and connect parallel work streams. 
 
 ## Use Cases
 
