@@ -72,7 +72,7 @@ The following requirements guide the design and implementation of the system.
 7. **Administrative Data Ingestion and Management**  
    The system **must provide an administrative interface** that allows authorized users to configure and trigger data ingestion from external sources. This interface should support updating, refreshing, and managing source data so that the knowledge graph can be **automatically constructed and updated** based on incoming data.
 
-**Important:** In BrainKB we are working towards the direction of model-driven UI, we should follow that approach so that UI is generalizable and can be re-used across projects.
+> **Important:** In BrainKB we are working towards the direction of model-driven UI, we should follow that approach so that UI is generalizable and can be re-used across projects.
 ### Backend and Platform Requirements
 
 8. **Service-Oriented Backend (Microservices)**  
