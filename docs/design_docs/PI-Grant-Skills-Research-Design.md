@@ -40,21 +40,26 @@ The goals of this work are to:
 3. **Integrate and align with existing cross-project efforts**, including BICAN, BBQS, and Connects. The intent is not to duplicate existing work, but to reuse, connect, and extend shared data, infrastructure, and capabilities across these projects where appropriate.
 
 **Estimated deadline for completion: June, 30 2026.**
+
 ## Requirements
 
 
 The following requirements guide the design and implementation of the system.
 
-### Knowledge Graph Requirements
 
- 
-1**Defined Ontology and Schema**  
-   A clear and extensible **ontology and schema must be defined** to model core entities and relationships, including projects, funding, principal investigators (PIs), publications, findings, skills, and research areas. The ontology should support reuse and alignment with existing vocabularies where applicable.
-
-2**First-Class Provenance**  
-   **Provenance must be treated as a first-class concern** across the knowledge graph. The system should capture and represent provenance information for entities and relationships using the **W3C PROV-O (PROV ontology)** to ensure traceability of data sources, extraction processes, and temporal evolution, if any.
+1. The Knowledge Graphs (KGs) must be backed by a clearly defined, and machine-readable ontology or schema that formally specifies core entities, relationships, and constraints, ensuring interoperability, validation, and long-term maintainability.
+2. Provenance should be treated as a first-class citizen and **W3C PROV-O (PROV ontology)** should be reused.
+3. Grant data must be downloaded, transformed into KGs and stored locally, and all API queries and operations must use this locally stored enriched KG as the primary data source.
+4. The system should provide capabilities to perform automated knowledge graph enrichment using AI agents, enabling extraction, linking, and augmentation of entities and relationships from external and unstructured sources, e.g., publications.
+4. The KGs are stored in graph database, such as Oxigraph.
+4. The API must support asynchronous execution for long-running and resource-intensive operations (e.g., KG ingestion and enrichment), enabling background processing with job tracking independent of client session state.
+5. The implementation must check for existing data (e.g., project records) before retrieving new information, ensuring deduplication and avoiding unnecessary re-fetching or duplication of data, e.g., grant and publication informations.
+6. The system must provide search features allowing one to search skills, projects PIs, and Co-PIs.
+6.  The user interface (UI) must support intuitive, CivicDB-style navigation, enabling users to start from any entity (e.g., a project) and seamlessly explore all directly linked and related information through interactive relationships.
 
 ---
+
+## Admin Data Flow
 
 ```mermaid
 ---
@@ -147,7 +152,7 @@ flowchart TB
     P2 --> KG
 ```
 
-### Data Flow
+### Sequence diagram
 
 The sequence diagram below provides a high-level overview of the end-to-end data flow and interactions among the system components for KG construction.
 
@@ -189,8 +194,7 @@ sequenceDiagram
 ```
 
 
-## API Endpoints
-
+## Implementation (API Endpoints)
 
 All the responses of API are in JSON format. The entities in API context denote things such as people and projects. 
 
@@ -204,7 +208,6 @@ Health/root endpoint.
 
 ---
 
- 
 
 ### Unified Search
 
@@ -910,59 +913,3 @@ Bulk enrichment for all authors, i.e., enrich with more information like skills 
 - `422` — Validation error
 
 ---
-
-
-
-### User Interface Requirements
-
-4. **Search and Discovery**  
-   The user interface **must support intuitive keyword-based search and discovery** across core entities (e.g., projects, PIs, grants, publications, skills, and research areas), with results grounded in the underlying knowledge graph. The search experience should prioritize simplicity and clarity, similar to the interaction patterns demonstrated in the reference screenshots (e.g., CivicDB-style exploration).
-
-5. **Easy and Intuitive Navigation**  
-   The UI **must enable easy and intuitive navigation across related entities**, allowing users to move seamlessly between projects, funding, PIs, skills, publications, and findings through clearly visible relationships, as demonstrated in the existing proof-of-concept views.
-
-6. **User Feedback and Correction**  
-   The UI **should allow users to provide feedback or suggest corrections** on entities and relationships (e.g., incorrect associations, missing information), supporting iterative improvement of the knowledge graph over time.
-
-7. **Administrative Data Ingestion and Management**  
-   The system **must provide an administrative interface** that allows authorized users to configure and trigger data ingestion from external sources. This interface should support updating, refreshing, and managing source data so that the knowledge graph can be **automatically constructed and updated** based on incoming data.
-
-**Important:** In BrainKB we are working towards the direction of model-driven UI, we should follow that approach so that UI is generalizable and can be re-used across projects.
-
-### Backend and Platform Requirements
-
-8. **Service-Oriented Backend (Microservices)**  
-   The backend **should be composed of services** that support the core operations required by the UI and knowledge graph lifecycle, including ingestion, extraction/enrichment, indexing/search, graph query, and export/import. Services should expose stable APIs to enable UI evolution without tightly coupling to implementation details.
-
-9. **Background Jobs for Long-Running Operations**  
-   The system **must support background/asynchronous execution** for time-consuming operations such as bulk ingestion, document processing, entity extraction, graph enrichment, and large exports. Job status, progress, and errors should be trackable (at minimum for admin users).
-
-10. **Import and Export of Knowledge Graphs**  
-   The system **must support importing and exporting knowledge graphs** to enable reproducibility, portability, backups, and integration with other systems. Export should support RDF-native formats (e.g., Turtle / RDF/XML / N-Triples) and preserve provenance information.
-
-11. **Scalability and Reliability for Large Data**  
-   The backend **should be designed to handle large and growing datasets**, including large numbers of projects, publications, and extracted findings. Key operations (ingestion, search, and graph navigation queries) should remain reliable under increasing load through batching, pagination, caching, and appropriate storage/indexing strategies.
-
-## Tasks
-
-The work will be organized into the following major task areas:
-
-### 1. User Interface Design and Development
-- Design and iterate on UI flows for search, discovery, and easy navigation across the knowledge graph, informed by existing PoC screenshots and user feedback.
-- Implement user-facing views for exploring projects, funding, PIs, skills, publications, and findings.
-- Support mechanisms for users to provide feedback or suggest corrections to entities and relationships.
-- Design and implement administrative UI components for managing data ingestion and monitoring background jobs.
-
-### 2. Ontology/Schema Modeling
-- Define and document the RDF-based ontology and schema for core entities and relationships (e.g., projects, grants, PIs, publications, findings, skills, research areas).
-- Develop and maintain **LinkML schemas** to formally specify the data model, constraints, and relationships, and to support validation, documentation, and code generation.
-- Align and reuse existing vocabularies and ontologies where applicable, mapping LinkML models to RDF representations.
-- Model provenance as a first-class concern using **PROV-O**, covering data sources, extraction processes, and updates.
-- Iterate on the schema and LinkML models based on data availability, UI needs, and cross-project integration requirements.
-
-### 3. Backend Services and Knowledge Graph Construction
-- Design and implement backend microservices to support ingestion, enrichment, search, and graph query operations.
-- Implement automated pipelines for extracting publications, findings, skills, and research areas from external sources.
-- Support long-running and large-scale operations using background jobs, including ingestion, and enrichment.
-- Enable import and export of knowledge graphs in RDF-native formats, preserving provenance and metadata.
-- Integrate backend services with the UI and administrative interfaces.
