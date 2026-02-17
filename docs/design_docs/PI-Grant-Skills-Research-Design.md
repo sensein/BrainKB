@@ -916,4 +916,6 @@ Bulk enrichment for all authors, i.e., enrich with more information like skills 
 
 ## Implementation (UI)
 
-The UI should be implemented using `Next.js`, emphasizing component reusability and modular design. It should adhere to the existing `model-driven` approach to promote reusability. 
+
+The UI should be implemented using `Next.js`, emphasizing component reusability and modular design. It should adhere to the existing `model-driven` approach to promote reusability.
+ 
