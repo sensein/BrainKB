@@ -56,6 +56,97 @@ The following requirements guide the design and implementation of the system.
 
 ---
 
+```mermaid
+---
+config:
+  theme: mc
+---
+flowchart TB
+ subgraph UI["Admin UI"]
+        B{"Choose operation"}
+        A["Admin UI"]
+        C["Ingestion Form"]
+        C1["Enter Years (comma-separated)\n(e.g., 2022, 2023, 2025) or all data"]
+        C2["Select Data Types\n• Grants info\n• PIs/Authors\n• Orgs\n• Projects\n• Publications (optional)"]
+        C3["Select Sources / Connectors\n(e.g., internal grants DB, NIH RePORTER, Crossref)"]
+        C4["Set Options\n• Dry run\n• Overwrite vs upsert\n• Pagination/batch size"]
+        D["Submit"]
+        E["Enrichment Form"]
+        E1["Select scope\n• By Year(s)\n• By Project\n• By PI/Author\n• By Grant ID\n• By Changed-since date"]
+        E2["Select enrichment modules\n• Publication linking\n• Skill extraction\n• Research area tagging\n• Finding extraction\n• Entity resolution/dedup"]
+        E3["Configure models/rules\n• Model version\n• Thresholds\n• Provenance level"]
+        S["Scheduling UI"]
+        S1["Choose cadence\n• Daily / Weekly / Monthly / Quarterly"]
+        S2["Choose years rule\n• Current year\n• Last N years\n• Explicit list"]
+        S4["Set notifications\n• Email/Slack on success/failure"]
+        S5["Save schedule"]
+        X{"Import or Export?"}
+        X1["Export Form\n• Select dataset/scope\n• Choose RDF format\n(TTL / RDFXML / N-Triples)\n• Include provenance?"]
+        X2["Import Form\n• Upload RDF file(s)\n• Validate (LinkML)\n• Merge strategy\n(upsert / replace)\n• Preserve provenance?"]
+        UI1["Job created + Job ID\n(safe to close browser)"]
+        I["Return Job ID to UI"]
+        M1["Live status\nqueued/running/succeeded/failed"]
+        M["Admin Monitoring Dashboard"]
+        M2["Progress + logs + errors"]
+        M3["Retry / cancel (admin-only)"]
+  end
+ subgraph BE["Backend Services + Storage"]
+        F["Backend API Gateway"]
+        G["Job Orchestrator / Queue"]
+        H["Persist Job Record\n(status, progress, logs)"]
+        J["Scheduler Service"]
+        W1["Ingestion Workers"]
+        W2["Enrichment Workers"]
+        P1["Fetch raw data by year(s)\n(connectors)"]
+        P2["Process raw information and construct KG"]
+        KG[("RDF Triplestore / KG Store")]
+        Q1["Read target entities\n(from KG)"]
+        Q2["Extract/Link\n(project information, publications, skills, areas, findings)"]
+        Q3["Entity resolution + dedup\n(PIs/authors/orgs)"]
+        Q4["Update KGs with enriched knowledge"]
+        IDX["Search/Graph Indices\n(full-text + graph caches)"]
+        N["Notification Service"]
+        N1["Notify admin on completion/failure"]
+  end
+    A --> B
+    B -- Pull grants data --> C
+    C --> C1 & C2 & C3 & C4
+    C1 --> D
+    C2 --> D
+    C3 --> D
+    C4 --> D
+    B -- Run enrichment --> E
+    E --> E1 & E2 & E3
+    E1 --> D
+    E2 --> D
+    E3 --> D
+    B -- Schedule periodic pulls --> S
+    S --> S1 & S2 & S4 & S5
+    B -- Import / Export data --> X
+    X -- Export --> X1
+    X -- Import --> X2
+    X1 --> D
+    X2 --> D
+    I --> UI1
+    M --> M1 & M2 & M3
+    D --> F
+    F --> G
+    G --> H & W1 & W2
+    H --> I & M & N
+    S5 --> J
+    J --> G
+    W1 --> P1
+    P1 --> P2
+    W2 --> Q1
+    Q1 --> Q2
+    Q2 --> Q3
+    Q3 --> Q4
+    Q4 --> KG
+    KG --> IDX
+    N --> N1
+    P2 --> KG
+```
+
 ### User Interface Requirements
 
 4. **Search and Discovery**  
