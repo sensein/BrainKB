@@ -47,13 +47,11 @@ The following requirements guide the design and implementation of the system.
 
 ### Knowledge Graph Requirements
 
-1. **RDF-based Knowledge Graph**  
-   The knowledge graph **must be represented in RDF**, enabling interoperability, standard semantic modeling, and compatibility with existing semantic web tools and query languages (e.g., SPARQL).
-
-2. **Defined Ontology and Schema**  
+ 
+1**Defined Ontology and Schema**  
    A clear and extensible **ontology and schema must be defined** to model core entities and relationships, including projects, funding, principal investigators (PIs), publications, findings, skills, and research areas. The ontology should support reuse and alignment with existing vocabularies where applicable.
 
-3. **First-Class Provenance**  
+2**First-Class Provenance**  
    **Provenance must be treated as a first-class concern** across the knowledge graph. The system should capture and represent provenance information for entities and relationships using the **W3C PROV-O (PROV ontology)** to ensure traceability of data sources, extraction processes, and temporal evolution, if any.
 
 ---
@@ -73,6 +71,7 @@ The following requirements guide the design and implementation of the system.
    The system **must provide an administrative interface** that allows authorized users to configure and trigger data ingestion from external sources. This interface should support updating, refreshing, and managing source data so that the knowledge graph can be **automatically constructed and updated** based on incoming data.
 
 **Important:** In BrainKB we are working towards the direction of model-driven UI, we should follow that approach so that UI is generalizable and can be re-used across projects.
+
 ### Backend and Platform Requirements
 
 8. **Service-Oriented Backend (Microservices)**  
