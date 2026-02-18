@@ -449,7 +449,11 @@ def getting_childrens(items):
     for tax_id, el in items.items():
         if el['parent'] is None:
             par_id = "root"
-            par_name, par_color, par_accession_id, par_abbreviations, par_belongs_to_set = "root", '#ffffff', None, [], None    
+            par_name = "root"
+            par_color = '#ffffff'
+            par_accession_id = None
+            par_abbreviations = []
+            par_belongs_to_set = None
         else:
             par_id = el['parent']
             par_name = items[par_id]["name"]
