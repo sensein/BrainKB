@@ -482,7 +482,16 @@ def update_childrens(children_list, parent_id, taxon_children_dict):
             #print("child id", child_id)
             children_list_current = []
             update_childrens(children_list_current, child_id, taxon_children_dict)
-            children_list.append({"name": taxon_children_dict[child_id]["meta"]["name"], "nodeColor": taxon_children_dict[child_id]["meta"]["color"], "accession_id": taxon_children_dict[child_id]["meta"]["accession_id"], "abbreviations": taxon_children_dict[child_id]["meta"]["abbreviations"], "belongs_to_set": taxon_children_dict[child_id]["meta"]["belongs_to_set"], "children": children_list_current})
+            child_meta = taxon_children_dict[child_id]["meta"]
+            child_node = {
+                "name": child_meta["name"],
+                "nodeColor": child_meta["color"],
+                "accession_id": child_meta["accession_id"],
+                "abbreviations": child_meta["abbreviations"],
+                "belongs_to_set": child_meta["belongs_to_set"],
+                "children": children_list_current
+            }
+            children_list.append(child_node)
         return
     else:
         return
