@@ -452,7 +452,11 @@ def getting_childrens(items):
             par_name, par_color, par_accession_id, par_abbreviations, par_belongs_to_set = "root", '#ffffff', None, [], None    
         else:
             par_id = el['parent']
-            par_name, par_color, par_accession_id, par_abbreviations, par_belongs_to_set = items[par_id]["name"], items[par_id]["hex"], items[par_id]["accession_id"], items[par_id]["abbreviations"].values(), items[par_id]["belongs_to_set"]
+            par_name = items[par_id]["name"]
+            par_color = items[par_id]["hex"]
+            par_accession_id = items[par_id]["accession_id"]
+            par_abbreviations = items[par_id]["abbreviations"].values()
+            par_belongs_to_set = items[par_id]["belongs_to_set"]
 
         if par_id not in taxon_dict:
             taxon_dict[par_id] = {"meta": {"name": par_name, "color": par_color, "accession_id": par_accession_id, "abbreviations": list(par_abbreviations), "belongs_to_set": par_belongs_to_set}, "childrens_id": [tax_id]}
