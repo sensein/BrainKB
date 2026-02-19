@@ -1,5 +1,47 @@
 # Design Document for Project Grants and Research Findings Microservices
 
+### Sequence diagram
+
+The sequence diagram below provides a high-level overview of the end-to-end data flow and interactions among the system components for KG construction.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant API
+    participant KG as Knowledge Graph
+    participant Oxigraph
+    participant NIH as NIH API
+    participant SS as Semantic Scholar
+    participant LLM as OpenRouter LLM
+    
+    User->>Frontend: Search/View/Edit
+    Frontend->>API: HTTP Request
+    API->>KG: Query/Update
+    KG->>Oxigraph: Read/Write RDF Triples
+    Oxigraph-->>KG: Return Results
+    KG-->>API: Processed Data
+    API-->>Frontend: JSON Response
+    Frontend-->>User: Display Results
+    
+    Note over API,LLM: Data Ingestion Flow
+    API->>NIH: Fetch Projects
+    NIH-->>API: Project Data
+    API->>KG: Add Projects
+    KG->>LLM: Extract Skills/Research Areas
+    LLM-->>KG: Extracted Entities
+    KG->>Oxigraph: Store Triples
+    
+    Note over API,SS: Enrichment Flow
+    API->>SS: Fetch Publications
+    SS-->>API: Publication Data
+    API->>KG: Add Publications
+    KG->>LLM: Extract from Abstracts
+    LLM-->>KG: Skills/Research Areas
+    KG->>Oxigraph: Store with Provenance
+```
+
+
 ## Implementation (API Endpoints)
 
 All the responses of API are in JSON format. The entities in API context denote things such as people and projects. 
