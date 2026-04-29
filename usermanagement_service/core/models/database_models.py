@@ -319,7 +319,7 @@ class AvailableRole(Base):
 class AvailableCountry(Base):
     """Available countries for user profiles - Management table"""
     __tablename__ = "Web_available_country"
-    
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     code: Mapped[Optional[str]] = mapped_column(String(3))  # ISO 3166-1 alpha-3
@@ -328,7 +328,7 @@ class AvailableCountry(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Constraints and Indexes
     __table_args__ = (
         Index('idx_available_country_name', 'name'),
@@ -336,4 +336,148 @@ class AvailableCountry(Base):
         Index('idx_available_country_code_2', 'code_2'),
         Index('idx_available_country_region', 'region'),
         Index('idx_available_country_active', 'is_active'),
+    )
+
+
+class OAuthIdentity(Base):
+    """OAuth identity linking - one row per (provider, provider_user_id).
+    Unifies GitHub, ORCID, Globus logins and links them back to a UserProfile."""
+    __tablename__ = "Web_oauth_identity"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)  # 'github' | 'orcid' | 'globus'
+    provider_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    profile_id: Mapped[int] = mapped_column(Integer, ForeignKey("Web_user_profile.id", ondelete="CASCADE"), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(255))
+    # Tokens stored encrypted at rest (Fernet). Nullable because some providers won't return a refresh_token.
+    access_token_enc: Mapped[Optional[str]] = mapped_column(Text)
+    refresh_token_enc: Mapped[Optional[str]] = mapped_column(Text)
+    token_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    raw_profile: Mapped[Optional[dict]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    profile = relationship("UserProfile", backref="oauth_identities")
+
+    __table_args__ = (
+        UniqueConstraint('provider', 'provider_user_id', name='uq_oauth_provider_user'),
+        Index('idx_oauth_identity_provider', 'provider'),
+        Index('idx_oauth_identity_profile_id', 'profile_id'),
+        Index('idx_oauth_identity_email', 'email'),
+    )
+
+
+class OAuthState(Base):
+    """Short-lived OAuth state+PKCE verifier store, keyed by opaque state token.
+    Survives across horizontally-scaled instances (vs. in-memory dict)."""
+    __tablename__ = "Web_oauth_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    state: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    code_verifier: Mapped[Optional[str]] = mapped_column(String(256))
+    redirect_after_login: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index('idx_oauth_state_state', 'state'),
+        Index('idx_oauth_state_expires_at', 'expires_at'),
+    )
+
+
+class Permission(Base):
+    """Permission registry. A permission is a (resource, action) tuple, e.g. ('user', 'delete')."""
+    __tablename__ = "Web_permission"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    resource: Mapped[str] = mapped_column(String(100), nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('resource', 'action', name='uq_permission_resource_action'),
+        Index('idx_permission_name', 'name'),
+        Index('idx_permission_resource', 'resource'),
+    )
+
+
+class RolePermission(Base):
+    """Role <-> Permission many-to-many. role_name matches Web_available_role.name."""
+    __tablename__ = "Web_role_permission"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    role_id: Mapped[int] = mapped_column(Integer, ForeignKey("Web_available_role.id", ondelete="CASCADE"), nullable=False)
+    permission_id: Mapped[int] = mapped_column(Integer, ForeignKey("Web_permission.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    role = relationship("AvailableRole", backref="role_permissions")
+    permission = relationship("Permission", backref="role_permissions")
+
+    __table_args__ = (
+        UniqueConstraint('role_id', 'permission_id', name='uq_role_permission'),
+        Index('idx_role_permission_role', 'role_id'),
+        Index('idx_role_permission_permission', 'permission_id'),
+    )
+
+
+class PageAccess(Base):
+    """Page/route-level access control. One row per page_key (e.g. 'admin.users', 'curate.submit').
+    is_public=True → anyone (even unauthenticated) can access.
+    Otherwise: user must be either in an allowed role (PageAccessRole) or explicitly whitelisted (PageAccessUser)."""
+    __tablename__ = "Web_page_access"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    page_key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    allowed_roles = relationship("PageAccessRole", back_populates="page", cascade="all, delete-orphan")
+    allowed_users = relationship("PageAccessUser", back_populates="page", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index('idx_page_access_key', 'page_key'),
+        Index('idx_page_access_public', 'is_public'),
+    )
+
+
+class PageAccessRole(Base):
+    """Roles allowed on a page (role_name matches Web_available_role.name)."""
+    __tablename__ = "Web_page_access_role"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    page_access_id: Mapped[int] = mapped_column(Integer, ForeignKey("Web_page_access.id", ondelete="CASCADE"), nullable=False)
+    role_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    page = relationship("PageAccess", back_populates="allowed_roles")
+
+    __table_args__ = (
+        UniqueConstraint('page_access_id', 'role_name', name='uq_page_access_role'),
+        Index('idx_page_access_role_page', 'page_access_id'),
+        Index('idx_page_access_role_role', 'role_name'),
+    )
+
+
+class PageAccessUser(Base):
+    """Per-user overrides for page access — grant a specific user access regardless of roles."""
+    __tablename__ = "Web_page_access_user"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    page_access_id: Mapped[int] = mapped_column(Integer, ForeignKey("Web_page_access.id", ondelete="CASCADE"), nullable=False)
+    profile_id: Mapped[int] = mapped_column(Integer, ForeignKey("Web_user_profile.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    page = relationship("PageAccess", back_populates="allowed_users")
+    profile = relationship("UserProfile")
+
+    __table_args__ = (
+        UniqueConstraint('page_access_id', 'profile_id', name='uq_page_access_user'),
+        Index('idx_page_access_user_page', 'page_access_id'),
+        Index('idx_page_access_user_profile', 'profile_id'),
     )
