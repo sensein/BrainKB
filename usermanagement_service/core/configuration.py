@@ -37,23 +37,21 @@ def load_environment(env_name="env"):
         dict: A dictionary containing the loaded environment variables.
     """
     # Determine the path to the .env file based on the environment
-    # Look in core directory first, then fall back to root directory
+    # Always fall back to root .env file - service-specific .env files are removed
     core_dir = os.path.dirname(os.path.abspath(__file__))
-    root_dir = os.path.dirname(core_dir)
     
-    # Try core directory first
-    env_file = os.path.join(core_dir, f".{env_name}")
-    if not os.path.exists(env_file):
-        # Fall back to root directory
-        env_file = os.path.join(root_dir, f".{env_name}")
-
-    # Load environment variables from the .env file
-    load_dotenv(dotenv_path=env_file)
+    # Traverse up to project root (BrainKB/)
+    # usermanagement_service/core/ -> usermanagement_service/ -> BrainKB/
+    project_root = os.path.dirname(os.path.dirname(core_dir))
+    
+    # Always load from root .env file (used by docker-compose)
+    root_env_file = os.path.join(project_root, ".env")
+    if os.path.exists(root_env_file):
+        load_dotenv(dotenv_path=root_env_file, override=False)
 
     # Return a dictionary containing the loaded environment variables
     return {
         "ENV_STATE": os.getenv("ENV_STATE"),
-        "DATABASE_URL": os.getenv("DATABASE_URL"),
         "LOGTAIL_API_KEY": os.getenv("LOGTAIL_API_KEY"),
         
         # PostgreSQL Database Configuration
@@ -65,11 +63,27 @@ def load_environment(env_name="env"):
         
         # JWT Configuration
         "JWT_ALGORITHM": os.getenv("JWT_ALGORITHM", "HS256"),
-        "JWT_SECRET_KEY": os.getenv("JWT_SECRET_KEY"),
+        "JWT_SECRET_KEY": os.getenv("USERMANAGEMENT_SERVICE_JWT_SECRET_KEY"),
 
         "JWT_BEARER_TOKEN_URL": os.getenv("JWT_BEARER_TOKEN_URL"),
         "JWT_LOGIN_EMAIL": os.getenv("JWT_LOGIN_EMAIL"),
         "JWT_LOGIN_PASSWORD": os.getenv("JWT_LOGIN_PASSWORD"),
+
+        # OAuth / Admin Bootstrap
+        "USERMANAGEMENT_PUBLIC_BASE_URL": os.getenv("USERMANAGEMENT_PUBLIC_BASE_URL", "http://localhost:8004"),
+        "USERMANAGEMENT_FRONTEND_CALLBACK_URL": os.getenv("USERMANAGEMENT_FRONTEND_CALLBACK_URL", "http://localhost:3000/auth/callback"),
+        "USERMANAGEMENT_OAUTH_TOKEN_ENC_KEY": os.getenv("USERMANAGEMENT_OAUTH_TOKEN_ENC_KEY"),
+        "USERMANAGEMENT_BOOTSTRAP_ADMIN_EMAILS": os.getenv("USERMANAGEMENT_BOOTSTRAP_ADMIN_EMAILS", ""),
+
+        "GITHUB_CLIENT_ID": os.getenv("GITHUB_CLIENT_ID"),
+        "GITHUB_CLIENT_SECRET": os.getenv("GITHUB_CLIENT_SECRET"),
+
+        "ORCID_CLIENT_ID": os.getenv("ORCID_CLIENT_ID"),
+        "ORCID_CLIENT_SECRET": os.getenv("ORCID_CLIENT_SECRET"),
+        "ORCID_BASE_URL": os.getenv("ORCID_BASE_URL", "https://orcid.org"),
+
+        "GLOBUS_CLIENT_ID": os.getenv("GLOBUS_CLIENT_ID"),
+        "GLOBUS_CLIENT_SECRET": os.getenv("GLOBUS_CLIENT_SECRET"),
 
         # Logging Configuration
         "LOG_LEVEL": os.getenv("LOG_LEVEL", "INFO"),
@@ -96,11 +110,6 @@ class Configuration:
     def env_state(self) -> Optional[str]:
         """Get the current environment state."""
         return self._env_vars.get("ENV_STATE")
-    
-    @property
-    def database_url(self) -> Optional[str]:
-        """Get the database URL."""
-        return self._env_vars.get("DATABASE_URL")
     
     @property
     def postgres_host(self) -> Optional[str]:
@@ -167,6 +176,51 @@ class Configuration:
         """Get the Logtail API key."""
         return self._env_vars.get("LOGTAIL_API_KEY")
     
+    @property
+    def public_base_url(self) -> str:
+        return self._env_vars.get("USERMANAGEMENT_PUBLIC_BASE_URL", "http://localhost:8004")
+
+    @property
+    def frontend_callback_url(self) -> str:
+        return self._env_vars.get("USERMANAGEMENT_FRONTEND_CALLBACK_URL", "http://localhost:3000/auth/callback")
+
+    @property
+    def oauth_token_enc_key(self) -> Optional[str]:
+        return self._env_vars.get("USERMANAGEMENT_OAUTH_TOKEN_ENC_KEY")
+
+    @property
+    def bootstrap_admin_emails(self) -> list:
+        raw = self._env_vars.get("USERMANAGEMENT_BOOTSTRAP_ADMIN_EMAILS", "") or ""
+        return [e.strip().lower() for e in raw.split(",") if e.strip()]
+
+    @property
+    def github_client_id(self) -> Optional[str]:
+        return self._env_vars.get("GITHUB_CLIENT_ID")
+
+    @property
+    def github_client_secret(self) -> Optional[str]:
+        return self._env_vars.get("GITHUB_CLIENT_SECRET")
+
+    @property
+    def orcid_client_id(self) -> Optional[str]:
+        return self._env_vars.get("ORCID_CLIENT_ID")
+
+    @property
+    def orcid_client_secret(self) -> Optional[str]:
+        return self._env_vars.get("ORCID_CLIENT_SECRET")
+
+    @property
+    def orcid_base_url(self) -> str:
+        return self._env_vars.get("ORCID_BASE_URL", "https://orcid.org")
+
+    @property
+    def globus_client_id(self) -> Optional[str]:
+        return self._env_vars.get("GLOBUS_CLIENT_ID")
+
+    @property
+    def globus_client_secret(self) -> Optional[str]:
+        return self._env_vars.get("GLOBUS_CLIENT_SECRET")
+
     def get_postgres_settings(self) -> dict:
         """
         Get PostgreSQL settings as a dictionary.
