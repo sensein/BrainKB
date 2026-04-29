@@ -23,7 +23,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException
 
 from core.configuration import config
-from core.models.database_models import Base, JWTUser, UserProfile, UserActivity, UserContribution, UserRole, UserCountry, UserOrganization, UserEducation, UserExpertise, AvailableRole, AvailableCountry
+from core.models.database_models import (
+    Base, JWTUser, UserProfile, UserActivity, UserContribution, UserRole,
+    UserCountry, UserOrganization, UserEducation, UserExpertise, AvailableRole, AvailableCountry,
+    OAuthIdentity, OAuthState, Permission, RolePermission, PageAccess, PageAccessRole, PageAccessUser,
+)
 from core.models.user import ActivityType, ContributionStatus
 
 logger = logging.getLogger(__name__)
@@ -1288,6 +1292,249 @@ class AvailableCountryRepository(UserBaseRepository):
             raise HTTPException(status_code=400, detail=str(e))
 
 
+class OAuthIdentityRepository(UserBaseRepository):
+    """Repository for Web_oauth_identity — provider-linked identities."""
+
+    def __init__(self):
+        super().__init__(OAuthIdentity)
+
+    async def get_by_provider_user(self, session: AsyncSession, provider: str, provider_user_id: str) -> Optional[OAuthIdentity]:
+        try:
+            result = await session.execute(
+                select(OAuthIdentity).where(
+                    OAuthIdentity.provider == provider,
+                    OAuthIdentity.provider_user_id == provider_user_id,
+                )
+            )
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+            logger.error(f"Error getting oauth identity: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+    async def list_for_profile(self, session: AsyncSession, profile_id: int) -> List[OAuthIdentity]:
+        try:
+            result = await session.execute(
+                select(OAuthIdentity).where(OAuthIdentity.profile_id == profile_id)
+            )
+            return list(result.scalars().all())
+        except SQLAlchemyError as e:
+            logger.error(f"Error listing oauth identities: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+    async def upsert(
+        self,
+        session: AsyncSession,
+        *,
+        provider: str,
+        provider_user_id: str,
+        profile_id: int,
+        email: Optional[str],
+        access_token_enc: Optional[str],
+        refresh_token_enc: Optional[str],
+        token_expires_at: Optional[datetime],
+        raw_profile: Optional[dict],
+    ) -> OAuthIdentity:
+        existing = await self.get_by_provider_user(session, provider, provider_user_id)
+        if existing:
+            existing.profile_id = profile_id
+            existing.email = email
+            existing.access_token_enc = access_token_enc
+            existing.refresh_token_enc = refresh_token_enc
+            existing.token_expires_at = token_expires_at
+            existing.raw_profile = raw_profile
+            existing.updated_at = datetime.utcnow()
+            await session.flush()
+            await session.refresh(existing)
+            return existing
+        return await self.create(
+            session,
+            provider=provider,
+            provider_user_id=provider_user_id,
+            profile_id=profile_id,
+            email=email,
+            access_token_enc=access_token_enc,
+            refresh_token_enc=refresh_token_enc,
+            token_expires_at=token_expires_at,
+            raw_profile=raw_profile,
+        )
+
+
+class OAuthStateRepository(UserBaseRepository):
+    """Repository for short-lived OAuth state+PKCE tokens."""
+
+    def __init__(self):
+        super().__init__(OAuthState)
+
+    async def get_by_state(self, session: AsyncSession, state: str) -> Optional[OAuthState]:
+        try:
+            result = await session.execute(
+                select(OAuthState).where(OAuthState.state == state)
+            )
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+            logger.error(f"Error getting oauth state: {str(e)}")
+            raise HTTPException(status_code=400, detail=str(e))
+
+    async def consume(self, session: AsyncSession, state: str) -> Optional[OAuthState]:
+        """Fetch and delete a state token — state must only be usable once."""
+        row = await self.get_by_state(session, state)
+        if row is None:
+            return None
+        await session.delete(row)
+        await session.flush()
+        return row
+
+    async def purge_expired(self, session: AsyncSession) -> None:
+        try:
+            await session.execute(
+                text('DELETE FROM "Web_oauth_state" WHERE expires_at < :now'),
+                {"now": datetime.utcnow()},
+            )
+            await session.flush()
+        except SQLAlchemyError as e:
+            logger.error(f"Error purging expired oauth states: {str(e)}")
+
+
+class PermissionRepository(UserBaseRepository):
+    def __init__(self):
+        super().__init__(Permission)
+
+    async def list_all(self, session: AsyncSession) -> List[Permission]:
+        result = await session.execute(select(Permission).order_by(Permission.resource, Permission.action))
+        return list(result.scalars().all())
+
+    async def get_by_name(self, session: AsyncSession, name: str) -> Optional[Permission]:
+        result = await session.execute(select(Permission).where(Permission.name == name))
+        return result.scalar_one_or_none()
+
+
+class RolePermissionRepository(UserBaseRepository):
+    def __init__(self):
+        super().__init__(RolePermission)
+
+    async def get_permissions_for_role(self, session: AsyncSession, role_id: int) -> List[Permission]:
+        result = await session.execute(
+            select(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .where(RolePermission.role_id == role_id)
+        )
+        return list(result.scalars().all())
+
+    async def get_permissions_for_role_names(self, session: AsyncSession, role_names: List[str]) -> List[Permission]:
+        if not role_names:
+            return []
+        result = await session.execute(
+            select(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .join(AvailableRole, AvailableRole.id == RolePermission.role_id)
+            .where(AvailableRole.name.in_(role_names))
+            .distinct()
+        )
+        return list(result.scalars().all())
+
+    async def set_role_permissions(self, session: AsyncSession, role_id: int, permission_ids: List[int]) -> None:
+        """Replace the set of permissions for a role."""
+        await session.execute(
+            text('DELETE FROM "Web_role_permission" WHERE role_id = :rid'),
+            {"rid": role_id},
+        )
+        for pid in permission_ids:
+            session.add(RolePermission(role_id=role_id, permission_id=pid))
+        await session.flush()
+
+
+class PageAccessRepository(UserBaseRepository):
+    def __init__(self):
+        super().__init__(PageAccess)
+
+    async def get_by_key(self, session: AsyncSession, page_key: str) -> Optional[PageAccess]:
+        result = await session.execute(select(PageAccess).where(PageAccess.page_key == page_key))
+        return result.scalar_one_or_none()
+
+    async def list_all(self, session: AsyncSession) -> List[PageAccess]:
+        result = await session.execute(select(PageAccess).order_by(PageAccess.page_key))
+        return list(result.scalars().all())
+
+    async def upsert_with_members(
+        self,
+        session: AsyncSession,
+        *,
+        page_key: str,
+        description: Optional[str],
+        is_public: bool,
+        allowed_role_names: List[str],
+        allowed_profile_ids: List[int],
+    ) -> PageAccess:
+        existing = await self.get_by_key(session, page_key)
+        if existing:
+            existing.description = description
+            existing.is_public = is_public
+            existing.updated_at = datetime.utcnow()
+            page = existing
+        else:
+            page = PageAccess(page_key=page_key, description=description, is_public=is_public)
+            session.add(page)
+        await session.flush()
+
+        await session.execute(
+            text('DELETE FROM "Web_page_access_role" WHERE page_access_id = :pid'),
+            {"pid": page.id},
+        )
+        await session.execute(
+            text('DELETE FROM "Web_page_access_user" WHERE page_access_id = :pid'),
+            {"pid": page.id},
+        )
+        for role_name in allowed_role_names:
+            session.add(PageAccessRole(page_access_id=page.id, role_name=role_name))
+        for profile_id in allowed_profile_ids:
+            session.add(PageAccessUser(page_access_id=page.id, profile_id=profile_id))
+        await session.flush()
+        await session.refresh(page)
+        return page
+
+    async def delete_by_key(self, session: AsyncSession, page_key: str) -> bool:
+        result = await session.execute(
+            text('DELETE FROM "Web_page_access" WHERE page_key = :k'),
+            {"k": page_key},
+        )
+        await session.flush()
+        return result.rowcount > 0
+
+    async def get_allowed_roles(self, session: AsyncSession, page_access_id: int) -> List[str]:
+        result = await session.execute(
+            select(PageAccessRole.role_name).where(PageAccessRole.page_access_id == page_access_id)
+        )
+        return [row[0] for row in result.all()]
+
+    async def get_allowed_user_profile_ids(self, session: AsyncSession, page_access_id: int) -> List[int]:
+        result = await session.execute(
+            select(PageAccessUser.profile_id).where(PageAccessUser.page_access_id == page_access_id)
+        )
+        return [row[0] for row in result.all()]
+
+    async def check_access(
+        self,
+        session: AsyncSession,
+        *,
+        page_key: str,
+        profile_id: Optional[int],
+        role_names: List[str],
+    ) -> tuple[bool, str]:
+        page = await self.get_by_key(session, page_key)
+        if page is None:
+            return (False, "not_found")
+        if page.is_public:
+            return (True, "public")
+        if profile_id is not None:
+            user_ids = await self.get_allowed_user_profile_ids(session, page.id)
+            if profile_id in user_ids:
+                return (True, "user_override")
+        allowed_roles = await self.get_allowed_roles(session, page.id)
+        if any(r in allowed_roles for r in role_names):
+            return (True, "role")
+        return (False, "denied")
+
+
 # Repository instances
 jwt_user_repo = JWTUserRepository()
 user_profile_repo = UserProfileRepository()
@@ -1299,4 +1546,9 @@ user_organization_repo = UserOrganizationRepository()
 user_education_repo = UserEducationRepository()
 user_expertise_repo = UserExpertiseRepository()
 available_role_repo = AvailableRoleRepository()
-available_country_repo = AvailableCountryRepository() 
+available_country_repo = AvailableCountryRepository()
+oauth_identity_repo = OAuthIdentityRepository()
+oauth_state_repo = OAuthStateRepository()
+permission_repo = PermissionRepository()
+role_permission_repo = RolePermissionRepository()
+page_access_repo = PageAccessRepository() 
