@@ -12,7 +12,6 @@ BrainKB serves as a knowledge base platform that provides scientists worldwide w
 - [GraphDB](graphdb) The docker compose configuration of GraphDB.
 - [JWT User & Scope Manager](APItokenmanager) A toolkit to manage JWT users and their permissions for API endpoint access.
 - [Query Service](query_service) Provides the functionalities for querying (and updating) the knowledge graphs from the graph database.
-- [RabbitMQ](rabbit-mq) The docker compose configuration of RabbitMQ.
 - [SPARQL Queries](sparql_queries) List of SPARQL queries tested or used in BrainKB.
 
 ## Running
@@ -50,9 +49,15 @@ Once started, services are accessible at:
 - **Query Service (FastAPI)**: `http://localhost:8010/`
   - Now supports ingestion than just querying.
 - **ML Service (FastAPI)**: `http://localhost:8007/`
-  - Integrates StructSense
+  - Integrates StructSense (multi-agent NER + structured-resource extraction).
+  - Hosts **SynthScholar** at `/api/synth-scholar/*` — PRISMA-guided literature
+    review pipeline (search → screening → critical appraisal → synthesis,
+    with SSE progress streaming and markdown / JSON / RDF exports). Reuses
+    the unified `brainkb` Postgres database. See `env.template` for the
+    optional API keys (OpenRouter, NCBI, Semantic Scholar, CORE).
 - **Oxigraph SPARQL**: `http://localhost:7878/` (password protected) graph database
 - **pgAdmin**: `http://localhost:5051/`
+- **User management service**: http://localhost:8004
 
 
 ## Documentation
