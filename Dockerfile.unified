@@ -1,5 +1,5 @@
 # Unified Dockerfile for BrainKB Services
-# Deploys: APItokenmanager, query_service, ml_service, and oxigraph
+# Deploys: APItokenmanager, query_service, ml_service, usermanagement_service, and oxigraph
 
 # Note: Oxigraph binary extraction skipped - oxigraph image is distroless
 # Oxigraph will be run as a separate service in docker-compose or use the fallback script
@@ -47,6 +47,11 @@ WORKDIR /app/ml_service
 RUN pip install --use-deprecated=legacy-resolver "structsense==0.0.4" || \
     pip install --use-deprecated=legacy-resolver --no-deps "structsense==0.0.4" && \
     pip install -r requirements.txt
+
+# Copy usermanagement_service
+COPY usermanagement_service/ /app/usermanagement_service/
+WORKDIR /app/usermanagement_service
+RUN pip install -r requirements.txt
 
 
 # Create supervisor configuration
@@ -100,6 +105,17 @@ startsecs=15
 stderr_logfile=/var/log/supervisor/ml_service.err.log
 stdout_logfile=/var/log/supervisor/ml_service.out.log
 environment=PATH="/usr/local/bin:/usr/bin:/bin",WEB_CONCURRENCY="6"
+
+[program:usermanagement_service]
+command=gunicorn core.main:app --bind 0.0.0.0:8004 --workers 4 --worker-class uvicorn.workers.UvicornWorker --threads 4 --max-requests 1000 --max-requests-jitter 50 --timeout 220 --keep-alive 220 --log-level debug
+directory=/app/usermanagement_service
+autostart=true
+autorestart=true
+startsecs=15
+stderr_logfile=/var/log/supervisor/usermanagement_service.err.log
+stdout_logfile=/var/log/supervisor/usermanagement_service.out.log
+environment=PATH="/usr/local/bin:/usr/bin:/bin"
+priority=300
 
 [program:oxigraph]
 command=/app/oxigraph/oxigraph_server --bind 0.0.0.0:7878 --storage /data
@@ -206,7 +222,7 @@ EOF
 RUN chmod +x /app/start.sh
 
 # Expose ports
-EXPOSE 8000 8007 8010
+EXPOSE 8000 8004 8007 8010
 
 # Set working directory
 WORKDIR /app
