@@ -1534,6 +1534,33 @@ class PageAccessRepository(UserBaseRepository):
         profile_id: Optional[int],
         role_names: List[str],
     ) -> tuple[bool, str]:
+        """Decide whether a user may access `page_key`.
+
+        Roles are re-read from the DB when `profile_id` is supplied — the JWT's
+        baked-in `roles` claim becomes stale the moment an admin grants or
+        revokes a role mid-session, and that staleness was the source of the
+        "I have access but the tool still says disabled" glitch. The fresh DB
+        read is one indexed SELECT per call; it makes role grants take effect
+        on the next request rather than on next sign-in.
+
+        SuperAdmin always passes — that role is the platform's protected
+        oversight tier and explicitly bypasses per-page rules. Regular Admin
+        is *not* bypassed: admins can grant themselves access through
+        /admin/page-access if they want it, the same as any other role.
+        """
+        # Fresh roles from the DB — supersede the JWT claim when both are
+        # available. Falls back to the supplied `role_names` for code paths
+        # that don't carry a profile_id (e.g. unauthenticated public pages).
+        effective_roles = list(role_names)
+        if profile_id is not None:
+            db_roles = await user_role_repo.get_user_role_names(session, profile_id)
+            if db_roles:
+                effective_roles = db_roles
+
+        # SuperAdmin bypass only — see docstring.
+        if "SuperAdmin" in effective_roles:
+            return (True, "role")
+
         page = await self.get_by_key(session, page_key)
         if page is None:
             return (False, "not_found")
@@ -1544,7 +1571,7 @@ class PageAccessRepository(UserBaseRepository):
             if profile_id in user_ids:
                 return (True, "user_override")
         allowed_roles = await self.get_allowed_roles(session, page.id)
-        if any(r in allowed_roles for r in role_names):
+        if any(r in allowed_roles for r in effective_roles):
             return (True, "role")
         return (False, "denied")
 
