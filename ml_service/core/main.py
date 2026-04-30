@@ -13,11 +13,23 @@ from starlette.websockets import WebSocket as StarletteWebSocket
 
 from core.configure_logging import configure_logging
 from core.routers.index import router as index_router
-from core.routers.jwt_auth import router as jwt_router 
+from core.routers.jwt_auth import router as jwt_router
 from core.routers.structsense import router as structsense_router
 from core.database import init_db_pool, get_db_pool, debug_pool_status
 from core.configuration import load_environment
 from motor.motor_asyncio import AsyncIOMotorClient
+
+# SynthScholar (PRISMA literature review). Imports are lazy-guarded so a
+# missing `synthscholar` library doesn't crash the rest of ml_service —
+# the router simply won't mount and the /api/synth-scholar/* surface returns 404.
+try:
+    from core.synth_scholar.routes import router as synth_scholar_router
+    from core.synth_scholar.database import init_db as init_synth_scholar_db, close_db as close_synth_scholar_db
+    from core.synth_scholar.store import fix_stuck_reviews as fix_synth_scholar_stuck_reviews
+    _SYNTH_SCHOLAR_AVAILABLE = True
+except Exception as _exc:
+    _SYNTH_SCHOLAR_AVAILABLE = False
+    _SYNTH_SCHOLAR_IMPORT_ERROR = _exc
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -43,6 +55,25 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize database pool: {e}")
         raise
+
+    # Initialise SynthScholar (PRISMA review) tables and recover any sessions
+    # that were running when the server last shut down. Failures here are
+    # logged but non-fatal so the rest of ml_service still boots.
+    if _SYNTH_SCHOLAR_AVAILABLE:
+        try:
+            await init_synth_scholar_db()
+            stuck = await fix_synth_scholar_stuck_reviews()
+            if stuck:
+                logger.warning("SynthScholar: marked %d stuck review(s) as FAILED on startup", stuck)
+            logger.info("SynthScholar: database ready")
+        except Exception as e:
+            logger.error("SynthScholar startup failed (continuing without it): %s", e)
+    else:
+        logger.warning(
+            "SynthScholar disabled — import failed: %s. Install `synthscholar` "
+            "and `sqlalchemy[asyncio]` to enable.",
+            _SYNTH_SCHOLAR_IMPORT_ERROR,
+        )
 
     # Initialize MongoDB client (reused across all requests)
     try:
@@ -113,6 +144,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error closing MongoDB client: {e}")
 
+    # Dispose the SynthScholar SQLAlchemy engine.
+    if _SYNTH_SCHOLAR_AVAILABLE:
+        try:
+            await close_synth_scholar_db()
+            logger.info("SynthScholar: SQLAlchemy engine disposed")
+        except Exception as e:
+            logger.error("SynthScholar shutdown error: %s", e)
+
     logger.info("FastAPI shutdown complete")
 
 app = FastAPI(
@@ -150,6 +189,8 @@ app.add_middleware(CorrelationIdMiddleware)
 app.include_router(index_router, prefix="/api")
 app.include_router(jwt_router, prefix="/api", tags=["Security"])
 app.include_router(structsense_router, prefix="/api", tags=["Multi-agent Systems"])
+if _SYNTH_SCHOLAR_AVAILABLE:
+    app.include_router(synth_scholar_router, prefix="/api")
 
 # Exception handlers
 @app.exception_handler(HTTPException)
