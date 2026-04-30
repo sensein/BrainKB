@@ -5,7 +5,8 @@
 # Oxigraph will be run as a separate service in docker-compose or use the fallback script
 
 # Main build stage
-FROM python:3.10-slim
+# Python 3.11+ required: synthscholar (ml_service) depends on it.
+FROM python:3.11-slim
 
 # Set metadata
 LABEL project="BrainyPedia" \
@@ -46,7 +47,7 @@ COPY ml_service/ /app/ml_service/
 WORKDIR /app/ml_service
 RUN pip install --use-deprecated=legacy-resolver "structsense==0.0.4" || \
     pip install --use-deprecated=legacy-resolver --no-deps "structsense==0.0.4" && \
-    pip install -r requirements.txt
+    pip install --use-deprecated=legacy-resolver -r requirements.txt
 
 # Copy usermanagement_service
 COPY usermanagement_service/ /app/usermanagement_service/
