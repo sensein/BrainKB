@@ -1,52 +1,14 @@
 import logging
-from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, status, Depends, Request
+from fastapi import APIRouter, HTTPException, status, Request
 
-from core.database import user_db_manager, jwt_user_repo
-from core.models.user import UserIn, LoginUserIn, ActivityType
-from core.security import get_password_hash, authenticate_user, create_access_token_with_user_id, verify_token
+from core.database import user_db_manager, jwt_user_repo, user_profile_repo, user_role_repo
+from core.models.user import LoginUserIn
+from core.security import authenticate_user, create_access_token_v2
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-@router.post("/register", status_code=201)
-async def register(user: UserIn):
-    async with user_db_manager.get_async_session() as session:
-        # Check if JWT user already exists
-        existing_jwt_user = await jwt_user_repo.get_by_email(session, user.email)
-        if existing_jwt_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A user with that email already exists",
-            )
-
-        hashed_password = get_password_hash(user.password)
-        
-        # Create JWT user
-        try:
-            new_jwt_user = await jwt_user_repo.create_user(
-                session=session,
-                full_name=user.full_name,
-                email=user.email,
-                password=hashed_password
-            )
-            
-            return {
-                "detail": "Registration completed successfully! Admin will activate your account after verification."
-            }
-        except Exception as e:
-            logger.error(f"Error creating user: {str(e)}")
-            # Check if it's a duplicate email error
-            if "duplicate key value violates unique constraint" in str(e) and "email" in str(e):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="A user with that email already exists",
-                )
-            else:
-                raise HTTPException(status_code=400, detail="Registration failed. Please try again.")
 
 
 @router.post("/token")
@@ -66,9 +28,20 @@ async def login(user: LoginUserIn, request: Request):
         if not scopes:
             scopes = ["read"]  # Default scope if no scopes found
 
-        access_token = create_access_token_with_user_id(user_record.email, scopes, user_record.id)
+        # Attach profile-level roles if a profile exists for this email.
+        profile = await user_profile_repo.get_by_email(session, user_record.email)
+        profile_id = profile.id if profile else None
+        role_names = await user_role_repo.get_user_role_names(session, profile.id) if profile else []
 
-        
+        access_token = create_access_token_v2(
+            email=user_record.email,
+            jwt_user_id=user_record.id,
+            profile_id=profile_id,
+            roles=role_names,
+            scopes=scopes,
+            auth_source="password",
+        )
+
         return {"access_token": access_token, "token_type": "bearer"}
 
 

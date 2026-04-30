@@ -94,9 +94,19 @@ class UserProfile(Base):
     website: Mapped[Optional[str]] = mapped_column(String(500))
     conflict_of_interest_statement: Mapped[Optional[str]] = mapped_column(Text)
     biography: Mapped[Optional[str]] = mapped_column(Text)
+    # Ban metadata. is_banned=True suspends the user — get_current_user
+    # rejects every authenticated request from the user with 403. The profile
+    # row itself is preserved (history, ORCID, etc. remain queryable). To
+    # cleanly remove a user use DELETE /api/admin/users/{id} instead.
+    is_banned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    banned_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    banned_by: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("Web_user_profile.id", ondelete="SET NULL")
+    )
+    ban_reason: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Relationships - other tables link to this profile
     activities = relationship("UserActivity", back_populates="profile", cascade="all, delete-orphan")
     contributions = relationship("UserContribution", back_populates="profile", cascade="all, delete-orphan")
@@ -481,3 +491,36 @@ class PageAccessUser(Base):
         Index('idx_page_access_user_page', 'page_access_id'),
         Index('idx_page_access_user_profile', 'profile_id'),
     )
+
+class AdminSetting(Base):
+    """Admin-managed key/value settings stored encrypted at rest.
+
+    Used today for the shared OpenRouter API key. Generic enough that future
+    shared secrets (Slack webhooks, S3 keys, etc.) can be added without a
+    schema change — just pick a new `key` value and reuse the same table.
+
+    `value_enc` is Fernet-encrypted using
+    `USERMANAGEMENT_OAUTH_TOKEN_ENC_KEY` (re-using the same key as the
+    OAuth-token-at-rest helper so we don't multiply key-management surface).
+
+    `allowed_role_names` is a JSON list of role names that may consume the
+    setting. Empty list / NULL means "any signed-in user with a profile";
+    `["Admin"]` would lock it back down to admin-only. Members of the listed
+    roles get the decrypted value via the user-facing endpoint; everyone
+    else gets a 'no shared key' response so they fall back to their own.
+    """
+    __tablename__ = "Web_admin_setting"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    value_enc: Mapped[Optional[str]] = mapped_column(Text)
+    allowed_role_names: Mapped[Optional[list]] = mapped_column(JSON)
+    updated_by: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("Web_user_profile.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (Index("idx_admin_setting_key", "key"),)

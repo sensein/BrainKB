@@ -73,7 +73,10 @@ def load_environment(env_name="env"):
         "USERMANAGEMENT_PUBLIC_BASE_URL": os.getenv("USERMANAGEMENT_PUBLIC_BASE_URL", "http://localhost:8004"),
         "USERMANAGEMENT_FRONTEND_CALLBACK_URL": os.getenv("USERMANAGEMENT_FRONTEND_CALLBACK_URL", "http://localhost:3000/auth/callback"),
         "USERMANAGEMENT_OAUTH_TOKEN_ENC_KEY": os.getenv("USERMANAGEMENT_OAUTH_TOKEN_ENC_KEY"),
-        "USERMANAGEMENT_BOOTSTRAP_ADMIN_EMAILS": os.getenv("USERMANAGEMENT_BOOTSTRAP_ADMIN_EMAILS", ""),
+        # SuperAdmin bootstrap allowlist. Comma-separated emails. Seeded users
+        # get the SuperAdmin + Admin roles on first sight; the SuperAdmin role
+        # is protected against ban/delete/role-strip via the admin endpoints.
+        "USERMANAGEMENT_BOOTSTRAP_SUPERADMIN_EMAILS": os.getenv("USERMANAGEMENT_BOOTSTRAP_SUPERADMIN_EMAILS", ""),
 
         "GITHUB_CLIENT_ID": os.getenv("GITHUB_CLIENT_ID"),
         "GITHUB_CLIENT_SECRET": os.getenv("GITHUB_CLIENT_SECRET"),
@@ -189,8 +192,10 @@ class Configuration:
         return self._env_vars.get("USERMANAGEMENT_OAUTH_TOKEN_ENC_KEY")
 
     @property
-    def bootstrap_admin_emails(self) -> list:
-        raw = self._env_vars.get("USERMANAGEMENT_BOOTSTRAP_ADMIN_EMAILS", "") or ""
+    def bootstrap_superadmin_emails(self) -> list:
+        """Emails that get seeded as SuperAdmin (and Admin) on startup / first
+        OAuth login. Read from USERMANAGEMENT_BOOTSTRAP_SUPERADMIN_EMAILS."""
+        raw = self._env_vars.get("USERMANAGEMENT_BOOTSTRAP_SUPERADMIN_EMAILS", "") or ""
         return [e.strip().lower() for e in raw.split(",") if e.strip()]
 
     @property

@@ -27,6 +27,7 @@ from core.models.database_models import (
     Base, JWTUser, UserProfile, UserActivity, UserContribution, UserRole,
     UserCountry, UserOrganization, UserEducation, UserExpertise, AvailableRole, AvailableCountry,
     OAuthIdentity, OAuthState, Permission, RolePermission, PageAccess, PageAccessRole, PageAccessUser,
+    AdminSetting,
 )
 from core.models.user import ActivityType, ContributionStatus
 
@@ -210,30 +211,43 @@ class JWTUserRepository(UserBaseRepository):
         super().__init__(JWTUser)
     
     async def get_by_email(self, session: AsyncSession, email: str) -> Optional[JWTUser]:
-        """Get JWT user by email"""
+        """Get an *active* JWT user by email. Used by the password-login path,
+        which must reject deactivated accounts. OAuth flows that just need to
+        find an existing shell row (regardless of activation) should use
+        :py:meth:`get_by_email_any_status` instead."""
+        return await self._fetch_by_email(session, email, active_only=True)
+
+    async def get_by_email_any_status(self, session: AsyncSession, email: str) -> Optional[JWTUser]:
+        """Get a JWT user by email regardless of `is_active`. Used by the OAuth
+        callback (`_ensure_jwt_user_shell`), where a shell row is created with
+        `is_active=False` because OAuth users have no usable password — the
+        shell exists only to provide a stable `user_id` claim for the JWT.
+        Filtering by `is_active=true` here would miss the shell on every
+        repeat sign-in and trigger a duplicate-email INSERT."""
+        return await self._fetch_by_email(session, email, active_only=False)
+
+    async def _fetch_by_email(self, session: AsyncSession, email: str, *, active_only: bool) -> Optional[JWTUser]:
         try:
-            result = await session.execute(
-                text('SELECT * FROM "Web_jwtuser" WHERE email = :email AND is_active = true'),
-                {"email": email}
-            )
+            sql = 'SELECT * FROM "Web_jwtuser" WHERE email = :email'
+            if active_only:
+                sql += ' AND is_active = true'
+            result = await session.execute(text(sql), {"email": email})
             row = result.fetchone()
             if row:
-                # Convert raw result to JWTUser object
-                jwt_user = JWTUser(
+                return JWTUser(
                     id=row.id,
                     full_name=row.full_name,
                     email=row.email,
                     password=row.password,
                     is_active=row.is_active,
                     created_at=row.created_at,
-                    updated_at=row.updated_at
+                    updated_at=row.updated_at,
                 )
-                return jwt_user
             return None
         except SQLAlchemyError as e:
             logger.error(f"Error getting JWT user by email: {str(e)}")
             raise HTTPException(status_code=400, detail=str(e))
-    
+
     async def create_user(self, session: AsyncSession, full_name: str, email: str, password: str) -> JWTUser:
         """Create a new JWT user"""
         try:
@@ -1552,3 +1566,62 @@ oauth_state_repo = OAuthStateRepository()
 permission_repo = PermissionRepository()
 role_permission_repo = RolePermissionRepository()
 page_access_repo = PageAccessRepository() 
+
+class AdminSettingRepository:
+    """Repository for the Web_admin_setting key/value store. Values are
+    Fernet-encrypted at rest using the same key as OAuth tokens — see
+    `core.security.encrypt_token` / `decrypt_token`. The repo stores
+    encrypted blobs only; encryption/decryption is the caller's responsibility
+    so we never accidentally leak plaintext through SQL logs."""
+
+    async def get(self, session: AsyncSession, key: str) -> Optional[AdminSetting]:
+        # Use ORM select so JSON deserialization is handled by SQLAlchemy.
+        result = await session.execute(
+            select(AdminSetting).where(AdminSetting.key == key).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def upsert(
+        self,
+        session: AsyncSession,
+        key: str,
+        value_enc: Optional[str],
+        allowed_role_names: Optional[List[str]],
+        updated_by: Optional[int],
+    ) -> AdminSetting:
+        # Use the ORM for both insert and update so SQLAlchemy serializes the
+        # JSON column for us — passing a Python list directly through raw SQL
+        # via asyncpg requires explicit json.dumps and is brittle.
+        existing_row = await session.execute(
+            select(AdminSetting).where(AdminSetting.key == key).limit(1)
+        )
+        existing = existing_row.scalar_one_or_none()
+        now = datetime.utcnow()
+        if existing:
+            existing.value_enc = value_enc
+            existing.allowed_role_names = allowed_role_names
+            existing.updated_by = updated_by
+            existing.updated_at = now
+            await session.flush()
+            await session.refresh(existing)
+            return existing
+        row = AdminSetting(
+            key=key,
+            value_enc=value_enc,
+            allowed_role_names=allowed_role_names,
+            updated_by=updated_by,
+        )
+        session.add(row)
+        await session.flush()
+        await session.refresh(row)
+        return row
+
+    async def delete(self, session: AsyncSession, key: str) -> bool:
+        result = await session.execute(
+            text('DELETE FROM "Web_admin_setting" WHERE key = :k'),
+            {"k": key},
+        )
+        return (result.rowcount or 0) > 0
+
+
+admin_setting_repo = AdminSettingRepository()

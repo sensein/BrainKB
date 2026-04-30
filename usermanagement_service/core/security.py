@@ -213,19 +213,57 @@ def has_all_scopes(token: str, required_scopes: list) -> bool:
 security = HTTPBearer()
 
 
-def get_current_user(credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]) -> dict:
-    """Get current user from JWT token - FastAPI dependency"""
+async def get_current_user(credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]) -> dict:
+    """Get current user from JWT token — FastAPI dependency. Async because
+    we hit the DB to check ban status; the JWT itself is validated synchronously.
+
+    Three failure modes:
+      * Invalid/expired token → 401
+      * Token valid but the user has been banned (is_banned=True) → 403
+      * Token valid, user not banned → returns the claims dict
+    """
     token = credentials.credentials
     user_data = get_current_user_from_token(token)
-    
+
     if user_data is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
+    await _enforce_not_banned(user_data)
     return user_data
+
+
+async def _enforce_not_banned(user_data: dict) -> None:
+    """Look up the user's profile and 403 if `is_banned` is True. We re-read
+    the flag on every request rather than baking it into the JWT — that way
+    an admin's ban takes effect immediately, without having to wait for the
+    user's JWT to expire / re-issue.
+
+    Cost: one cheap indexed SELECT per authenticated request. If this becomes
+    hot we can cache the answer for a few seconds per (profile_id) key."""
+    profile_id = user_data.get("profile_id")
+    if profile_id is None:
+        return
+    # Lazy import to avoid a circular import — security ↔ database both
+    # ultimately import models, and pulling user_db_manager at module load
+    # time creates the cycle.
+    from core.database import user_db_manager
+    from core.models.database_models import UserProfile as UserProfileModel
+    async with user_db_manager.get_async_session() as session:
+        profile = await session.get(UserProfileModel, profile_id)
+        if profile and getattr(profile, "is_banned", False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "account_suspended",
+                    "message": "Your account has been suspended. Contact an administrator if you believe this is in error.",
+                    "ban_reason": profile.ban_reason,
+                    "banned_at": profile.banned_at.isoformat() if profile.banned_at else None,
+                },
+            )
 
 
 def get_current_user_from_token(token: str) -> Optional[dict]:
@@ -288,26 +326,43 @@ def require_all_scopes(required_scopes: list):
 _optional_security = HTTPBearer(auto_error=False)
 
 
-def get_current_user_optional(
+async def get_current_user_optional(
     credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_optional_security)],
 ) -> Optional[dict]:
+    """Like `get_current_user` but won't 401 when the request is anonymous.
+    Used for endpoints that serve both authed and unauthed callers (page access
+    checks for public pages, etc.). Banned users are silently demoted to
+    anonymous here rather than 403'd — that way a public page they could
+    have read while signed out is still readable, but they can't act as an
+    authenticated user."""
     if credentials is None:
         return None
-    return get_current_user_from_token(credentials.credentials)
+    user_data = get_current_user_from_token(credentials.credentials)
+    if user_data is None:
+        return None
+    profile_id = user_data.get("profile_id")
+    if profile_id is None:
+        return user_data
+    from core.database import user_db_manager
+    from core.models.database_models import UserProfile as UserProfileModel
+    async with user_db_manager.get_async_session() as session:
+        profile = await session.get(UserProfileModel, profile_id)
+        if profile and getattr(profile, "is_banned", False):
+            return None
+    return user_data
 
 
 def require_admin(current_user: Annotated[dict, Depends(get_current_user)]) -> dict:
-    """Dependency: caller must have the Admin role (profile-level role).
-    Checks JWT 'roles' claim for 'Admin' or the bootstrap admin emails from config.
-    The bootstrap list is a fallback for the very first admin, before any role
-    is assigned in the DB."""
+    """Dependency: caller must have the Admin or SuperAdmin role (profile-level).
+    Checks JWT 'roles' claim, falling back to the bootstrap superadmin email
+    allowlist for the very first sign-in (before any role is assigned in the DB)."""
     email = (current_user.get("email") or "").lower()
     roles = current_user.get("roles", []) or []
 
-    if UserRoleEnum.ADMIN.value in roles:
+    if UserRoleEnum.ADMIN.value in roles or UserRoleEnum.SUPERADMIN.value in roles:
         return current_user
 
-    if email and email in config.bootstrap_admin_emails:
+    if email and email in config.bootstrap_superadmin_emails:
         return current_user
 
     raise HTTPException(
