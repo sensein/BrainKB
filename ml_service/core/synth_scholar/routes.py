@@ -1519,7 +1519,7 @@ async def search_literature(
 
         synthesis = None
         if req.summarize and articles:
-            api_key = _get_api_key()
+            api_key = _resolve_api_key()
             from synthscholar.agents import AgentDeps, run_search_synthesis  # type: ignore[import-not-found]
 
             deps = AgentDeps(
