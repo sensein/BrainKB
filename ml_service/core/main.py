@@ -27,7 +27,7 @@ try:
     from core.synth_scholar.database import init_db as init_synth_scholar_db, close_db as close_synth_scholar_db
     from core.synth_scholar.store import fix_stuck_reviews as fix_synth_scholar_stuck_reviews
     _SYNTH_SCHOLAR_AVAILABLE = True
-except Exception as _exc:
+except ImportError as _exc:
     _SYNTH_SCHOLAR_AVAILABLE = False
     _SYNTH_SCHOLAR_IMPORT_ERROR = _exc
 
