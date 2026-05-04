@@ -23,14 +23,13 @@ import time
 import sys
 import re
 import os
-from rdflib import Graph, URIRef, Literal, RDF, XSD , DCTERMS , PROV
+from rdflib import Graph, URIRef, Literal, RDF, XSD , DCTERMS, PROV
 import datetime
 import uuid
 from rdflib import Namespace
 import requests
 from rdflib import ConjunctiveGraph
 from typing import Dict, Any, List, Optional
-
 
 try:
     from yaml import CLoader as Loader
@@ -661,18 +660,16 @@ def extract_base_namespace(graph: Graph) -> Namespace:
     return Namespace("https://identifiers.org/brain-bican/vocab/")
 
 
+
 def attach_provenance(user: str, ttl_data: str) -> str:
     """
-    Attach the provenance information about the ingestion activity. Saying, we received this triple by X user on XXXX date.
-    It appends provenance triples externally while keeping the original triples intact.
+    Attach provenance about the ingestion activity at graph-level:
+    "We received this data from user X on date T."
 
-    Parameters:
-    - user (str): The username of the person posting the data.
-    - ttl_data (str): The existing Turtle (TTL) RDF data.
-
-    Returns:
-    - str: Combined RDF (Turtle format) containing original data and provenance metadata.
+    Returns TTL with the original data unchanged + extra provenance triples.
     """
+    # Define PROV namespace via rdflib
+    PROV = Namespace("http://www.w3.org/ns/prov#")
     # Validate input parameters
     if not isinstance(user, str) or not user.strip():
         raise ValueError("User must be a non-empty string.")
@@ -680,66 +677,144 @@ def attach_provenance(user: str, ttl_data: str) -> str:
         raise ValueError("TTL data must be a non-empty string.")
 
     try:
-        original_graph = Graph()
-        original_graph.parse(data=ttl_data, format="turtle")
+        g = Graph()
+        g.parse(data=ttl_data, format="turtle")
     except Exception as e:
         raise RuntimeError(f"Error parsing TTL data: {e}")
 
+    # Bind prefixes so serialization is readable
+    g.bind("prov", PROV)
+    g.bind("dct", DCTERMS)
+
     try:
-        BASE = extract_base_namespace(original_graph)
+        BASE = extract_base_namespace(g)  # your helper that returns a Namespace
     except Exception as e:
         raise RuntimeError(f"Failed to extract base namespace: {e}")
 
-    try:
-        # Create provenance graph
-        prov_graph = Graph()
-        
-        # Generate timestamps (ISO 8601 format, UTC)
-        start_time = datetime.datetime.utcnow().isoformat() + "Z"
-        
-        # Generate a unique UUID for provenance entity
-        provenance_uuid = str(uuid.uuid4())
-        prov_entity = URIRef(BASE[f"provenance/{provenance_uuid}"])
-        ingestion_activity = URIRef(BASE[f"ingestionActivity/{provenance_uuid}"])
-        user_uri = URIRef(BASE[f"agent/{user}"])
+    # Generate timestamps (UTC, ISO 8601)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-        # Define provenance entity
-        prov_graph.add((prov_entity, RDF.type, PROV.Entity))
-        prov_graph.add((prov_entity, PROV.generatedAtTime, Literal(start_time, datatype=XSD.dateTime)))
-        prov_graph.add((prov_entity, PROV.wasAttributedTo, user_uri))
-        prov_graph.add((prov_entity, PROV.wasGeneratedBy, ingestion_activity))
+    # Generate a unique UUID for this ingestion
+    provenance_uuid = str(uuid.uuid4())
 
-        # Define ingestion activity
-        # here we say IngestionActivity is an activity of type prov:Activity
-        prov_graph.add((ingestion_activity, RDF.type, PROV.Activity))
-        prov_graph.add((ingestion_activity, RDF.type, BASE["IngestionActivity"]))
-        prov_graph.add((ingestion_activity, PROV.generatedAtTime, Literal(start_time, datatype=XSD.dateTime)))
-        prov_graph.add((ingestion_activity, PROV.wasAssociatedWith, user_uri))
+    # URIs for ingestion entity, activity, and user agent
+    ingestion_entity = URIRef(BASE[f"provenance/{provenance_uuid}"])
+    ingestion_activity = URIRef(BASE[f"ingestionActivity/{provenance_uuid}"])
+    user_uri = URIRef(BASE[f"agent/{user}"])
 
-        # Attach provenance to original triples
-        # OPTIMIZATION: Use set to avoid duplicate checks and limit to first 1000 entities for performance
-        # For very large graphs, we don't need to link every single entity
-        entity_count = 0
-        max_entities = 1000  # Limit to prevent excessive CPU usage on huge graphs
-        seen_entities = set()
-        
-        for entity in original_graph.subjects():
-            if entity_count >= max_entities:
-                break
-            if isinstance(entity, URIRef) and entity not in seen_entities:
-                seen_entities.add(entity)
-                prov_graph.add((ingestion_activity, PROV.wasAssociatedWith, entity))
-                entity_count += 1
+    # Agent (user)
+    g.add((user_uri, RDF.type, PROV.Agent))
 
-        # add a Dublin Core provenance statement -- this is the new addition to say it's ingested by user
-        prov_graph.add((prov_entity, DCTERMS.provenance, Literal(f"Data ingested by {user} on {start_time}")))
+    # Ingestion activity
+    g.add((ingestion_activity, RDF.type, PROV.Activity))
+    g.add((ingestion_activity, RDF.type, BASE["IngestionActivity"]))
+    g.add((ingestion_activity, PROV.startedAtTime,
+           Literal(now, datatype=XSD.dateTime)))
+    g.add((ingestion_activity, PROV.wasAssociatedWith, user_uri))
 
-        # Combine both graphs (original + provenance) so that we have new provenance information attached.
-        final_graph = original_graph + prov_graph
+    # Ingestion entity describing this ingestion event / bundle
+    g.add((ingestion_entity, RDF.type, PROV.Entity))
+    g.add((ingestion_entity, PROV.generatedAtTime,
+           Literal(now, datatype=XSD.dateTime)))
+    g.add((ingestion_entity, PROV.wasAttributedTo, user_uri))
+    g.add((ingestion_entity, PROV.wasGeneratedBy, ingestion_activity))
 
-        return final_graph.serialize(format="turtle")
-    except Exception as e:
-        raise RuntimeError(f"Error generating provenance RDF: {e}")
+    # Human-readable provenance note
+    g.add((
+        ingestion_entity,
+        DCTERMS.provenance,
+        Literal(f"Data ingested by {user} on {now}")
+    ))
+
+    # Serialize the same graph (original triples + extra provenance)
+    return g.serialize(format="turtle")
+
+# def attach_provenance(user: str, ttl_data: str) -> str:
+#     """
+#     Attach the provenance information about the ingestion activity. Saying, we received this triple by X user on XXXX date.
+#     It appends provenance triples externally while keeping the original triples intact.
+#
+#     Parameters:
+#     - user (str): The username of the person posting the data.
+#     - ttl_data (str): The existing Turtle (TTL) RDF data.
+#
+#     Returns:
+#     - str: Combined RDF (Turtle format) containing original data and provenance metadata.
+#     """
+#     # Validate input parameters
+#     if not isinstance(user, str) or not user.strip():
+#         raise ValueError("User must be a non-empty string.")
+#     if not isinstance(ttl_data, str) or not ttl_data.strip():
+#         raise ValueError("TTL data must be a non-empty string.")
+#
+#     try:
+#         original_graph = Graph()
+#         original_graph.parse(data=ttl_data, format="turtle")
+#     except Exception as e:
+#         raise RuntimeError(f"Error parsing TTL data: {e}")
+#
+#     try:
+#         BASE = extract_base_namespace(original_graph)
+#     except Exception as e:
+#         raise RuntimeError(f"Failed to extract base namespace: {e}")
+#
+#     try:
+#         # Create provenance graph
+#         prov_graph = Graph()
+#
+#         # Generate timestamps (ISO 8601 format, UTC)
+#         start_time = datetime.datetime.utcnow().isoformat() + "Z"
+#
+#         # Generate a unique UUID for provenance entity
+#         provenance_uuid = str(uuid.uuid4())
+#         prov_entity = URIRef(BASE[f"provenance/{provenance_uuid}"])
+#         ingestion_activity = URIRef(BASE[f"ingestionActivity/{provenance_uuid}"])
+#         user_uri = URIRef(BASE[f"agent/{user}"])
+#
+#         # Define provenance entity
+#         prov_graph.add((prov_entity, RDF.type, PROV.Entity))
+#         prov_graph.add((prov_entity, PROV.generatedAtTime, Literal(start_time, datatype=XSD.dateTime)))
+#         prov_graph.add((prov_entity, PROV.wasAttributedTo, user_uri))
+#         prov_graph.add((prov_entity, PROV.wasGeneratedBy, ingestion_activity))
+#
+#         # Define ingestion activity
+#         # here we say IngestionActivity is an activity of type prov:Activity
+#         prov_graph.add((ingestion_activity, RDF.type, PROV.Activity))
+#         prov_graph.add((ingestion_activity, RDF.type, BASE["IngestionActivity"]))
+#         prov_graph.add((ingestion_activity, PROV.generatedAtTime, Literal(start_time, datatype=XSD.dateTime)))
+#         prov_graph.add((ingestion_activity, PROV.wasAssociatedWith, user_uri))
+#
+#         # Attach provenance to original triples
+#         # OPTIMIZATION: Use set to avoid duplicate checks and limit entities for performance
+#         # Adaptive limit based on graph size to balance performance vs completeness
+#         graph_size = len(original_graph)
+#         if graph_size > 100000:  # Very large graphs (>100k triples)
+#             max_entities = 500  # Limit more aggressively
+#         elif graph_size > 50000:  # Large graphs (50k-100k triples)
+#             max_entities = 750
+#         else:  # Medium/small graphs (<50k triples)
+#             max_entities = 1000  # Can process more entities
+#
+#         entity_count = 0
+#         seen_entities = set()
+#
+#         for entity in original_graph.subjects():
+#             if entity_count >= max_entities:
+#                 break
+#             if isinstance(entity, URIRef) and entity not in seen_entities:
+#                 seen_entities.add(entity)
+#                 prov_graph.add((ingestion_activity, PROV.wasAssociatedWith, entity))
+#                 entity_count += 1
+#
+#         # add a Dublin Core provenance statement -- this is the new addition to say it's ingested by user
+#         prov_graph.add((prov_entity, DCTERMS.provenance, Literal(f"Data ingested by {user} on {start_time}")))
+#
+#         # Combine both graphs (original + provenance) so that we have new provenance information attached.
+#         final_graph = original_graph + prov_graph
+#
+#         return final_graph.serialize(format="turtle")
+#     except Exception as e:
+#         raise RuntimeError(f"Error generating provenance RDF: {e}")
 
 
 def get_oxigraph_endpoint() -> str:
