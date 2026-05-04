@@ -846,11 +846,13 @@ async def _stream_from_db(
     replay of state that the owning worker already persisted, so it stays
     consistent with what the pipeline truly knows."""
     POLL_INTERVAL = 1.5
+    HEARTBEAT_SECONDS = 15.0  # Below ALB's 60s default idle timeout
     last_plan_iteration = (
         session.pending_plan_iteration_db
         if session.pending_plan_iteration_db is not None
         else 0
     )
+    last_yield = time.monotonic()
     if (
         session.status == ReviewStatus.PLAN_PENDING
         and session.pending_plan_db is not None
@@ -859,6 +861,7 @@ async def _stream_from_db(
         yield (
             f"data: {ProgressEvent(review_id=review_id, step=last_step, message=f'Awaiting plan confirmation (iteration {last_plan_iteration})...', timestamp=datetime.now().isoformat(), event_type='plan_review', plan=session.pending_plan_db).model_dump_json()}\n\n"
         )
+        last_yield = time.monotonic()
 
     while True:
         await asyncio.sleep(POLL_INTERVAL)
@@ -881,6 +884,7 @@ async def _stream_from_db(
                     f"data: {ProgressEvent(review_id=review_id, step=i + 1, message=msg, timestamp=ts, event_type='progress', source=ev.get('source'), kind=ev.get('kind', 'log'), stage=refreshed.stage, stage_index=refreshed.stage_index, stage_total=refreshed.stage_total, stage_done=refreshed.stage_done, stage_remaining=refreshed.stage_remaining, articles_included=refreshed.articles_included).model_dump_json()}\n\n"
                 )
             last_step = len(new_log)
+            last_yield = time.monotonic()
 
         if (
             refreshed.status == ReviewStatus.PLAN_PENDING
@@ -891,6 +895,7 @@ async def _stream_from_db(
             yield (
                 f"data: {ProgressEvent(review_id=review_id, step=last_step, message=f'Awaiting plan confirmation (iteration {last_plan_iteration})...', timestamp=datetime.now().isoformat(), event_type='plan_review', plan=refreshed.pending_plan_db).model_dump_json()}\n\n"
             )
+            last_yield = time.monotonic()
 
         if refreshed.status in (ReviewStatus.COMPLETED, ReviewStatus.FAILED, ReviewStatus.CANCELLED):
             etype = (
@@ -902,6 +907,10 @@ async def _stream_from_db(
                 f"data: {ProgressEvent(review_id=review_id, step=last_step, message=f'Review {refreshed.status.value}' + (f': {refreshed.error}' if refreshed.error else ''), timestamp=datetime.now().isoformat(), event_type=etype).model_dump_json()}\n\n"
             )
             return
+
+        if time.monotonic() - last_yield >= HEARTBEAT_SECONDS:
+            yield ": keepalive\n\n"
+            last_yield = time.monotonic()
 
 
 @router.get("/synth-scholar/reviews/{review_id}/stream", tags=["SynthScholar — reviews"])
@@ -976,7 +985,7 @@ async def stream_progress(
                 return
 
             try:
-                await asyncio.wait_for(session._progress_event.wait(), timeout=30.0)
+                await asyncio.wait_for(session._progress_event.wait(), timeout=15.0)
             except asyncio.TimeoutError:
                 if (
                     session._live.status == ReviewStatus.PLAN_PENDING.value
@@ -1519,7 +1528,7 @@ async def search_literature(
 
         synthesis = None
         if req.summarize and articles:
-            api_key = _get_api_key()
+            api_key = _resolve_api_key()
             from synthscholar.agents import AgentDeps, run_search_synthesis  # type: ignore[import-not-found]
 
             deps = AgentDeps(
