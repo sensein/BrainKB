@@ -13,9 +13,13 @@ from core.configure_logging import configure_logging
 from core.routers.index import router as index_router
 from core.routers.jwt_auth import router as jwt_router
 from core.routers.user_management import router as user_management_router
+from core.routers.oauth import router as oauth_router
+from core.routers.admin import router as admin_router
+from core.routers.access import router as access_router
 from core.database import user_db_manager, user_activity_repo
 from core.models.user import ActivityType
 from core.security import verify_token
+from core.bootstrap import run_bootstrap
 from fastapi.middleware.cors import CORSMiddleware
 
 class ActivityLoggingMiddleware(BaseHTTPMiddleware):
@@ -105,7 +109,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"User database initialization failed: {str(e)}")
         raise
-    
+
+    # Seed baseline roles, permissions, page access, and promote bootstrap admins.
+    await run_bootstrap()
+
     yield
     # Shutdown
     logger.info("Shutting down FastAPI")
@@ -137,6 +144,9 @@ app.add_middleware(ActivityLoggingMiddleware)
 app.include_router(index_router)
 app.include_router(jwt_router, prefix="/api", tags=["Security Endpoints"])
 app.include_router(user_management_router, prefix="/api", tags=["User Management"])
+app.include_router(oauth_router, prefix="/api", tags=["OAuth"])
+app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
+app.include_router(access_router, prefix="/api", tags=["Access Control"])
 
 
 # log all HTTP exception when raised
