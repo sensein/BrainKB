@@ -710,18 +710,47 @@ class ReviewStore:
 
 
 async def fix_stuck_reviews() -> int:
-    """Mark in-progress reviews as FAILED at server startup."""
+    """Mark in-progress reviews as FAILED at server startup.
+
+    The pipeline ran as an in-process asyncio task; if the container restarted
+    (deploy, OOM, scale-in) while a review was active, that task is gone and
+    the review is no longer making progress.  Two distinct cases:
+
+    1. **Resumable** — ``checkpoint_json`` is non-NULL.  The pipeline had
+       saved at least one checkpoint, so the user can pick up where it
+       stopped via the "Resume from step N" action in the UI.  We preserve
+       ``checkpoint_json`` and ``last_completed_step`` (UPDATE doesn't touch
+       them) and set an error message that hints at this option.
+    2. **Not resumable** — no checkpoint yet.  Plain retry is the only path.
+
+    Returns the total number of rows updated across both cases.
+    """
+    in_progress = ["running", "pending", "plan_pending"]
     async with async_session() as db:
-        result = await db.execute(
+        # Resumable: checkpoint exists → tell the user they can resume.
+        resumable = await db.execute(
             sa_update(ReviewRow)
-            .where(ReviewRow.status.in_(["running", "pending", "plan_pending"]))
+            .where(ReviewRow.status.in_(in_progress))
+            .where(ReviewRow.checkpoint_json.isnot(None))
+            .values(
+                status=ReviewStatus.FAILED.value,
+                error="Server restarted while review was in progress — "
+                      "use 'Resume from step N' to continue, or 'Full restart' "
+                      "to start over.",
+            )
+        )
+        # Not resumable: no checkpoint to fall back on.
+        not_resumable = await db.execute(
+            sa_update(ReviewRow)
+            .where(ReviewRow.status.in_(in_progress))
+            .where(ReviewRow.checkpoint_json.is_(None))
             .values(
                 status=ReviewStatus.FAILED.value,
                 error="Server restarted while review was in progress — please retry.",
             )
         )
         await db.commit()
-    return result.rowcount
+    return (resumable.rowcount or 0) + (not_resumable.rowcount or 0)
 
 
 # Singleton

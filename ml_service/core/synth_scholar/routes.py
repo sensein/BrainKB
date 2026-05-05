@@ -1117,6 +1117,26 @@ async def retry_review(
             status_code=500,
             detail="Cannot retry — original configuration not saved. Please create a new review.",
         )
+    # Log resume intent before reset so we can audit "Resume from step N"
+    # behaviour end-to-end. If body.resume=True and a checkpoint exists,
+    # reset_for_retry preserves checkpoint_json + last_completed_step and
+    # the next pipeline.run picks up from that step (skipping completed work).
+    _step = session.last_completed_step or 0
+    if body.resume and _step > 0:
+        logger.info(
+            "[retry] review %s resume=True, preserving checkpoint at step %d",
+            review_id, _step,
+        )
+    elif body.resume:
+        logger.info(
+            "[retry] review %s resume=True but no checkpoint exists — full restart",
+            review_id,
+        )
+    else:
+        logger.info(
+            "[retry] review %s resume=False — clearing any checkpoint, restart from step 0",
+            review_id,
+        )
     await session.reset_for_retry(clear_checkpoint=not body.resume)
     run_req = dict(session.run_request)
     if body.enable_cache is not None:
