@@ -253,6 +253,19 @@ class ReviewSession:
             self._live.status = ReviewStatus.FAILED.value
             self.error = f"Persist failed after completion: {exc}"
             await self._persist_failed_minimal()
+            return
+
+        # Best-effort push to BrainKB's Oxigraph triplestore. Runs in a
+        # threadpool so the synchronous httpx client doesn't block the event
+        # loop, and never raises — Postgres remains the source of truth.
+        try:
+            from .oxigraph_push import push_review_to_oxigraph
+            await asyncio.to_thread(push_review_to_oxigraph, self.review_id, result)
+        except Exception as exc:
+            logger.warning(
+                "[mark_completed] oxigraph push raised unexpectedly for %s: %s",
+                self.review_id, exc,
+            )
 
     async def mark_failed(self, error: str) -> None:
         self.status = ReviewStatus.FAILED
