@@ -51,5 +51,5 @@ ollama==0.6.0
 # the AI pipeline; the local module under core/synth_scholar/ is just the
 # orchestration layer (sessions, SSE, exports). SQLAlchemy 2.0 async backs
 # the review tables, separate from ml_service's raw-asyncpg pool.
-synthscholar[fulltext,semantic]==0.0.7
+synthscholar[fulltext,semantic]==0.0.8
 sqlalchemy[asyncio]>=2.0.30
