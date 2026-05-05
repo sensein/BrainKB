@@ -42,6 +42,45 @@ logger = logging.getLogger(__name__)
 _WRITE_BATCH = 10
 
 
+# ── Postgres-safe text sanitiser ─────────────────────────────────────────
+# PostgreSQL's TEXT and JSONB types reject the NUL byte (\x00) — asyncpg
+# raises:  UntranslatableCharacterError: unsupported Unicode escape sequence
+#          DETAIL: \x00 cannot be converted to text.
+# NUL bytes occasionally leak in via PDF full-text extraction (corrupt or
+# OCR-generated PDFs), upstream API responses, or LLM output. The agent
+# normally strips them at source, but we run this defensive scrub at every
+# write boundary so a single dirty byte can never abort a 6-hour review.
+#
+# We also strip the rest of the C0 set EXCEPT \t \n \r — those are valid
+# in Postgres TEXT and frequently appear in legitimate prose (newlines in
+# multi-line summaries, tab-separated tables, etc.).
+
+import re as _re_sanitise
+
+_PG_BAD_BYTES = _re_sanitise.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+
+def _scrub_pg_unsafe(obj):
+    """Recursively replace Postgres-illegal control bytes in any JSON-able value.
+
+    Strings: forbidden control bytes are removed (not escaped — these were
+    never meant to be in user-visible text in the first place).
+    Lists/tuples: walked element-wise.
+    Dicts: walked value-wise (keys are left alone — they're field names from
+    Pydantic models, can't legally contain control bytes).
+    Other types (int, float, bool, None, datetime): returned unchanged.
+    """
+    if isinstance(obj, str):
+        return _PG_BAD_BYTES.sub("", obj) if _PG_BAD_BYTES.search(obj) else obj
+    if isinstance(obj, list):
+        return [_scrub_pg_unsafe(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_scrub_pg_unsafe(v) for v in obj)
+    if isinstance(obj, dict):
+        return {k: _scrub_pg_unsafe(v) for k, v in obj.items()}
+    return obj
+
+
 # ── Runtime-only state ──────────────────────────────────────────────────
 
 @dataclass
@@ -202,7 +241,7 @@ class ReviewSession:
                     .where(ReviewRow.review_id == self.review_id)
                     .values(
                         progress_step=self.progress_step,
-                        pipeline_log=list(self.pipeline_log[-2000:]),
+                        pipeline_log=_scrub_pg_unsafe(list(self.pipeline_log[-2000:])),
                         status=effective_status,
                         stage=self.stage,
                         stage_idx=self.stage_index,
@@ -210,7 +249,7 @@ class ReviewSession:
                         stage_done_count=self.stage_done or 0,
                         stage_remaining=self.stage_remaining,
                         articles_included=self.articles_included,
-                        latest_message=self._live.latest_message or None,
+                        latest_message=_scrub_pg_unsafe(self._live.latest_message) or None,
                     )
                 )
                 await db.commit()
@@ -230,17 +269,21 @@ class ReviewSession:
                     .where(ReviewRow.review_id == self.review_id)
                     .values(
                         status=self.status.value,
-                        result_json=self.result.model_dump() if self.result else None,
+                        # Scrub Postgres-illegal control bytes (NUL etc.) from
+                        # the entire result tree — they sometimes leak in via
+                        # PDF full-text extraction and would otherwise abort
+                        # the UPDATE with UntranslatableCharacterError.
+                        result_json=_scrub_pg_unsafe(self.result.model_dump()) if self.result else None,
                         completed_at=datetime.fromisoformat(self.completed_at),
                         progress_step=self.progress_step,
-                        pipeline_log=list(self.pipeline_log),
+                        pipeline_log=_scrub_pg_unsafe(list(self.pipeline_log)),
                         stage=self.stage,
                         stage_idx=self.stage_index,
                         stage_total=self.stage_total,
                         stage_done_count=self.stage_done or 0,
                         stage_remaining=self.stage_remaining,
                         articles_included=self.articles_included,
-                        latest_message=self._live.latest_message or None,
+                        latest_message=_scrub_pg_unsafe(self._live.latest_message) or None,
                         pending_plan_json=None,
                         pending_plan_iteration=None,
                         plan_response_json=None,
@@ -283,10 +326,10 @@ class ReviewSession:
                     .where(ReviewRow.review_id == self.review_id)
                     .values(
                         status=self.status.value,
-                        error=self.error,
+                        error=_scrub_pg_unsafe(self.error),
                         completed_at=datetime.fromisoformat(self.completed_at) if self.completed_at else None,
                         progress_step=self.progress_step,
-                        pipeline_log=list(self.pipeline_log[-2000:]),
+                        pipeline_log=_scrub_pg_unsafe(list(self.pipeline_log[-2000:])),
                         pending_plan_json=None,
                         pending_plan_iteration=None,
                         plan_response_json=None,
@@ -385,12 +428,16 @@ class ReviewSession:
         step = state.get("last_completed_step", 0)
         self.checkpoint_json = state
         self.last_completed_step = step
+        # Checkpoints contain intermediate stage payloads (full-text-derived
+        # evidence, charting rubrics, etc.) so they need the same NUL-byte
+        # scrub the final result_json gets.
+        scrubbed = _scrub_pg_unsafe(state)
         try:
             async with async_session() as db:
                 await db.execute(
                     sa_update(ReviewRow)
                     .where(ReviewRow.review_id == self.review_id)
-                    .values(checkpoint_json=state, last_completed_step=step)
+                    .values(checkpoint_json=scrubbed, last_completed_step=step)
                 )
                 await db.commit()
         except Exception as exc:
