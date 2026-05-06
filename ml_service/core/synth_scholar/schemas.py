@@ -110,6 +110,13 @@ class CompareRunRequest(BaseModel):
 class RetryRequest(BaseModel):
     enable_cache: Optional[bool] = None
     resume: bool = True
+    # OpenRouter API key for the re-run. The key is intentionally NOT
+    # persisted with the original review (`run_request` is stored with
+    # ``exclude={"openrouter_api_key"}`` for security), so every retry has
+    # to provide it again — same shape as ``RunReviewRequest`` /
+    # ``CompareRunRequest``. Excluded from logs / model dumps via
+    # ``exclude=True, repr=False``.
+    openrouter_api_key: Optional[str] = Field(default=None, exclude=True, repr=False)
 
 
 class PlanResponseRequest(BaseModel):

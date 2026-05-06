@@ -1117,6 +1117,16 @@ async def retry_review(
             status_code=500,
             detail="Cannot retry — original configuration not saved. Please create a new review.",
         )
+    # Diagnostic — proves THIS version of the handler is running. If you
+    # see the legacy "No OpenRouter API key available. Configure one in the
+    # dashboard…" message but DON'T see this log line for the same review_id,
+    # the backend container is still running pre-fix code and needs a restart.
+    logger.info(
+        "[retry] handler v2 entered: review=%s resume=%s enable_cache=%s key_present=%s",
+        review_id, body.resume, body.enable_cache,
+        bool(body.openrouter_api_key),
+    )
+
     # Log resume intent before reset so we can audit "Resume from step N"
     # behaviour end-to-end. If body.resume=True and a checkpoint exists,
     # reset_for_retry preserves checkpoint_json + last_completed_step and
@@ -1142,6 +1152,23 @@ async def retry_review(
     if body.enable_cache is not None:
         run_req["enable_cache"] = body.enable_cache
         session.run_request = run_req
+    # Re-attach the OpenRouter key for this run only. The key is intentionally
+    # never stored with `run_request` (security), so it MUST come from the
+    # retry body. We validate it before re-spawning to give a 400 here
+    # rather than letting the pipeline fail asynchronously with the same
+    # "no key available" error and silently re-mark the review FAILED.
+    if not body.openrouter_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No OpenRouter API key provided for retry. The key is not "
+                "persisted with reviews — your client must include it in the "
+                "retry request body. Configure one in the dashboard's API "
+                "key tab, then click Resume / Retry again."
+            ),
+        )
+    _resolve_api_key(body.openrouter_api_key)  # validates env vs. shared vs. provided
+    run_req["openrouter_api_key"] = body.openrouter_api_key
     review_store._runtime[review_id] = session._live
     if run_req.get("compare_mode"):
         compare_request = CompareRunRequest(**{k: v for k, v in run_req.items() if k != "compare_mode"})
