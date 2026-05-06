@@ -27,7 +27,7 @@ Environment variables consumed
 ``SYNTH_SCHOLAR_GRAPHDB_PATH``                Endpoint path (default ``/store`` for GSP,
                                               use ``/update`` for SPARQL Update).
 ``SYNTH_SCHOLAR_GRAPHDB_NAMED_GRAPH_PREFIX``  IRI prefix for review-specific named graphs.
-                                              Default ``https://brainkb.org/reviews/``.
+                                              Default ``https://brainkb.org/synthscholar/reviews/``.
                                               Each review lands at ``{prefix}{review_id}``.
 ``SYNTH_SCHOLAR_GRAPHDB_PROTOCOL``            ``gsp`` (default) or ``update``.
 ``SYNTH_SCHOLAR_GRAPHDB_REPLACE``             If ``true``, replace the named graph each
@@ -130,7 +130,7 @@ def _named_graph_for(review_id: str) -> str:
     """IRI for the named graph holding *review_id*'s triples."""
     prefix = os.getenv(
         "SYNTH_SCHOLAR_GRAPHDB_NAMED_GRAPH_PREFIX",
-        "https://brainkb.org/reviews/",
+        "https://brainkb.org/synthscholar/reviews/",
     )
     if not prefix.endswith("/"):
         prefix += "/"
