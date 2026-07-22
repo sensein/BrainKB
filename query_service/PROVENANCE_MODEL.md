@@ -42,7 +42,9 @@ Instance IRIs are minted under `https://brainkb.org/prov/`:
 
 ## Tracked activities
 
-Every mutating action becomes a `prov:Activity` with a typed agent.
+Data-mutation actions become a `prov:Activity` in the provenance graph.
+Named-graph registration is **not** duplicated here — it is recorded on the
+registry graph (see §2).
 
 ### 1. Ingestion — `brainkb:IngestionActivity` (agent: user)
 
@@ -81,18 +83,26 @@ GRAPH <https://brainkb.org/provenance/> {
 }
 ```
 
-### 2. Named-graph registration — `brainkb:RegistrationActivity` (agent: user)
+### 2. Named-graph registration (recorded in the registry graph — no duplication)
 
-Written after a graph is registered via `POST /register-named-graph`.
+Registration is **not** written as a separate activity in the provenance graph,
+because the named-graph **registry** graph
+(`https://brainkb.org/metadata/named-graph`) already records each registration as
+a PROV entity. We simply attribute it to the registering user on that same entry,
+so registration facts live in exactly one place:
 
 ```turtle
-<…/prov/activity/reg-{uuid}>
-    a prov:Activity, brainkb:RegistrationActivity ;
-    prov:startedAtTime "…"^^xsd:dateTime ;
-    prov:wasAssociatedWith <…/prov/agent/{user}> ;
-    brainkb:targetGraph <{named_graph_url}> .
-<{named_graph_url}> prov:wasGeneratedBy <…/prov/activity/reg-{uuid}> .
+GRAPH <https://brainkb.org/metadata/named-graph> {
+  <{named_graph_url}>
+      a prov:Entity ;
+      prov:generatedAtTime "…"^^xsd:dateTime ;
+      dcterms:description "…" ;
+      prov:wasAttributedTo <…/prov/agent/{user}> .
+}
 ```
+
+`GET /api/query/registered-named-graphs` returns `registered_by` alongside the
+description and timestamp.
 
 ### 3. Crash recovery — `brainkb:RecoveryActivity` (agent: system)
 
@@ -161,8 +171,9 @@ Read endpoints return a PROV-O bundle as `application/ld+json` via SPARQL
 
 - `GET /api/provenance/job?job_id=…&user_id=…` — provenance for one job
   (access-controlled with `verify_user_access`).
-- `GET /api/provenance/named-graph?iri=…` — all ingestion/registration activity
-  that targeted a given named graph.
+- `GET /api/provenance/named-graph?iri=…` — all ingestion activity that targeted
+  a given named graph. (Registration attribution is on the registry graph; see
+  `GET /api/query/registered-named-graphs`.)
 
 Delta / change endpoints:
 

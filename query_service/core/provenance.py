@@ -33,7 +33,6 @@ from __future__ import annotations
 import datetime
 import json
 import logging
-import uuid
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -172,29 +171,6 @@ def build_ingestion_provenance(
         if added_triple_count is not None:
             g.add((delta, BRAINKB.addedTripleCount, Literal(int(added_triple_count), datatype=XSD.integer)))
 
-    return g
-
-
-def build_registration_provenance(
-    *,
-    named_graph_url: str,
-    agent_id: str,
-    at: Optional[str] = None,
-) -> Graph:
-    """Build PROV-O for a named-graph registration (agent: user)."""
-    g = _new_graph()
-    at = at or _now_iso()
-    activity = URIRef(PROV_BASE[f"activity/reg-{uuid.uuid4().hex}"])
-    agent = agent_ref(agent_id)
-
-    g.add((agent, RDF.type, PROV.Agent))
-    g.add((agent, RDF.type, PROV.Person))
-    g.add((activity, RDF.type, PROV.Activity))
-    g.add((activity, RDF.type, BRAINKB.RegistrationActivity))
-    g.add((activity, PROV.startedAtTime, Literal(at, datatype=XSD.dateTime)))
-    g.add((activity, PROV.wasAssociatedWith, agent))
-    g.add((activity, BRAINKB.targetGraph, URIRef(named_graph_url)))
-    g.add((URIRef(named_graph_url), PROV.wasGeneratedBy, activity))
     return g
 
 

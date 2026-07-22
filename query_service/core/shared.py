@@ -353,7 +353,7 @@ def chunk_ttl_to_named_graphs(ttl_str: str, named_graph_uri: str = "https://brai
     return chunks
 
 
-def named_graph_metadata(named_graph_url, description):
+def named_graph_metadata(named_graph_url, description, agent_uri=None):
     """
         Generates metadata for a named graph using the PROV and DCTERMS ontologies.
 
@@ -386,6 +386,13 @@ def named_graph_metadata(named_graph_url, description):
     g.add((prov_entity, RDF.type, PROV.Entity))
     g.add((prov_entity,PROV.generatedAtTime, Literal(created_At, datatype=XSD.dateTime)))
     g.add((prov_entity,DCTERMS.description, Literal(description, datatype=XSD.string)))
+    # Record who registered the graph directly on the registry entry (PROV-O).
+    # This keeps registration provenance in one place (the registry graph) rather
+    # than duplicating it as a separate activity in the provenance graph.
+    if agent_uri:
+        agent = URIRef(agent_uri)
+        g.add((agent, RDF.type, PROV.Agent))
+        g.add((prov_entity, PROV.wasAttributedTo, agent))
     named_graph_metadata = convert_ttl_to_named_graph(
         ttl_str=g.serialize(format='turtle'),
         named_graph_uri="https://brainkb.org/metadata/named-graph"

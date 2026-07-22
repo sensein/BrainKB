@@ -35,12 +35,13 @@ async def get_named_graphs():
     query_named_graph = """
           PREFIX prov: <http://www.w3.org/ns/prov#>
         PREFIX dcterms: <http://purl.org/dc/terms/>
-        Select distinct ?graph ?description ?registered_at
+        Select distinct ?graph ?description ?registered_at ?registered_by
         WHERE  {
           GRAPH <https://brainkb.org/metadata/named-graph> {
             ?graph dcterms:description ?description;
                prov:generatedAtTime ?registered_at.
-          } 
+            OPTIONAL { ?graph prov:wasAttributedTo ?registered_by. }
+          }
         }
     """
     response = await fetch_data_gdb_async(query_named_graph)
@@ -54,7 +55,8 @@ async def get_named_graphs():
         response_graph[graphs_info["graph"]["value"]] = {
             "graph": graphs_info["graph"]["value"],
             "description": graphs_info["description"]["value"],
-            "registered_at": graphs_info["registered_at"]["value"]
+            "registered_at": graphs_info["registered_at"]["value"],
+            "registered_by": graphs_info.get("registered_by", {}).get("value"),
         }
     return response_graph
 

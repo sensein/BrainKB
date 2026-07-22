@@ -50,8 +50,8 @@ from core.database import (
 from core.configuration import load_environment
 from core.provenance import (
     build_ingestion_provenance,
-    build_registration_provenance,
     build_recovery_provenance,
+    agent_ref,
     write_provenance,
     query_provenance_jsonld,
     construct_for_job,
@@ -1790,26 +1790,22 @@ async def create_named_graph(
         """
         named_graph_exists = await fetch_data_gdb_async(query)
         if not named_graph_exists.get("message", {}).get("boolean", False):
+            # Attribute the registration to the authenticated user (PROV-O). This is
+            # recorded on the registry entry itself (see named_graph_metadata) rather
+            # than duplicated as a separate activity in the provenance graph.
+            try:
+                agent_id = user["email"] or user["id"]
+            except (KeyError, TypeError, IndexError):
+                agent_id = "unknown"
+            agent_uri = str(agent_ref(str(agent_id)))
+
             # Register the new named graph
             response = await insert_data_gdb_async(named_graph_metadata(
                 named_graph_url=named_graph_url,
                 description=description,
+                agent_uri=agent_uri,
                 )
             )
-            # Record registration as a PROV-O RegistrationActivity (user agent)
-            try:
-                try:
-                    agent_id = user["email"] or user["id"]
-                except (KeyError, TypeError, IndexError):
-                    agent_id = "unknown"
-                await write_provenance(
-                    build_registration_provenance(
-                        named_graph_url=named_graph_url,
-                        agent_id=str(agent_id),
-                    )
-                )
-            except Exception as _pe:
-                logger.warning(f"[create_named_graph] Provenance write failed: {_pe}")
             return response
         else:
             return JSONResponse(
