@@ -229,6 +229,11 @@ async def query_provenance_jsonld(construct_query: str) -> Optional[str]:
     """
     Execute a SPARQL CONSTRUCT against Oxigraph and return JSON-LD text.
     Returns None on error.
+
+    Oxigraph does not serialize CONSTRUCT results as JSON-LD (it offers
+    Turtle / N-Triples / N-Quads / RDF-XML), so we request Turtle and convert to
+    JSON-LD locally with rdflib. This keeps the JSON-LD API contract independent
+    of the triplestore's supported output formats.
     """
     try:
         endpoint = _get_endpoint("get")  # .../query for OXIGRAPH
@@ -237,16 +242,21 @@ async def query_provenance_jsonld(construct_query: str) -> Optional[str]:
             resp = await client.post(
                 endpoint,
                 data={"query": construct_query},
-                headers={"Accept": "application/ld+json"},
+                headers={"Accept": "text/turtle"},
                 auth=auth,
             )
-        if resp.status_code == 200:
-            return resp.text
-        logger.warning(
-            "[provenance] CONSTRUCT query failed (HTTP %s): %s",
-            resp.status_code, (resp.text or "")[:500],
-        )
-        return None
+        if resp.status_code != 200:
+            logger.warning(
+                "[provenance] CONSTRUCT query failed (HTTP %s): %s",
+                resp.status_code, (resp.text or "")[:500],
+            )
+            return None
+        g = Graph()
+        g.parse(data=resp.text, format="turtle")
+        g.bind("prov", PROV)
+        g.bind("brainkb", BRAINKB)
+        g.bind("dcterms", DCTERMS)
+        return g.serialize(format="json-ld", auto_compact=True)
     except Exception as e:
         logger.warning(f"[provenance] Error querying provenance: {e}", exc_info=True)
         return None
@@ -271,6 +281,10 @@ def construct_for_job(job_id: str) -> str:
         {{ <{activity}> (<{PROV.wasAssociatedWith}>|<{PROV.used}>) ?s . ?s ?p ?o }}
         UNION
         {{ <{bundle}> <{PROV.wasAttributedTo}> ?s . ?s ?p ?o }}
+        UNION
+        {{ ?s <{PROV.used}> <{activity}> . ?s ?p ?o }}
+        UNION
+        {{ ?rec <{PROV.used}> <{activity}> ; <{PROV.wasAssociatedWith}> ?s . ?s ?p ?o }}
       }}
     }}
     """
