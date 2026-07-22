@@ -56,6 +56,12 @@ from core.provenance import (
     query_provenance_jsonld,
     construct_for_job,
     construct_for_named_graph,
+    delta_graph_for,
+    merge_delta_into_target,
+    count_graph_triples,
+    construct_delta_content,
+    delta_history_for_graph,
+    compare_deltas,
 )
 import datetime
 import uuid
@@ -85,6 +91,12 @@ DEFAULT_GRAPH = load_environment().get("DEFAULT_NAMED_GRAPH", "named_graph")
 
 # Supported file extensions
 SUPPORTED_EXTS = {"ttl", "turtle", "nt", "nq", "trig", "rdf", "owl", "jsonld", "json"}
+
+# Triple-level change tracking. When enabled, each job stages its triples in a
+# per-job delta graph (an exact, queryable record of what the job added) which is
+# then merged into the target graph. Costs extra storage (delta graphs persist);
+# set TRACK_TRIPLE_DELTAS=false to upload directly to the target instead.
+TRACK_TRIPLE_DELTAS = os.getenv("TRACK_TRIPLE_DELTAS", "true").strip().lower() in ("1", "true", "yes", "on")
 
 # Ensure job directory exists
 os.makedirs(JOB_BASE_DIR, exist_ok=True)
@@ -463,9 +475,12 @@ async def run_ingest_job(
     MAX_JOB_TIMEOUT = 2 * 60 * 60  # 2 hours
     job_start_time = time.time()
 
+    delta_graph = delta_graph_for(job_id)
+
     async def _write_ingestion_prov(status_label: str, results):
-        """Best-effort: record this job as a PROV-O IngestionActivity in Oxigraph.
-        Never raises — a provenance failure must not fail the job."""
+        """Best-effort finalizer: merge the per-job delta graph into the target,
+        then record this job as a PROV-O IngestionActivity (+ IngestionDelta) in
+        Oxigraph. Never raises — a provenance failure must not fail the job."""
         try:
             details = await get_job_details(job_id)
             named_graph = details.get("graph") if details else None
@@ -474,6 +489,16 @@ async def run_ingest_job(
             results = results or []
             succ = sum(1 for r in results if r.get("success"))
             fail = len(results) - succ
+
+            added_count = None
+            effective_delta_graph = None
+            if TRACK_TRIPLE_DELTAS:
+                # Count what the job staged, then merge the delta into the target graph.
+                added_count = await count_graph_triples(delta_graph)
+                if added_count and added_count > 0:
+                    await merge_delta_into_target(delta_graph, named_graph)
+                    effective_delta_graph = delta_graph
+
             prov_graph = build_ingestion_provenance(
                 job_id=job_id,
                 agent_id=user_id,
@@ -486,6 +511,8 @@ async def run_ingest_job(
                 fail_count=fail,
                 results=results,
                 agent_type="user",
+                delta_graph=effective_delta_graph,
+                added_triple_count=added_count,
             )
             await write_provenance(prov_graph)
         except Exception as _pe:
@@ -515,7 +542,10 @@ async def run_ingest_job(
         
         job_dir = job_details["job_dir"]
         graph = job_details["graph"]
-        
+        # When delta tracking is on, stage uploads in the per-job delta graph;
+        # _write_ingestion_prov merges it into the target graph at the end.
+        upload_graph = delta_graph if TRACK_TRIPLE_DELTAS else graph
+
         # Collect files in job_dir (exclude .processed files)
         file_infos: List[Dict[str, Any]] = []
         for name in os.listdir(job_dir):
@@ -555,7 +585,7 @@ async def run_ingest_job(
                         client,
                         filepath,
                         size,
-                        graph,
+                        upload_graph,
                         user_id,
                         skip_provenance=skip_provenance,
                         job_id=job_id,
@@ -1835,4 +1865,67 @@ async def get_named_graph_provenance(
             status_code=502,
         )
     return Response(content=jsonld, media_type="application/ld+json")
+
+
+@router.get("/provenance/delta", include_in_schema=True)
+async def get_job_delta(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    user_id: Annotated[str, Query(..., description="User identifier (must match the authenticated user)")],
+    job_id: Annotated[str, Query(..., description="Job identifier whose added triples to return")],
+):
+    """
+    GET /provenance/delta
+    Return the exact set of triples a job added (its delta graph) as JSON-LD.
+    This is the incremental change that job contributed to the target graph.
+    """
+    verify_user_access(user_id, user)
+    jsonld = await query_provenance_jsonld(construct_delta_content(job_id))
+    if jsonld is None:
+        return JSONResponse(
+            {"error": "Failed to retrieve delta from the graph database"},
+            status_code=502,
+        )
+    return Response(content=jsonld, media_type="application/ld+json")
+
+
+@router.get("/provenance/delta/history", include_in_schema=True)
+async def get_delta_history(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    iri: Annotated[str, Query(..., description="Named graph IRI to list the change history for")],
+):
+    """
+    GET /provenance/delta/history
+    Return the ordered change history of a named graph: one entry per ingestion
+    delta (job, added triple count, timestamp, status), newest first.
+    """
+    history = await delta_history_for_graph(iri)
+    if history is None:
+        return JSONResponse(
+            {"error": "Failed to retrieve delta history from the graph database"},
+            status_code=502,
+        )
+    return {"named_graph_iri": iri, "changes": history, "total": len(history)}
+
+
+@router.get("/provenance/delta/compare", include_in_schema=True)
+async def compare_job_deltas(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    user_id: Annotated[str, Query(..., description="User identifier (must match the authenticated user)")],
+    job_id_a: Annotated[str, Query(..., description="First job identifier")],
+    job_id_b: Annotated[str, Query(..., description="Second job identifier")],
+):
+    """
+    GET /provenance/delta/compare
+    Compare the triples added by two jobs. Returns counts (A-only, B-only,
+    shared) and the differing triples as JSON-LD, so users can see exactly how
+    two ingestion changes differ.
+    """
+    verify_user_access(user_id, user)
+    result = await compare_deltas(job_id_a, job_id_b)
+    if result is None:
+        return JSONResponse(
+            {"error": "Failed to compare deltas (one or both delta graphs unavailable)"},
+            status_code=502,
+        )
+    return result
 

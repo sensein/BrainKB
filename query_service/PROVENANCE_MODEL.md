@@ -115,15 +115,65 @@ via Oxigraph's Graph Store HTTP protocol (`POST {endpoint}/store?graph=…`, whi
 *merges* rather than replaces). Writes are best-effort: a provenance failure is
 logged but never fails the underlying job/registration.
 
+## Incremental change tracking (triple-level deltas)
+
+Provenance above records *who/what/when* at the activity level. To also track
+*which triples changed*, each ingestion job stages its data in a **per-job delta
+graph** before it reaches the target:
+
+```
+https://brainkb.org/provenance/delta/{job_id}
+```
+
+Flow (when `TRACK_TRIPLE_DELTAS=true`, the default):
+
+1. Each uploaded file is written to the job's delta graph (not the target).
+2. When the job finalizes, the delta graph is merged into the target graph
+   server-side via SPARQL `ADD SILENT <delta> TO <target>` (a set union, so
+   re-ingesting identical triples is idempotent — no duplicates).
+3. The delta graph is **preserved** as the immutable record of exactly what that
+   job added, and a PROV-O `brainkb:IngestionDelta` entity is written:
+
+```turtle
+<…/prov/delta/{job_id}>
+    a prov:Entity, brainkb:IngestionDelta ;
+    prov:wasGeneratedBy <…/prov/activity/{job_id}> ;
+    prov:wasDerivedFrom <{target_graph}> ;
+    brainkb:changeType "addition" ;
+    brainkb:targetGraph <{target_graph}> ;
+    brainkb:deltaGraph  <https://brainkb.org/provenance/delta/{job_id}> ;
+    brainkb:addedTripleCount 1234 ;
+    prov:generatedAtTime "…"^^xsd:dateTime ;
+    dcterms:isPartOf <…/prov/bundle/{job_id}> .
+```
+
+Set `TRACK_TRIPLE_DELTAS=false` to upload directly to the target graph (no delta
+graphs). Trade-off: delta graphs persist, so this roughly doubles stored triples
+for ingested data — the cost of full triple-level history and diffing.
+
+Current scope is **additions** (ingestion is append-only). Removals/updates would
+add a `removed` delta graph per activity; that is a future extension.
+
 ## Retrieval (JSON-LD)
 
-Two read endpoints return a PROV-O bundle as `application/ld+json` via SPARQL
+Read endpoints return a PROV-O bundle as `application/ld+json` via SPARQL
 `CONSTRUCT` against the provenance graph:
 
 - `GET /api/provenance/job?job_id=…&user_id=…` — provenance for one job
   (access-controlled with `verify_user_access`).
 - `GET /api/provenance/named-graph?iri=…` — all ingestion/registration activity
   that targeted a given named graph.
+
+Delta / change endpoints:
+
+- `GET /api/provenance/delta?job_id=…&user_id=…` — the exact triples a job added
+  (its delta graph) as JSON-LD (access-controlled).
+- `GET /api/provenance/delta/history?iri=…` — the ordered change history of a
+  named graph: one entry per delta (job, added triple count, timestamp, status),
+  newest first.
+- `GET /api/provenance/delta/compare?job_id_a=…&job_id_b=…&user_id=…` — compare
+  the triples added by two jobs; returns counts (A-only / B-only / shared) and the
+  differing triples as JSON-LD (access-controlled).
 
 Because everything is in Oxigraph, arbitrary provenance questions can also be
 asked directly over SPARQL, e.g. "all graphs ingested by agent X since T".
