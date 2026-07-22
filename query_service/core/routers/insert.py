@@ -18,7 +18,7 @@
 
 
 from fastapi import APIRouter, Request, HTTPException, status, UploadFile, File, Form, BackgroundTasks, Query, Body
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from core.graph_database_connection_manager import insert_data_gdb, insert_data_gdb_async
 import logging
 from core.pydantic_schema import InputKGTripleSchema, NamedGraphSchema
@@ -48,6 +48,15 @@ from core.database import (
     batch_insert_job_results,
 )
 from core.configuration import load_environment
+from core.provenance import (
+    build_ingestion_provenance,
+    build_registration_provenance,
+    build_recovery_provenance,
+    write_provenance,
+    query_provenance_jsonld,
+    construct_for_job,
+    construct_for_named_graph,
+)
 import datetime
 import uuid
 import asyncio
@@ -279,29 +288,13 @@ async def upload_single_file_path(
             total_files=total_files,
         )
     
-    # Process file (attach provenance if text-based RDF format)
-    if job_id and not skip_provenance:
-        from core.database import insert_processing_log
-        status_msg = f"Attaching provenance to {filename}"
-        await update_job_processing_state(
-            job_id=job_id,
-            current_stage="attaching_provenance",
-            status_message=status_msg
-        )
-        # Log to history
-        await insert_processing_log(
-            job_id=job_id,
-            file_name=filename,
-            stage="attaching_provenance",
-            status_message=status_msg,
-            file_index=file_index,
-            total_files=total_files,
-        )
-    
-    processed_filepath, provenance_success = await process_file_with_provenance(
-        filepath, user_id, ext, skip_provenance=skip_provenance
-    )
-    
+    # Provenance is tracked natively as PROV-O in Oxigraph's dedicated provenance
+    # graph (see core/provenance.py and PROVENANCE_MODEL.md), NOT embedded into the
+    # domain data. The uploaded file is therefore sent to Oxigraph unmodified.
+    # `skip_provenance` is retained on the API for backward compatibility but no
+    # longer controls domain-data embedding (which has been removed).
+    processed_filepath = filepath
+
     # Update processing state: Uploading file
     if job_id:
         from core.database import insert_processing_log
@@ -440,23 +433,6 @@ async def upload_single_file_path(
     if resp_text and len(resp_text) > max_len:
         resp_text = resp_text[:max_len] + "... [truncated]"
 
-    # Surface provenance-attachment failures. process_file_with_provenance returns
-    # success=False when it was asked to attach provenance but rdflib parsing failed;
-    # in that case the ORIGINAL (un-provenanced) file was uploaded. Previously this
-    # was silently swallowed and the job still reported success, hiding a data-integrity
-    # gap. We now flag it explicitly so the job result records it.
-    provenance_requested = not skip_provenance and ext in [
-        "ttl", "turtle", "nt", "nq", "jsonld", "json", "rdf", "owl"
-    ]
-    provenance_failed = provenance_requested and not provenance_success
-    if provenance_failed:
-        warning = (
-            f"WARNING: provenance could not be attached to {filename} "
-            f"(RDF parsing failed); the original file was uploaded WITHOUT provenance metadata. "
-        )
-        logger.warning(f"[upload_single_file_path] {warning.strip()}")
-        resp_text = warning + (resp_text or "")
-
     return {
         "file": filename,
         "ext": ext,
@@ -464,8 +440,6 @@ async def upload_single_file_path(
         "elapsed_s": elapsed,
         "http_status": resp.status_code,
         "success": success,
-        "provenance_attached": provenance_requested and provenance_success,
-        "provenance_requested": provenance_requested,
         "bps": bps,
         "response_body": resp_text,
     }
@@ -488,7 +462,35 @@ async def run_ingest_job(
     # This prevents jobs from running indefinitely
     MAX_JOB_TIMEOUT = 2 * 60 * 60  # 2 hours
     job_start_time = time.time()
-    
+
+    async def _write_ingestion_prov(status_label: str, results):
+        """Best-effort: record this job as a PROV-O IngestionActivity in Oxigraph.
+        Never raises — a provenance failure must not fail the job."""
+        try:
+            details = await get_job_details(job_id)
+            named_graph = details.get("graph") if details else None
+            if not named_graph:
+                return
+            results = results or []
+            succ = sum(1 for r in results if r.get("success"))
+            fail = len(results) - succ
+            prov_graph = build_ingestion_provenance(
+                job_id=job_id,
+                agent_id=user_id,
+                named_graph_iri=named_graph,
+                started_at=datetime.datetime.fromtimestamp(job_start_time, datetime.timezone.utc).isoformat(),
+                ended_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                status=status_label,
+                total_files=len(results),
+                success_count=succ,
+                fail_count=fail,
+                results=results,
+                agent_type="user",
+            )
+            await write_provenance(prov_graph)
+        except Exception as _pe:
+            logger.warning(f"[run_ingest_job] Provenance write failed for {job_id}: {_pe}")
+
     try:
         # Mark job as running (start_time was already set when job was created)
         from core.database import update_job_processing_state, insert_processing_log
@@ -615,8 +617,13 @@ async def run_ingest_job(
             status_message=status_msg,
         )
         await update_job_status(job_id, "done", end_time=time.time())
+        # Record PROV-O ingestion provenance in Oxigraph (source of truth)
+        _succ = sum(1 for r in all_results if r.get("success"))
+        _fail = len(all_results) - _succ
+        _status_label = "done" if _fail == 0 else ("failed" if _succ == 0 else "partial")
+        await _write_ingestion_prov(_status_label, all_results)
         logger.info(f"[run_ingest_job] Job {job_id} completed successfully")
-        
+
     except asyncio.TimeoutError as e:
         # Mark job as errored due to timeout
         from core.database import update_job_processing_state, insert_processing_log
@@ -632,6 +639,7 @@ async def run_ingest_job(
             status_message=status_msg,
         )
         await update_job_status(job_id, "error", end_time=time.time())
+        await _write_ingestion_prov("error", [])
         logger.error(f"[run_ingest_job] Job {job_id} timed out: {e}", exc_info=True)
     except Exception as e:
         # Mark job as errored
@@ -648,6 +656,7 @@ async def run_ingest_job(
             status_message=status_msg,
         )
         await update_job_status(job_id, "error", end_time=time.time())
+        await _write_ingestion_prov("error", [])
         logger.error(f"[run_ingest_job] Job {job_id} failed: {e}", exc_info=True)
     finally:
         # Ensure job status is always updated, even if something goes wrong
@@ -980,7 +989,15 @@ async def recover_stuck_jobs(
                             f"The job was marked as 'error' to prevent it from running indefinitely."
                         ),
                     )
-                
+
+                    # Record the automated recovery as a PROV-O RecoveryActivity (system agent)
+                    try:
+                        await write_provenance(
+                            build_recovery_provenance(job_id=job_id, cause=cause)
+                        )
+                    except Exception as _pe:
+                        logger.warning(f"[recover_stuck_jobs] Provenance write failed for {job_id}: {_pe}")
+
                 logger.info(f"[recover_stuck_jobs] Recovered {len(stuck_jobs)} stuck job(s) from server crash/restart")
                 return len(stuck_jobs)
             else:
@@ -1749,6 +1766,20 @@ async def create_named_graph(
                 description=description,
                 )
             )
+            # Record registration as a PROV-O RegistrationActivity (user agent)
+            try:
+                try:
+                    agent_id = user["email"] or user["id"]
+                except (KeyError, TypeError, IndexError):
+                    agent_id = "unknown"
+                await write_provenance(
+                    build_registration_provenance(
+                        named_graph_url=named_graph_url,
+                        agent_id=str(agent_id),
+                    )
+                )
+            except Exception as _pe:
+                logger.warning(f"[create_named_graph] Provenance write failed: {_pe}")
             return response
         else:
             return JSONResponse(
@@ -1764,4 +1795,44 @@ async def create_named_graph(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred processing the request {e}",
         )
+
+
+@router.get("/provenance/job", include_in_schema=True)
+async def get_job_provenance(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    user_id: Annotated[str, Query(..., description="User identifier (must match the authenticated user)")],
+    job_id: Annotated[str, Query(..., description="Job identifier to fetch provenance for")],
+):
+    """
+    GET /provenance/job
+    Return the W3C PROV-O provenance bundle (JSON-LD) for a single ingestion job,
+    reconstructed from the dedicated provenance graph in Oxigraph.
+    """
+    verify_user_access(user_id, user)
+    jsonld = await query_provenance_jsonld(construct_for_job(job_id))
+    if jsonld is None:
+        return JSONResponse(
+            {"error": "Failed to retrieve provenance from the graph database"},
+            status_code=502,
+        )
+    return Response(content=jsonld, media_type="application/ld+json")
+
+
+@router.get("/provenance/named-graph", include_in_schema=True)
+async def get_named_graph_provenance(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    iri: Annotated[str, Query(..., description="Named graph IRI to fetch provenance for")],
+):
+    """
+    GET /provenance/named-graph
+    Return the W3C PROV-O provenance (JSON-LD) for every activity (ingestion,
+    registration) that targeted the given named graph.
+    """
+    jsonld = await query_provenance_jsonld(construct_for_named_graph(iri))
+    if jsonld is None:
+        return JSONResponse(
+            {"error": "Failed to retrieve provenance from the graph database"},
+            status_code=502,
+        )
+    return Response(content=jsonld, media_type="application/ld+json")
 
