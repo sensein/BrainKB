@@ -125,6 +125,36 @@ def require_scopes(required_scopes: List[str]):
     return scoped_endpoint
 
 
+def verify_user_access(user_id: str, current_user) -> None:
+    """
+    Ensure the ``user_id`` supplied in a request belongs to the authenticated user.
+
+    Prevents Insecure Direct Object Reference (IDOR): endpoints take ``user_id`` as a
+    free-form parameter, so without this check any authenticated user could read or
+    recover another user's jobs simply by passing a different ``user_id``.
+
+    Clients may identify a user by either the numeric id or the email, so a match on
+    either is accepted. ``current_user`` is the record returned by ``get_current_user``.
+    """
+    identity = set()
+    try:
+        if current_user["id"] is not None:
+            identity.add(str(current_user["id"]))
+    except (KeyError, TypeError, IndexError):
+        pass
+    try:
+        if current_user["email"] is not None:
+            identity.add(str(current_user["email"]))
+    except (KeyError, TypeError, IndexError):
+        pass
+
+    if str(user_id) not in identity:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to access another user's resources.",
+        )
+
+
 async def authenticate_websocket(websocket: WebSocket, required_scopes: Optional[List[str]] = None) -> Optional[Dict]:
     """
     Authenticate WebSocket connection using JWT token from Authorization header.
