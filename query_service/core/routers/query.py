@@ -82,7 +82,15 @@ async def get_named_graphs():
 
 
 @router.get("/query/sparql/",
-            dependencies=[Depends(require_scopes(["write","admin"]))],
+            dependencies=[Depends(require_scopes(["admin"]))],
+            summary="Run an arbitrary SPARQL query (admin only)",
+            description=(
+                "Executes a caller-supplied SPARQL query against the graph database. "
+                "This is a powerful, unrestricted capability, so it is gated to the "
+                "**admin** scope only — deliberately NOT the default 'read' scope that "
+                "the fixed-shape read endpoints (e.g. /query/taxonomy, /query/"
+                "registered-named-graphs) use."
+            ),
             )
 async def sparql_query(
     user: Annotated[LoginUserIn, Depends(get_current_user)], sparql_query: str
