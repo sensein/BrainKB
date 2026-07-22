@@ -134,6 +134,30 @@ async def get_space_for_graph(named_graph_iri: str) -> Optional[Dict[str, Any]]:
         }
 
 
+async def hidden_graphs_for(member: Optional[str]) -> set:
+    """
+    Return the set of named-graph IRIs the caller must NOT see in listings: graphs
+    belonging to a PRIVATE space the caller is not a member of. Public-space graphs
+    and legacy (unmapped) graphs are never hidden. Anonymous callers (member=None)
+    have every private-space graph hidden.
+    """
+    async with get_db_connection() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT g.named_graph_iri
+            FROM space_graphs g
+            JOIN spaces s ON s.space_id = g.space_id
+            WHERE s.visibility = 'private'
+              AND NOT EXISTS (
+                  SELECT 1 FROM space_members m
+                  WHERE m.space_id = s.space_id AND m.member = $1
+              )
+            """,
+            member,
+        )
+        return {r["named_graph_iri"] for r in rows}
+
+
 async def member_role(space_id: str, member: Optional[str]) -> Optional[str]:
     if not member:
         return None

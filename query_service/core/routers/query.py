@@ -40,13 +40,17 @@ logger = logging.getLogger(__name__)
         "carries its `description`, `registered_at` timestamp, and `registered_by` "
         "(the user who registered it). Data is read from the registry graph "
         "`https://brainkb.org/metadata/named-graph`.\n\n"
+        "Visibility-filtered: graphs that belong to a **private space** the caller "
+        "is not a member of are omitted (so private graph existence is not leaked). "
+        "Public-space graphs and legacy (unmapped) graphs are always listed.\n\n"
         "This answers *\"what graphs are available?\"*. It is NOT a history of what "
         "was ingested — for the ingestion/activity history of a specific graph, use "
         "`GET /api/provenance/named-graph?iri=…`."
     ),
 )
-async def get_named_graphs():
-    """List every registered named graph with its registration metadata.
+async def get_named_graphs(user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    """List every registered named graph with its registration metadata,
+    filtered so private-space graphs the caller can't access are hidden.
 
     Registry (catalog) view: one row per graph with description, when it was
     registered, and by whom. Contrast with /api/provenance/named-graph, which
@@ -78,6 +82,17 @@ async def get_named_graphs():
             "registered_at": graphs_info["registered_at"]["value"],
             "registered_by": graphs_info.get("registered_by", {}).get("value"),
         }
+
+    # Hide graphs belonging to private spaces the caller is not a member of, so
+    # private graph existence is not leaked via the registry listing.
+    from core.spaces import hidden_graphs_for
+    try:
+        member = user["email"]
+    except (KeyError, TypeError, IndexError):
+        member = None
+    hidden = await hidden_graphs_for(member)
+    if hidden:
+        response_graph = {k: v for k, v in response_graph.items() if k not in hidden}
     return response_graph
 
 

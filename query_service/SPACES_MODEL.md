@@ -81,9 +81,15 @@ GRAPH <https://brainkb.org/metadata/spaces/> {
 }
 ```
 
-## Notes / future
+## Notes
 
-- `registered-named-graphs` still lists all registered graph IRIs; filtering that
-  listing by space visibility is a follow-up (data reads are already protected).
-- Job-scoped provenance endpoints remain owner-restricted (by `user_id`); making a
-  public space's ingestion provenance publicly readable is a follow-up.
+- `registered-named-graphs` is **visibility-filtered**: graphs in a private space
+  the caller isn't a member of are omitted, so private graph existence is not
+  leaked. Public-space and legacy (unmapped) graphs remain listed. The endpoint
+  requires authentication (read scope); anonymous discovery of public spaces is via
+  `GET /api/spaces`.
+- Job-scoped provenance endpoints are **intentionally owner-restricted** (by
+  `user_id` = authenticated identity) and stay that way — job provenance is not made
+  public even for public spaces. Ingestion is likewise restricted to activated JWT
+  users with valid credentials (and space owner/editor membership); it is never
+  anonymous. Only *reads* of public spaces are anonymous.
