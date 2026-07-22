@@ -4,11 +4,16 @@ This Dockerfile deploys the following BrainKB backend services:
 - **APItokenmanager** (Django) - Port 8000
 - **query_service** (FastAPI) - Port 8010
 - **ml_service** (FastAPI) - Port 8007
+  - Hosts the **SynthScholar** PRISMA literature-review pipeline at
+    `/api/synth-scholar/*` alongside the existing structsense routes.
+    SynthScholar reuses the unified `brainkb` Postgres database (no extra
+    DSN config required); see the SynthScholar block in `env.template` for
+    the optional API keys it consumes (OpenRouter / NCBI / Semantic Scholar
+    / CORE).
 - **usermanagement_service** (FastAPI) - Port 8004
 - **oxigraph** (SPARQL Database) - Port 7878
 
 **Services NOT included in this unified deployment (deploy separately):**
-- **brainkb-ui** - The UI is not included. See [SETUP_UI.md](SETUP_UI.md) for UI deployment instructions.
 - **chat_service** - Deploy separately using `chat_service/docker-compose-prod.yml` or `chat_service/docker-compose-dev.yml`.
 
 ## Quick Start with Docker Compose (Recommended)
@@ -549,6 +554,7 @@ All environment variables are loaded from the `.env` file in the project root. T
 - **User Management OAuth**: `USERMANAGEMENT_SERVICE_JWT_SECRET_KEY`, `USERMANAGEMENT_PUBLIC_BASE_URL`, `USERMANAGEMENT_FRONTEND_CALLBACK_URL`, `USERMANAGEMENT_OAUTH_TOKEN_ENC_KEY`, `USERMANAGEMENT_BOOTSTRAP_SUPERADMIN_EMAILS`, `GITHUB_CLIENT_ID/SECRET`, `ORCID_CLIENT_ID/SECRET`, `GLOBUS_CLIENT_ID/SECRET`
 - **Ollama**: `OLLAMA_MODEL`, `OLLAMA_PORT`, `OLLAMA_API_ENDPOINT`
 - **ML Service**: `MONGO_DB_URL`, `WEAVIATE_*`, etc.
+- **SynthScholar** (PRISMA reviews, lives in ml_service): `OPENROUTER_API_KEY` (operator fallback — UI normally forwards a per-user or admin-shared key), `NCBI_API_KEY` (optional, raises PubMed rate limits), `SEMANTIC_SCHOLAR_API_KEY` / `CORE_API_KEY` / `SYNTHSCHOLAR_EMAIL` (all optional). Database is shared — no separate DSN.
 - **Query Service**: `GRAPHDATABASE_*`, `RAPID_RELEASE_FILE`
 
 See `env.template` for the complete list of all available environment variables with descriptions.

@@ -163,4 +163,9 @@ volumes:
 networks:
   brainkb-network:
     external: true
+    # Pin the network name so it stays the same regardless of the compose
+    # project (folder) name. The brainkb-ui stack joins the same network by
+    # this fixed name. Create it once before bringing up either stack:
+    #     docker network create brainkb-network
+    name: brainkb-network
 

@@ -46,3 +46,10 @@ grpcio-health-checking==1.60.2
 
 PyMuPDF==1.26.5
 ollama==0.6.0
+
+# SynthScholar (PRISMA literature review). The `synthscholar` package owns
+# the AI pipeline; the local module under core/synth_scholar/ is just the
+# orchestration layer (sessions, SSE, exports). SQLAlchemy 2.0 async backs
+# the review tables, separate from ml_service's raw-asyncpg pool.
+synthscholar[fulltext,semantic]==0.0.11
+sqlalchemy[asyncio]>=2.0.30
