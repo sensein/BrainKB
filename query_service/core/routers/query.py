@@ -30,8 +30,28 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.get("/query/registered-named-graphs")
+@router.get(
+    "/query/registered-named-graphs",
+    dependencies=[Depends(require_scopes(["read"]))],
+    summary="List registered named graphs (the registry/catalog)",
+    description=(
+        "Returns the **catalog of named graphs** that have been registered in "
+        "BrainKB — i.e. *which* graphs exist and may be ingested into. Each entry "
+        "carries its `description`, `registered_at` timestamp, and `registered_by` "
+        "(the user who registered it). Data is read from the registry graph "
+        "`https://brainkb.org/metadata/named-graph`.\n\n"
+        "This answers *\"what graphs are available?\"*. It is NOT a history of what "
+        "was ingested — for the ingestion/activity history of a specific graph, use "
+        "`GET /api/provenance/named-graph?iri=…`."
+    ),
+)
 async def get_named_graphs():
+    """List every registered named graph with its registration metadata.
+
+    Registry (catalog) view: one row per graph with description, when it was
+    registered, and by whom. Contrast with /api/provenance/named-graph, which
+    returns the PROV-O activity history (ingestions) that targeted a graph.
+    """
     query_named_graph = """
           PREFIX prov: <http://www.w3.org/ns/prov#>
         PREFIX dcterms: <http://purl.org/dc/terms/>

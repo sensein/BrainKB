@@ -1383,7 +1383,8 @@ async def insert_file_knowledge_graph_triples(
     }
 
 @router.get("/insert/jobs",
-            include_in_schema=True
+            include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))],
             )
 async def list_jobs(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -1409,7 +1410,8 @@ async def list_jobs(
 
 
 @router.get("/insert/user/jobs/detail",
-            include_in_schema=True
+            include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))],
             )
 async def get_job_detail(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -1562,7 +1564,8 @@ async def get_job_detail(
 
 
 @router.get("/insert/jobs/check-recoverable",
-            include_in_schema=True
+            include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))],
             )
 async def check_job_recoverable_endpoint(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -1601,7 +1604,8 @@ async def check_job_recoverable_endpoint(
 
 
 @router.post("/insert/jobs/recover",
-            include_in_schema=True
+            include_in_schema=True,
+            dependencies=[Depends(require_scopes(["write"]))],
             )
 async def recover_stuck_jobs_endpoint(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -1761,7 +1765,9 @@ async def recover_stuck_jobs_endpoint(
         )
 
 
-@router.post("/register-named-graph")
+@router.post("/register-named-graph",
+             dependencies=[Depends(require_scopes(["write"]))],
+             )
 async def create_named_graph(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
         request: NamedGraphSchema
@@ -1823,16 +1829,31 @@ async def create_named_graph(
         )
 
 
-@router.get("/provenance/job", include_in_schema=True)
+@router.get(
+    "/provenance/job",
+    include_in_schema=True,
+    dependencies=[Depends(require_scopes(["read"]))],
+    summary="PROV-O provenance bundle for one ingestion job",
+    description=(
+        "Returns the **W3C PROV-O bundle** (JSON-LD) for a single ingestion job: "
+        "the `IngestionActivity` (with agent, start/end time, status, file counts), "
+        "the generated bundle entity, each per-file entity (upload status, HTTP "
+        "status, size), the `IngestionDelta` entity, and any recovery activity that "
+        "acted on the job. Access-controlled — the `user_id` must match the "
+        "authenticated caller."
+    ),
+)
 async def get_job_provenance(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
     user_id: Annotated[str, Query(..., description="User identifier (must match the authenticated user)")],
     job_id: Annotated[str, Query(..., description="Job identifier to fetch provenance for")],
 ):
     """
-    GET /provenance/job
-    Return the W3C PROV-O provenance bundle (JSON-LD) for a single ingestion job,
+    Return the full PROV-O provenance bundle (JSON-LD) for a single ingestion job,
     reconstructed from the dedicated provenance graph in Oxigraph.
+
+    Scope: everything about ONE job (activity + bundle + files + delta + recovery).
+    For a whole graph's history use /provenance/named-graph.
     """
     verify_user_access(user_id, user)
     jsonld = await query_provenance_jsonld(construct_for_job(job_id))
@@ -1844,15 +1865,34 @@ async def get_job_provenance(
     return Response(content=jsonld, media_type="application/ld+json")
 
 
-@router.get("/provenance/named-graph", include_in_schema=True)
+@router.get(
+    "/provenance/named-graph",
+    include_in_schema=True,
+    dependencies=[Depends(require_scopes(["read"]))],
+    summary="PROV-O activity history for a named graph",
+    description=(
+        "Returns the **W3C PROV-O provenance** (JSON-LD) describing how a named "
+        "graph's data came to be: every ingestion activity that targeted it, with "
+        "the agent, start/end times, per-file entities, and job status.\n\n"
+        "Difference from `GET /api/query/registered-named-graphs`:\n"
+        "- **registered-named-graphs** = the *registry/catalog* — which graphs "
+        "exist and their registration metadata (one row per graph).\n"
+        "- **provenance/named-graph** = the *activity history* — what was ingested "
+        "into a given graph, when, and by whom (a PROV-O bundle, potentially many "
+        "activities). Reads the provenance graph `https://brainkb.org/provenance/`."
+    ),
+)
 async def get_named_graph_provenance(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
-    iri: Annotated[str, Query(..., description="Named graph IRI to fetch provenance for")],
+    iri: Annotated[str, Query(..., description="Named graph IRI to fetch the ingestion/activity provenance for")],
 ):
     """
-    GET /provenance/named-graph
-    Return the W3C PROV-O provenance (JSON-LD) for every activity (ingestion,
-    registration) that targeted the given named graph.
+    Return the PROV-O provenance (JSON-LD) for every ingestion activity that
+    targeted the given named graph.
+
+    This is the *history of data mutations* on the graph, distinct from the
+    registry catalog returned by /api/query/registered-named-graphs. Registration
+    attribution lives on the registry entry (see that endpoint's `registered_by`).
     """
     jsonld = await query_provenance_jsonld(construct_for_named_graph(iri))
     if jsonld is None:
@@ -1863,7 +1903,8 @@ async def get_named_graph_provenance(
     return Response(content=jsonld, media_type="application/ld+json")
 
 
-@router.get("/provenance/delta", include_in_schema=True)
+@router.get("/provenance/delta", include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))])
 async def get_job_delta(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
     user_id: Annotated[str, Query(..., description="User identifier (must match the authenticated user)")],
@@ -1884,7 +1925,8 @@ async def get_job_delta(
     return Response(content=jsonld, media_type="application/ld+json")
 
 
-@router.get("/provenance/delta/history", include_in_schema=True)
+@router.get("/provenance/delta/history", include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))])
 async def get_delta_history(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
     iri: Annotated[str, Query(..., description="Named graph IRI to list the change history for")],
@@ -1903,7 +1945,8 @@ async def get_delta_history(
     return {"named_graph_iri": iri, "changes": history, "total": len(history)}
 
 
-@router.get("/provenance/delta/compare", include_in_schema=True)
+@router.get("/provenance/delta/compare", include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))])
 async def compare_job_deltas(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
     user_id: Annotated[str, Query(..., description="User identifier (must match the authenticated user)")],
