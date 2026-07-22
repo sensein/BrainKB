@@ -47,7 +47,14 @@ Once started, services are accessible at:
 - **API Token Manager (Django)**: `http://localhost:8000/`
   - Once you register JWT user you need to activate it using token manager. You can also assign permission.
 - **Query Service (FastAPI)**: `http://localhost:8010/`
-  - Now supports ingestion than just querying.
+  - Supports querying **and** ingestion of the knowledge graphs.
+  - Native W3C PROV-O provenance in the graph database, with triple-level delta
+    tracking (per-job delta graphs + query/compare endpoints).
+  - **Spaces**: team-owned, private/public containers of named graphs — keep data
+    private to members or publish it publicly (anonymous read). Per-endpoint JWT
+    scopes (`read`/`write`/`admin`).
+  - See `query_service/README.md`, `query_service/PROVENANCE_MODEL.md`, and
+    `query_service/SPACES_MODEL.md` for details.
 - **ML Service (FastAPI)**: `http://localhost:8007/`
   - Integrates StructSense (multi-agent NER + structured-resource extraction).
   - Hosts **SynthScholar** at `/api/synth-scholar/*` — PRISMA-guided literature
