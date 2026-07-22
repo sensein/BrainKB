@@ -12,6 +12,7 @@ from core.routers.jwt_auth import router as jwt_router
 from core.routers.query import router as query_router
 from core.routers.rapid_release import router as rapid_release
 from core.routers.insert import router as insert_router
+from core.routers.spaces import router as spaces_router
 from core.configuration import load_environment
 from core.database import init_db_pool
 from core.graph_database_connection_manager import initialize_metadata_graph
@@ -50,6 +51,7 @@ app.include_router(index_router, prefix="/api")
 app.include_router(jwt_router, prefix="/api")
 app.include_router(query_router, prefix="/api")
 app.include_router(insert_router,prefix="/api")
+app.include_router(spaces_router, prefix="/api", tags=["Spaces"])
 
 # rapid-release
 app.include_router(rapid_release, prefix="/api/rapid-release", tags=["Rapid release"])
@@ -153,6 +155,52 @@ async def startup_event():
                     except Exception:
                         pass  # Indexes may already exist
                     logger.info("Job tracking tables initialized")
+
+                    # Spaces: owner-controlled containers of named graphs with
+                    # private/public visibility and team membership (see spaces.py).
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS spaces (
+                            space_id TEXT PRIMARY KEY,
+                            slug TEXT UNIQUE NOT NULL,
+                            name TEXT NOT NULL,
+                            description TEXT,
+                            owner TEXT NOT NULL,
+                            visibility TEXT NOT NULL DEFAULT 'private',
+                            created_at DOUBLE PRECISION,
+                            updated_at DOUBLE PRECISION
+                        )
+                        """
+                    )
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS space_members (
+                            id SERIAL PRIMARY KEY,
+                            space_id TEXT NOT NULL REFERENCES spaces(space_id) ON DELETE CASCADE,
+                            member TEXT NOT NULL,
+                            role TEXT NOT NULL,
+                            added_at DOUBLE PRECISION,
+                            UNIQUE (space_id, member)
+                        )
+                        """
+                    )
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS space_graphs (
+                            id SERIAL PRIMARY KEY,
+                            space_id TEXT NOT NULL REFERENCES spaces(space_id) ON DELETE CASCADE,
+                            named_graph_iri TEXT NOT NULL UNIQUE,
+                            added_at DOUBLE PRECISION
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_space_members_space ON space_members(space_id)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_space_members_member ON space_members(member)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_space_graphs_space ON space_graphs(space_id)")
+                    except Exception:
+                        pass
+                    logger.info("Spaces tables initialized")
                     break  # Success, exit retry loop
                 finally:
                     await pool.release(conn)

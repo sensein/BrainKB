@@ -21,7 +21,7 @@ import logging
 import asyncio
 from typing import Annotated, List, Optional, Dict
 
-from fastapi import Depends, HTTPException, status, WebSocket
+from fastapi import Depends, HTTPException, status, WebSocket, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.security import OAuth2PasswordBearer
 from jose import ExpiredSignatureError, JWTError, jwt
@@ -105,6 +105,30 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
     return user
+
+
+async def get_current_user_optional(request: Request):
+    """
+    Return the authenticated user if a valid Bearer token is present, else None.
+
+    Unlike get_current_user this NEVER raises on a missing/invalid token — it is
+    for endpoints that serve public resources anonymously but still want to know
+    the caller's identity when a token is supplied (e.g. public-space reads).
+    """
+    auth = request.headers.get("authorization", "")
+    if not auth[:7].lower() == "bearer ":
+        return None
+    token = auth[7:].strip()
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        if not email:
+            return None
+        return await get_user(email=email)
+    except (ExpiredSignatureError, JWTError, Exception):
+        return None
 
 
 def verify_scopes(required_scopes: List[str], token: str) -> bool:

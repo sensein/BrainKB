@@ -48,6 +48,7 @@ from core.database import (
     batch_insert_job_results,
 )
 from core.configuration import load_environment
+from core.spaces import authorize as authorize_space_access
 from core.provenance import (
     build_ingestion_provenance,
     build_recovery_provenance,
@@ -75,6 +76,14 @@ from pathlib import Path
 from rdflib import Graph
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _agent_email(user):
+    """Caller's identity string (email), used for space membership checks."""
+    try:
+        return user["email"]
+    except (KeyError, TypeError, IndexError):
+        return None
 
 # Global dictionary to track running background tasks
 # Maps job_id -> asyncio.Task for checking if job is actually running
@@ -1124,12 +1133,22 @@ async def insert_knowledge_graph_triples(
             },
             status_code=400,
         )
-    
+
+    # If the graph belongs to a space, enforce space write-authorization
+    # (owner/editor). Unmapped legacy graphs fall through (scope check applies).
+    _graph_key = named_graph_iri if named_graph_iri.endswith("/") else named_graph_iri + "/"
+    _allowed, _reason = await authorize_space_access(_graph_key, _agent_email(user), "write")
+    if not _allowed:
+        return JSONResponse(
+            {"error": f"Not authorized to ingest into this graph: {_reason}", "named_graph_iri": named_graph_iri},
+            status_code=403,
+        )
+
     job_id = uuid.uuid4().hex
-    
+
     # Get Oxigraph endpoint from configuration
     endpoint = get_oxigraph_endpoint()
-    
+
     raw_bytes = data.encode("utf-8")
     if len(raw_bytes) > MAX_RAW_SIZE_BYTES:
         return JSONResponse(
@@ -1236,7 +1255,17 @@ async def insert_file_knowledge_graph_triples(
             },
             status_code=400,
         )
-    
+
+    # If the graph belongs to a space, enforce space write-authorization
+    # (owner/editor). Unmapped legacy graphs fall through (scope check applies).
+    _graph_key = named_graph_iri if named_graph_iri.endswith("/") else named_graph_iri + "/"
+    _allowed, _reason = await authorize_space_access(_graph_key, _agent_email(user), "write")
+    if not _allowed:
+        return JSONResponse(
+            {"error": f"Not authorized to ingest into this graph: {_reason}", "named_graph_iri": named_graph_iri},
+            status_code=403,
+        )
+
     job_id = uuid.uuid4().hex  # generate for job tracking
     
     # Get Oxigraph endpoint from configuration
