@@ -258,6 +258,92 @@ async def attach_graph(space_id: str, named_graph_iri: str) -> None:
 # Authorization (enforcement)
 # ---------------------------------------------------------------------------
 
+ACTIONS = ("read", "write", "manage")
+RULE_SUBJECTS = ("global_role", "member", "space_role")
+_SPACE_ROLE_RANK = {"viewer": 1, "editor": 2, "owner": 3}
+
+
+async def add_access_rule(space_id: str, action: str, subject_type: str,
+                          subject_value: str, created_by: str) -> None:
+    if action not in ACTIONS:
+        raise ValueError(f"action must be one of {ACTIONS}")
+    if subject_type not in RULE_SUBJECTS:
+        raise ValueError(f"subject_type must be one of {RULE_SUBJECTS}")
+    if subject_type == "space_role" and subject_value not in _SPACE_ROLE_RANK:
+        raise ValueError("space_role subject_value must be viewer/editor/owner")
+    async with get_db_connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO space_access_rules (space_id, action, subject_type, subject_value, created_by, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (space_id, action, subject_type, subject_value) DO NOTHING
+            """,
+            space_id, action, subject_type, subject_value, created_by, time.time(),
+        )
+
+
+async def remove_access_rule(space_id: str, rule_id: int) -> None:
+    async with get_db_connection() as conn:
+        await conn.execute(
+            "DELETE FROM space_access_rules WHERE id = $1 AND space_id = $2", rule_id, space_id
+        )
+
+
+async def list_access_rules(space_id: str, action: Optional[str] = None) -> List[Dict[str, Any]]:
+    async with get_db_connection() as conn:
+        if action:
+            rows = await conn.fetch(
+                "SELECT id, action, subject_type, subject_value FROM space_access_rules WHERE space_id=$1 AND action=$2 ORDER BY id",
+                space_id, action)
+        else:
+            rows = await conn.fetch(
+                "SELECT id, action, subject_type, subject_value FROM space_access_rules WHERE space_id=$1 ORDER BY action, id",
+                space_id)
+        return [dict(r) for r in rows]
+
+
+async def matches_access_rule(space_id: str, action: str, email: Optional[str]) -> bool:
+    """True iff the caller matches at least one access rule for (space, action).
+    Pure rule match — no owner/admin bypass, no 'no rules' default."""
+    from core import rbac
+    rules = await list_access_rules(space_id, action)
+    if not rules:
+        return False
+    roles = await rbac.active_roles(email)
+    srole = await member_role(space_id, email)
+    srank = _SPACE_ROLE_RANK.get(srole or "", 0)
+    for r in rules:
+        st, sv = r["subject_type"], r["subject_value"]
+        if st == "global_role" and sv in roles:
+            return True
+        if st == "member" and email and sv == email:
+            return True
+        if st == "space_role" and srank >= _SPACE_ROLE_RANK.get(sv, 99):
+            return True
+    return False
+
+
+async def space_action_permitted(space: Dict[str, Any], action: str, email: Optional[str]) -> bool:
+    """
+    Fine-grained per-space check for read/write. Returns True if the caller may do
+    `action` in this space under the space's access rules.
+
+    - Owner and global Admin/SuperAdmin always pass (no lockout).
+    - No rules for the action -> True (the endpoint's normal capability / membership
+      / visibility gates still apply separately).
+    - Rules present -> caller must match at least one.
+    """
+    from core import rbac
+    space_id = space["space_id"]
+    if email and await member_role(space_id, email) == "owner":
+        return True
+    if await rbac.is_admin(email):
+        return True
+    if not await list_access_rules(space_id, action):
+        return True
+    return await matches_access_rule(space_id, action, email)
+
+
 async def authorize(named_graph_iri: str, member: Optional[str], need: str) -> Tuple[bool, str]:
     """
     Decide whether ``member`` (a user email, or None if anonymous) may read/write

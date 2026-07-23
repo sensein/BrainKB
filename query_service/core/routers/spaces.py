@@ -43,12 +43,15 @@ def _agent(user) -> str:
 
 async def _can_manage(space: dict, email: str) -> bool:
     """Who may manage a space (members/visibility/graphs): the space owner, an
-    Admin/SuperAdmin, or — for team spaces — a holder of manage_team_space."""
+    Admin/SuperAdmin, a holder of manage_team_space (team spaces), or someone
+    matched by a per-space 'manage' access rule."""
     if await sp.member_role(space["space_id"], email) == "owner":
         return True
     if await rbac.is_admin(email):
         return True
     if space.get("space_type") == "team" and await rbac.has_capability(email, rbac.MANAGE_TEAM_SPACE):
+        return True
+    if await sp.matches_access_rule(space["space_id"], "manage", email):
         return True
     return False
 
@@ -134,6 +137,9 @@ async def get_space(slug: str, user: Annotated[Optional[object], Depends(get_cur
         role = await sp.member_role(space["space_id"], member)
         if role is None or not await rbac.has_capability(member, rbac.READ_PRIVATE):
             raise HTTPException(403, "private space — membership and a role are required")
+    # Fine-grained per-space read rules (if any) further restrict who can read.
+    if not await sp.space_action_permitted(space, "read", member):
+        raise HTTPException(403, "restricted by a space access rule (read)")
     return space
 
 
@@ -234,6 +240,9 @@ async def read_space_data(slug: str, user: Annotated[Optional[object], Depends(g
         if await sp.member_role(space["space_id"], member) is None \
                 or not await rbac.has_capability(member, rbac.READ_PRIVATE):
             raise HTTPException(403, "private space — membership and a role are required")
+    # Fine-grained per-space read rules (if any) further restrict who can read.
+    if not await sp.space_action_permitted(space, "read", member):
+        raise HTTPException(403, "restricted by a space access rule (read)")
     if not space["graphs"]:
         return Response(content='{"@graph": []}', media_type="application/ld+json")
     jsonld = await query_provenance_jsonld(await sp.construct_space_graphs(space))
@@ -249,6 +258,60 @@ async def read_space_data(slug: str, user: Annotated[Optional[object], Depends(g
 class GrantIn(BaseModel):
     member: str
     capability: str
+
+
+class AccessRuleIn(BaseModel):
+    action: str          # read | write | manage
+    subject_type: str    # global_role | member | space_role
+    subject_value: str   # role name / email / viewer|editor|owner
+
+
+@router.get("/spaces/{slug}/access-rules",
+            summary="List a space's fine-grained access rules")
+async def list_access_rules(slug: str, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    space = await sp.get_space(slug)
+    if not space:
+        return JSONResponse({"error": "space not found"}, status_code=404)
+    email = _agent(user)
+    # visible to managers or members of the space
+    if not await _can_manage(space, email) and await sp.member_role(space["space_id"], email) is None:
+        raise HTTPException(403, "must be a member or manager of the space")
+    return {"slug": slug, "rules": await sp.list_access_rules(space["space_id"])}
+
+
+@router.post("/spaces/{slug}/access-rules",
+             dependencies=[Depends(require_scopes(["write"]))],
+             summary="Add a fine-grained access rule (space manager only)",
+             description="Restrict a space action to a subject. action: read|write|manage. "
+                         "subject_type: global_role (e.g. 'Admin','Lab Member') | member "
+                         "(an email) | space_role (viewer|editor|owner). When rules exist "
+                         "for an action, only matching callers may perform it (owner and "
+                         "Admin/SuperAdmin always bypass).")
+async def add_access_rule(slug: str, body: AccessRuleIn, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    space = await sp.get_space(slug)
+    if not space:
+        return JSONResponse({"error": "space not found"}, status_code=404)
+    if not await _can_manage(space, _agent(user)):
+        raise HTTPException(403, "not authorized to manage this space's access rules")
+    try:
+        await sp.add_access_rule(space["space_id"], body.action, body.subject_type,
+                                 body.subject_value, _agent(user))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"slug": slug, "rules": await sp.list_access_rules(space["space_id"])}
+
+
+@router.delete("/spaces/{slug}/access-rules/{rule_id}",
+               dependencies=[Depends(require_scopes(["write"]))],
+               summary="Delete a fine-grained access rule (space manager only)")
+async def delete_access_rule(slug: str, rule_id: int, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    space = await sp.get_space(slug)
+    if not space:
+        return JSONResponse({"error": "space not found"}, status_code=404)
+    if not await _can_manage(space, _agent(user)):
+        raise HTTPException(403, "not authorized to manage this space's access rules")
+    await sp.remove_access_rule(space["space_id"], rule_id)
+    return {"slug": slug, "rules": await sp.list_access_rules(space["space_id"])}
 
 
 @router.get("/admin/capabilities",

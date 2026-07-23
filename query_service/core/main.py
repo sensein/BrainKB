@@ -230,6 +230,29 @@ async def startup_event():
                         pass
                     logger.info("RBAC capability-grants table initialized")
 
+                    # Fine-grained per-space access rules: restrict a space action
+                    # (read/write/manage) to a global role, a space role, or specific
+                    # members. Owner + global Admin/SuperAdmin always bypass.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS space_access_rules (
+                            id SERIAL PRIMARY KEY,
+                            space_id TEXT NOT NULL REFERENCES spaces(space_id) ON DELETE CASCADE,
+                            action TEXT NOT NULL,
+                            subject_type TEXT NOT NULL,
+                            subject_value TEXT NOT NULL,
+                            created_by TEXT,
+                            created_at DOUBLE PRECISION,
+                            UNIQUE (space_id, action, subject_type, subject_value)
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_space_access_rules_space ON space_access_rules(space_id, action)")
+                    except Exception:
+                        pass
+                    logger.info("Space access-rules table initialized")
+
                     # Search locator index (hybrid search): Postgres full-text index that
                     # locates subjects/subgraphs (carrying graph + workspace/space), then the
                     # actual triples are fetched from Oxigraph. Access is filtered by space

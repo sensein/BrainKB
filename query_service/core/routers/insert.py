@@ -49,6 +49,7 @@ from core.database import (
 )
 from core.configuration import load_environment
 from core.spaces import authorize as authorize_space_access
+from core import spaces as _spaces
 from core import rbac
 from core.provenance import (
     build_ingestion_provenance,
@@ -1196,6 +1197,14 @@ async def insert_knowledge_graph_triples(
             {"error": f"Not authorized to ingest into this graph: {_reason}", "named_graph_iri": named_graph_iri},
             status_code=403,
         )
+    # Fine-grained per-space write rules (if any) further restrict who can ingest.
+    _space_for_graph = await _spaces.get_space_for_graph(_graph_key)
+    if _space_for_graph and not await _spaces.space_action_permitted(_space_for_graph, "write", _agent_email(user)):
+        return JSONResponse(
+            {"error": "Not authorized to ingest into this graph: restricted by a space access rule.",
+             "named_graph_iri": named_graph_iri},
+            status_code=403,
+        )
 
     job_id = uuid.uuid4().hex
 
@@ -1323,6 +1332,14 @@ async def insert_file_knowledge_graph_triples(
     if not _allowed:
         return JSONResponse(
             {"error": f"Not authorized to ingest into this graph: {_reason}", "named_graph_iri": named_graph_iri},
+            status_code=403,
+        )
+    # Fine-grained per-space write rules (if any) further restrict who can ingest.
+    _space_for_graph = await _spaces.get_space_for_graph(_graph_key)
+    if _space_for_graph and not await _spaces.space_action_permitted(_space_for_graph, "write", _agent_email(user)):
+        return JSONResponse(
+            {"error": "Not authorized to ingest into this graph: restricted by a space access rule.",
+             "named_graph_iri": named_graph_iri},
             status_code=403,
         )
 

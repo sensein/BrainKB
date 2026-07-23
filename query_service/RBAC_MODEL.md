@@ -85,11 +85,36 @@ membership** (resource).
 - `POST /api/admin/capabilities/grant`  `{member, capability}` — delegate a cap.
 - `POST /api/admin/capabilities/revoke` `{member, capability}`.
 
-## Notes / next
+## Fine-grained per-space access rules
 
-- Coarse per-space roles today are owner/editor/viewer plus the capability gates
-  above. **Fine-grained in-space rules** (e.g. an action inside a space limited to
-  Admins, or to specific Lab Members) are the next iteration — the primitives
-  (space membership + roles + capabilities) are in place to build on.
+On top of capabilities + owner/editor/viewer membership, a space can carry
+**access rules** that restrict a specific action to specific subjects — e.g. "in
+this space, only Admins may write", "only these Lab Members may read", "let this
+member manage".
+
+- Rule = `(action, subject_type, subject_value)`:
+  - `action` ∈ `read` | `write` | `manage`
+  - `subject_type` ∈ `global_role` (e.g. `Admin`, `Lab Member`) | `member` (an
+    email) | `space_role` (`viewer`|`editor`|`owner`, matched as ">=")
+- Semantics per action:
+  - **Owner** of the space and **global Admin/SuperAdmin** always pass (no lockout).
+  - `read`/`write`: if **no** rules exist for the action, the normal
+    capability/membership/visibility gates apply; if rules **do** exist, the caller
+    must also **match at least one**.
+  - `manage`: owner/admin/`manage_team_space` by default; a `manage` rule can
+    additionally **grant** management to a matched subject.
+- Rules layer *on top of* the global gates — e.g. ingest still needs the `ingest`
+  capability and space owner/editor membership; a write rule then narrows *which*
+  of those writers may actually ingest here.
+
+Endpoints (space manager only, except GET which is member/manager):
+
+- `GET    /api/spaces/{slug}/access-rules`
+- `POST   /api/spaces/{slug}/access-rules`  `{action, subject_type, subject_value}`
+- `DELETE /api/spaces/{slug}/access-rules/{rule_id}`
+
+## Notes
+
 - JWT scopes (`read`/`write`/`admin`) remain as an API-access layer for defense in
-  depth; the authoritative "who can do what" is the role/capability layer above.
+  depth; the authoritative "who can do what" is the role/capability + per-space
+  rule layer above.
