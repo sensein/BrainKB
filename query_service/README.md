@@ -65,6 +65,8 @@ members only; **write/ingest** = space owner/editor only. See
 
 ### Search
 - `GET /search?q=…[&space={slug}][&limit&offset]` — full-text search, access-filtered.
+- `POST /search/reindex` (**admin**) — queue a background backfill/rebuild of the index.
+- `GET /search/index-tasks[?task_id=…]` — background indexing task status.
 
 Hybrid design: **Postgres** holds a full-text **locator index** (`graph_search_index`:
 subject + text + named graph + owning space), populated at ingest. A search runs in
@@ -73,6 +75,11 @@ triples are fetched from **Oxigraph** (the source of truth). Anonymous → publi
 spaces only; authenticated → public + own/member spaces (+ legacy). Pass `space` to
 scope to one workspace, omit for a full search. Private data is never returned to
 non-members — the filter is enforced in the locator query.
+
+**Indexing is asynchronous.** It never blocks ingestion: ingest enqueues an indexing
+task on an in-process async queue (durable `index_tasks` table, background consumer,
+atomic cross-worker claim, restart recovery) and the job completes immediately. The
+`/search/reindex` backfill uses the same queue. Poll `/search/index-tasks` for status.
 
 ## Architecture notes
 

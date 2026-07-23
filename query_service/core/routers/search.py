@@ -16,8 +16,10 @@ from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from core.security import get_current_user_optional
+from core.models.user import LoginUserIn
+from core.security import get_current_user, get_current_user_optional, require_scopes
 from core import search as se
+from core import indexing as ix
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -56,3 +58,33 @@ async def search(
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
     return await se.search(q=q, caller=_agent(user), space_slug=space, limit=limit, offset=offset)
+
+
+@router.post(
+    "/search/reindex",
+    dependencies=[Depends(require_scopes(["admin"]))],
+    summary="Backfill/rebuild the search index (admin) — runs in background",
+    description="Queues a background task that reindexes every user graph into the "
+                "Postgres locator index. Returns immediately with a task_id; poll "
+                "GET /search/index-tasks for progress.",
+)
+async def reindex(user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    task_id = await ix.enqueue_backfill()
+    return {"status": "queued", "task_id": task_id,
+            "message": "Backfill reindex queued; runs in the background."}
+
+
+@router.get(
+    "/search/index-tasks",
+    dependencies=[Depends(require_scopes(["read"]))],
+    summary="List background indexing tasks and their status",
+)
+async def index_tasks(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    task_id: Annotated[Optional[str], Query(description="Fetch a single task by id")] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+):
+    if task_id:
+        t = await ix.get_task(task_id)
+        return t or {"error": "task not found"}
+    return {"tasks": await ix.list_tasks(limit)}

@@ -525,13 +525,13 @@ async def run_ingest_job(
             )
             await write_provenance(prov_graph)
 
-            # Update the Postgres search locator index for the target graph
-            # (best-effort). Only subjects touched by this job when deltas are on.
+            # Queue search indexing to run in the BACKGROUND (do not block the job
+            # on it — indexing a large graph can be slow). Best-effort enqueue.
             try:
-                from core.search import index_graph_subjects
-                await index_graph_subjects(named_graph, effective_delta_graph)
+                from core.indexing import enqueue_ingest
+                await enqueue_ingest(named_graph, effective_delta_graph)
             except Exception as _se:
-                logger.warning(f"[run_ingest_job] Search indexing failed for {job_id}: {_se}")
+                logger.warning(f"[run_ingest_job] Failed to queue search indexing for {job_id}: {_se}")
         except Exception as _pe:
             logger.warning(f"[run_ingest_job] Provenance write failed for {job_id}: {_pe}")
 

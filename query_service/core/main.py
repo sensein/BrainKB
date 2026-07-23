@@ -229,6 +229,34 @@ async def startup_event():
                     except Exception:
                         pass
                     logger.info("Search index table initialized")
+
+                    # Async indexing task queue: search indexing runs in the
+                    # background (not inline with ingest) so large graphs don't
+                    # block jobs. Task status is durable here for observability
+                    # and cross-restart recovery.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS index_tasks (
+                            task_id TEXT PRIMARY KEY,
+                            kind TEXT NOT NULL,
+                            target TEXT,
+                            delta_graph TEXT,
+                            status TEXT NOT NULL,
+                            subjects_indexed INTEGER DEFAULT 0,
+                            graphs_total INTEGER,
+                            graphs_done INTEGER DEFAULT 0,
+                            message TEXT,
+                            created_at DOUBLE PRECISION,
+                            started_at DOUBLE PRECISION,
+                            ended_at DOUBLE PRECISION
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_index_tasks_status ON index_tasks(status)")
+                    except Exception:
+                        pass
+                    logger.info("Index task table initialized")
                     break  # Success, exit retry loop
                 finally:
                     await pool.release(conn)
@@ -283,6 +311,14 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Failed to recover stuck jobs: {str(e)}. Continuing anyway...")
     
+    # Start the background search-indexing consumer and recover any pending tasks
+    logger.info("Starting background search-indexing worker...")
+    try:
+        from core.indexing import start_worker
+        await start_worker()
+    except Exception as e:
+        logger.warning(f"Failed to start indexing worker: {str(e)}. Continuing anyway...")
+
     logger.info("FastAPI startup completed successfully")
 
 
