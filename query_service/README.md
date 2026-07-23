@@ -43,6 +43,15 @@ owner-only.
 - `GET  /insert/jobs`, `GET /insert/user/jobs/detail` — job listing / detail
 - `GET  /insert/jobs/check-recoverable`, `POST /insert/jobs/recover` — crash recovery
 
+Ingestion is **submit-and-forget**: the request saves data to disk, creates a
+`pending` job, and returns immediately with a `job_id`; processing runs in the
+background (concurrent file uploads + batched DB writes) and the client polls job
+status. A per-worker **resource-safety cap** (`MAX_CONCURRENT_INGEST_JOBS`, default
+3) bounds how many jobs process at once so a burst of submissions can't exhaust
+memory / the DB pool / Oxigraph and crash the process — excess jobs simply wait as
+`pending` until a slot frees (backpressure, no queue rework). Search indexing is
+then queued separately in the background.
+
 ### Provenance (PROV-O, JSON-LD)
 - `GET /provenance/job` — full bundle for one job
 - `GET /provenance/named-graph` — ingestion/activity history of a graph

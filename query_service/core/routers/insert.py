@@ -107,6 +107,22 @@ SUPPORTED_EXTS = {"ttl", "turtle", "nt", "nq", "trig", "rdf", "owl", "jsonld", "
 # set TRACK_TRIPLE_DELTAS=false to upload directly to the target instead.
 TRACK_TRIPLE_DELTAS = os.getenv("TRACK_TRIPLE_DELTAS", "true").strip().lower() in ("1", "true", "yes", "on")
 
+# Resource-safety cap: maximum ingest jobs PROCESSING concurrently per worker
+# process. Ingestion stays fire-and-forget (submit and forget) — this just bounds
+# how many jobs run at once so a burst of submissions can't exhaust memory, the DB
+# pool, or Oxigraph. Excess jobs return immediately and wait as 'pending' until a
+# slot frees (backpressure without a queue). Effective global cap ≈ this × workers.
+MAX_CONCURRENT_INGEST_JOBS = int(os.getenv("MAX_CONCURRENT_INGEST_JOBS", "3"))
+_ingest_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def _get_ingest_semaphore() -> asyncio.Semaphore:
+    """Lazily create the per-worker ingest concurrency limiter (binds to the loop)."""
+    global _ingest_semaphore
+    if _ingest_semaphore is None:
+        _ingest_semaphore = asyncio.Semaphore(MAX_CONCURRENT_INGEST_JOBS)
+    return _ingest_semaphore
+
 # Ensure job directory exists
 os.makedirs(JOB_BASE_DIR, exist_ok=True)
 
@@ -467,6 +483,27 @@ async def upload_single_file_path(
 
 
 async def run_ingest_job(
+    job_id: str,
+    max_concurrency: int,
+    user_id: str,
+    skip_provenance: bool = False,
+):
+    """Background ingest runner, gated by a per-worker concurrency limiter so a
+    burst of concurrent submissions cannot exhaust resources and crash the process.
+
+    While waiting for a slot the job stays 'pending' (accurate — it is queued). The
+    actual work runs in _run_ingest_job_body once a slot is acquired."""
+    sem = _get_ingest_semaphore()
+    if sem.locked():
+        logger.info(
+            f"[run_ingest_job] Job {job_id} is waiting for an ingest slot "
+            f"(max {MAX_CONCURRENT_INGEST_JOBS} concurrent/worker)"
+        )
+    async with sem:
+        await _run_ingest_job_body(job_id, max_concurrency, user_id, skip_provenance)
+
+
+async def _run_ingest_job_body(
     job_id: str,
     max_concurrency: int,
     user_id: str,
