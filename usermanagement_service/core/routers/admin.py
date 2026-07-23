@@ -17,10 +17,11 @@ from typing import List, Optional, Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func
 
+from pydantic import BaseModel
 from core.database import (
     user_db_manager, user_profile_repo, user_role_repo, user_activity_repo,
     available_role_repo, permission_repo, role_permission_repo, page_access_repo,
-    oauth_identity_repo,
+    oauth_identity_repo, jwt_user_repo,
 )
 from core.models.database_models import (
     AvailableRole as AvailableRoleModel,
@@ -494,6 +495,35 @@ async def admin_delete_openrouter_key(_admin: Annotated[dict, Depends(require_ad
 # authenticated request returns 403 — see core.security.get_current_user
 # which re-reads `is_banned` per request. To delete a user entirely use
 # DELETE /api/admin/users/{profile_id}.
+
+class _EmailIn(BaseModel):
+    email: str
+
+
+@router.post("/users/activate")
+async def activate_user(body: _EmailIn, _admin: Annotated[dict, Depends(require_admin)]):
+    """Activate a user's account (set the JWT user `is_active=True`) by email.
+    Needed e.g. after a password self-registration, or to re-enable an account."""
+    async with user_db_manager.get_async_session() as session:
+        u = await jwt_user_repo.get_by_email_any_status(session, body.email)
+        if not u:
+            raise HTTPException(status_code=404, detail="user not found")
+        changed = await jwt_user_repo.activate_user(session, u.id)
+        await session.commit()
+        return {"email": body.email, "is_active": True, "changed": bool(changed)}
+
+
+@router.post("/users/deactivate")
+async def deactivate_user(body: _EmailIn, _admin: Annotated[dict, Depends(require_admin)]):
+    """Deactivate a user's account (set the JWT user `is_active=False`) by email."""
+    async with user_db_manager.get_async_session() as session:
+        u = await jwt_user_repo.get_by_email_any_status(session, body.email)
+        if not u:
+            raise HTTPException(status_code=404, detail="user not found")
+        changed = await jwt_user_repo.deactivate_user(session, u.id)
+        await session.commit()
+        return {"email": body.email, "is_active": False, "changed": bool(changed)}
+
 
 @router.post("/users/{profile_id}/ban")
 async def ban_user(
