@@ -14,6 +14,7 @@ private/public spaces.
 - [x] Native **PROV-O provenance** in Oxigraph (ingestion / recovery activities)
 - [x] **Triple-level delta tracking** — per-job delta graphs + query/compare endpoints
 - [x] **Spaces** — owner-controlled, private/public containers of named graphs
+- [x] **Search** — hybrid Postgres-locator + Oxigraph-data, access-filtered by space
 
 ## Auth & scopes
 
@@ -61,6 +62,17 @@ See [PROVENANCE_MODEL.md](PROVENANCE_MODEL.md).
 **public** = readable by anyone, including unauthenticated clients; **private** =
 members only; **write/ingest** = space owner/editor only. See
 [SPACES_MODEL.md](SPACES_MODEL.md).
+
+### Search
+- `GET /search?q=…[&space={slug}][&limit&offset]` — full-text search, access-filtered.
+
+Hybrid design: **Postgres** holds a full-text **locator index** (`graph_search_index`:
+subject + text + named graph + owning space), populated at ingest. A search runs in
+Postgres (fast, filtered by space visibility/membership), then the matched subjects'
+triples are fetched from **Oxigraph** (the source of truth). Anonymous → public
+spaces only; authenticated → public + own/member spaces (+ legacy). Pass `space` to
+scope to one workspace, omit for a full search. Private data is never returned to
+non-members — the filter is enforced in the locator query.
 
 ## Architecture notes
 

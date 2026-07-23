@@ -241,6 +241,13 @@ async def attach_graph(space_id: str, named_graph_iri: str) -> None:
             """,
             space_id, named_graph_iri, time.time(),
         )
+        # Point any already-indexed rows for this graph at the space so search
+        # access-filtering picks up the (new) workspace immediately. Done inline
+        # (not via core.search) to avoid an import cycle.
+        await conn.execute(
+            "UPDATE graph_search_index SET space_id = $1 WHERE named_graph_iri = $2",
+            space_id, named_graph_iri,
+        )
 
 
 # ---------------------------------------------------------------------------

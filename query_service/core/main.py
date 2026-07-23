@@ -13,6 +13,7 @@ from core.routers.query import router as query_router
 from core.routers.rapid_release import router as rapid_release
 from core.routers.insert import router as insert_router
 from core.routers.spaces import router as spaces_router
+from core.routers.search import router as search_router
 from core.configuration import load_environment
 from core.database import init_db_pool
 from core.graph_database_connection_manager import initialize_metadata_graph
@@ -52,6 +53,7 @@ app.include_router(jwt_router, prefix="/api")
 app.include_router(query_router, prefix="/api")
 app.include_router(insert_router,prefix="/api")
 app.include_router(spaces_router, prefix="/api", tags=["Spaces"])
+app.include_router(search_router, prefix="/api", tags=["Search"])
 
 # rapid-release
 app.include_router(rapid_release, prefix="/api/rapid-release", tags=["Rapid release"])
@@ -201,6 +203,32 @@ async def startup_event():
                     except Exception:
                         pass
                     logger.info("Spaces tables initialized")
+
+                    # Search locator index (hybrid search): Postgres full-text index that
+                    # locates subjects/subgraphs (carrying graph + workspace/space), then the
+                    # actual triples are fetched from Oxigraph. Access is filtered by space
+                    # visibility/membership at query time.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS graph_search_index (
+                            id BIGSERIAL PRIMARY KEY,
+                            named_graph_iri TEXT NOT NULL,
+                            space_id TEXT,
+                            subject TEXT NOT NULL,
+                            text TEXT NOT NULL,
+                            tsv tsvector,
+                            updated_at DOUBLE PRECISION,
+                            UNIQUE (named_graph_iri, subject)
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_gsi_tsv ON graph_search_index USING GIN(tsv)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_gsi_graph ON graph_search_index(named_graph_iri)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_gsi_space ON graph_search_index(space_id)")
+                    except Exception:
+                        pass
+                    logger.info("Search index table initialized")
                     break  # Success, exit retry loop
                 finally:
                     await pool.release(conn)

@@ -524,6 +524,14 @@ async def run_ingest_job(
                 added_triple_count=added_count,
             )
             await write_provenance(prov_graph)
+
+            # Update the Postgres search locator index for the target graph
+            # (best-effort). Only subjects touched by this job when deltas are on.
+            try:
+                from core.search import index_graph_subjects
+                await index_graph_subjects(named_graph, effective_delta_graph)
+            except Exception as _se:
+                logger.warning(f"[run_ingest_job] Search indexing failed for {job_id}: {_se}")
         except Exception as _pe:
             logger.warning(f"[run_ingest_job] Provenance write failed for {job_id}: {_pe}")
 

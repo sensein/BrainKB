@@ -53,6 +53,9 @@ Once started, services are accessible at:
   - **Spaces**: team-owned, private/public containers of named graphs — keep data
     private to members or publish it publicly (anonymous read). Per-endpoint JWT
     scopes (`read`/`write`/`admin`).
+  - **Search**: hybrid full-text search — Postgres locator index (aware of
+    workspace + visibility) finds subjects, data is fetched from Oxigraph. Results
+    are access-filtered (anonymous sees public only).
   - See `query_service/README.md`, `query_service/PROVENANCE_MODEL.md`, and
     `query_service/SPACES_MODEL.md` for details.
 - **ML Service (FastAPI)**: `http://localhost:8007/`
