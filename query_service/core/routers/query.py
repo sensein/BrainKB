@@ -16,13 +16,14 @@
 # @File    : query.py
 # @Software: PyCharm
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from core.graph_database_connection_manager import fetch_data_gdb_async, check_named_graph_exists
 import logging
 from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
 from core.shared import taxonomy_postprocessing
+from core import rbac
 from fastapi import Depends
 from pydantic import BaseModel, root_validator
 from typing import List
@@ -110,6 +111,14 @@ async def get_named_graphs(user: Annotated[LoginUserIn, Depends(get_current_user
 async def sparql_query(
     user: Annotated[LoginUserIn, Depends(get_current_user)], sparql_query: str
 ):
+    # Authorization is role-based: arbitrary SPARQL requires the sparql_admin
+    # capability (Admin/SuperAdmin). The JWT scope only gates API access.
+    try:
+        email = user["email"]
+    except (KeyError, TypeError, IndexError):
+        email = None
+    if not await rbac.has_capability(email, rbac.SPARQL_ADMIN):
+        raise HTTPException(status_code=403, detail="Arbitrary SPARQL requires an Admin/SuperAdmin role.")
     response = await fetch_data_gdb_async(sparql_query)
     return response
 

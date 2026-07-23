@@ -49,6 +49,7 @@ from core.database import (
 )
 from core.configuration import load_environment
 from core.spaces import authorize as authorize_space_access
+from core import rbac
 from core.provenance import (
     build_ingestion_provenance,
     build_recovery_provenance,
@@ -1179,6 +1180,13 @@ async def insert_knowledge_graph_triples(
             status_code=400,
         )
 
+    # Role-based authorization: ingesting requires a write-capable role. JWT
+    # scope is only API access — it does not by itself grant permission to ingest.
+    if not await rbac.has_capability(_agent_email(user), rbac.INGEST):
+        return JSONResponse(
+            {"error": "Not authorized to ingest: a write-capable role is required."},
+            status_code=403,
+        )
     # If the graph belongs to a space, enforce space write-authorization
     # (owner/editor). Unmapped legacy graphs fall through (scope check applies).
     _graph_key = named_graph_iri if named_graph_iri.endswith("/") else named_graph_iri + "/"
@@ -1301,6 +1309,13 @@ async def insert_file_knowledge_graph_triples(
             status_code=400,
         )
 
+    # Role-based authorization: ingesting requires a write-capable role. JWT
+    # scope is only API access — it does not by itself grant permission to ingest.
+    if not await rbac.has_capability(_agent_email(user), rbac.INGEST):
+        return JSONResponse(
+            {"error": "Not authorized to ingest: a write-capable role is required."},
+            status_code=403,
+        )
     # If the graph belongs to a space, enforce space write-authorization
     # (owner/editor). Unmapped legacy graphs fall through (scope check applies).
     _graph_key = named_graph_iri if named_graph_iri.endswith("/") else named_graph_iri + "/"
@@ -1715,6 +1730,11 @@ async def recover_stuck_jobs_endpoint(
     Returns the number of jobs recovered and details about recovered jobs.
     """
     verify_user_access(user_id, user)
+    if not await rbac.has_capability(_agent_email(user), rbac.RECOVER):
+        return JSONResponse(
+            {"error": "Not authorized to recover jobs: a write-capable role is required."},
+            status_code=403,
+        )
     try:
         # For single job recovery, MUST check recoverability first (includes process check)
         if job_id:

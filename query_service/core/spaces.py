@@ -62,20 +62,22 @@ def space_iri(slug: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def create_space(slug: str, name: str, description: Optional[str], owner: str,
-                       visibility: str = "private") -> Dict[str, Any]:
+                       visibility: str = "private", space_type: str = "individual") -> Dict[str, Any]:
     """Create a space and register the owner as a member with role 'owner'."""
     if visibility not in ("private", "public"):
         raise ValueError("visibility must be 'private' or 'public'")
+    if space_type not in ("individual", "team"):
+        raise ValueError("space_type must be 'individual' or 'team'")
     space_id = uuid.uuid4().hex
     now = time.time()
     async with get_db_connection() as conn:
         async with conn.transaction():
             await conn.execute(
                 """
-                INSERT INTO spaces (space_id, slug, name, description, owner, visibility, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+                INSERT INTO spaces (space_id, slug, name, description, owner, visibility, space_type, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
                 """,
-                space_id, slug, name, description, owner, visibility, now,
+                space_id, slug, name, description, owner, visibility, space_type, now,
             )
             await conn.execute(
                 """
@@ -107,6 +109,7 @@ async def get_space(slug: str) -> Optional[Dict[str, Any]]:
             "description": row["description"],
             "owner": row["owner"],
             "visibility": row["visibility"],
+            "space_type": row.get("space_type", "individual"),
             "iri": space_iri(row["slug"]),
             "members": [{"member": m["member"], "role": m["role"]} for m in members],
             "graphs": [g["named_graph_iri"] for g in graphs],
@@ -131,6 +134,7 @@ async def get_space_for_graph(named_graph_iri: str) -> Optional[Dict[str, Any]]:
         return {
             "space_id": row["space_id"], "slug": row["slug"], "name": row["name"],
             "owner": row["owner"], "visibility": row["visibility"],
+            "space_type": row.get("space_type", "individual"),
         }
 
 

@@ -202,7 +202,33 @@ async def startup_event():
                         await conn.execute("CREATE INDEX IF NOT EXISTS idx_space_graphs_space ON space_graphs(space_id)")
                     except Exception:
                         pass
+                    # Space type: 'individual' (personal) or 'team' (created by
+                    # Admin/SuperAdmin or a user granted create_team_space).
+                    try:
+                        await conn.execute("ALTER TABLE spaces ADD COLUMN IF NOT EXISTS space_type TEXT NOT NULL DEFAULT 'individual'")
+                    except Exception:
+                        pass
                     logger.info("Spaces tables initialized")
+
+                    # RBAC: capabilities granted directly to a user (delegated
+                    # upgrades by Admin/SuperAdmin), on top of role-derived caps.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS user_capability_grants (
+                            id SERIAL PRIMARY KEY,
+                            member TEXT NOT NULL,
+                            capability TEXT NOT NULL,
+                            granted_by TEXT,
+                            created_at DOUBLE PRECISION,
+                            UNIQUE (member, capability)
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_capability_grants_member ON user_capability_grants(member)")
+                    except Exception:
+                        pass
+                    logger.info("RBAC capability-grants table initialized")
 
                     # Search locator index (hybrid search): Postgres full-text index that
                     # locates subjects/subgraphs (carrying graph + workspace/space), then the
