@@ -123,13 +123,28 @@ async def granted_capabilities(email: Optional[str]) -> Set[str]:
         return {row["capability"] for row in rows if row["capability"] in ALL_CAPS}
 
 
+async def role_granted_capabilities(roles: Set[str]) -> Set[str]:
+    """Capabilities attached to any of ``roles`` via role/group-level grants
+    (role_capability_grants). Lets an admin grant a whole custom group/role a
+    capability (e.g. give 'uk_collaborator' the ingest capability)."""
+    if not roles:
+        return set()
+    async with get_db_connection() as conn:
+        rows = await conn.fetch(
+            "SELECT capability FROM role_capability_grants WHERE role = ANY($1::text[])",
+            list(roles),
+        )
+        return {row["capability"] for row in rows if row["capability"] in ALL_CAPS}
+
+
 async def capabilities(email: Optional[str]) -> Set[str]:
-    """Effective capabilities = role-derived caps ∪ delegated grants."""
+    """Effective capabilities = role-derived caps ∪ role/group grants ∪ per-user grants."""
     caps: Set[str] = set()
     roles = await active_roles(email)
     for r in roles:
         caps |= _caps_for_role(r)
     if roles:  # only users with at least one role can be granted extras
+        caps |= await role_granted_capabilities(roles)
         caps |= await granted_capabilities(email)
     return caps
 
@@ -174,4 +189,42 @@ async def list_grants(member: str) -> list:
             "SELECT capability, granted_by, created_at FROM user_capability_grants WHERE member = $1",
             member,
         )
+        return [dict(r) for r in rows]
+
+
+# ---- role/group-level grants (admin only — enforced at the endpoint) --------
+
+async def grant_role_capability(role: str, capability: str, granted_by: str) -> None:
+    if capability not in GRANTABLE_CAPS:
+        raise ValueError(f"capability is not delegatable: {capability}")
+    async with get_db_connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO role_capability_grants (role, capability, granted_by, created_at)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (role, capability) DO NOTHING
+            """,
+            role, capability, granted_by, time.time(),
+        )
+
+
+async def revoke_role_capability(role: str, capability: str) -> None:
+    async with get_db_connection() as conn:
+        await conn.execute(
+            "DELETE FROM role_capability_grants WHERE role = $1 AND capability = $2",
+            role, capability,
+        )
+
+
+async def list_role_grants(role: Optional[str] = None) -> list:
+    async with get_db_connection() as conn:
+        if role:
+            rows = await conn.fetch(
+                "SELECT role, capability, granted_by, created_at FROM role_capability_grants WHERE role = $1 ORDER BY capability",
+                role,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT role, capability, granted_by, created_at FROM role_capability_grants ORDER BY role, capability"
+            )
         return [dict(r) for r in rows]

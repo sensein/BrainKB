@@ -228,7 +228,27 @@ async def startup_event():
                         await conn.execute("CREATE INDEX IF NOT EXISTS idx_capability_grants_member ON user_capability_grants(member)")
                     except Exception:
                         pass
-                    logger.info("RBAC capability-grants table initialized")
+                    # Role/group-level capability grants: attach a delegatable KG
+                    # capability to a whole role/group (e.g. a custom "uk_collaborator"
+                    # group), so every member of that role gains it — without a
+                    # per-user grant.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS role_capability_grants (
+                            id SERIAL PRIMARY KEY,
+                            role TEXT NOT NULL,
+                            capability TEXT NOT NULL,
+                            granted_by TEXT,
+                            created_at DOUBLE PRECISION,
+                            UNIQUE (role, capability)
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_role_capability_grants_role ON role_capability_grants(role)")
+                    except Exception:
+                        pass
+                    logger.info("RBAC capability-grants tables initialized")
 
                     # Fine-grained per-space access rules: restrict a space action
                     # (read/write/manage) to a global role, a space role, or specific

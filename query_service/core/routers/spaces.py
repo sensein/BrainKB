@@ -260,6 +260,11 @@ class GrantIn(BaseModel):
     capability: str
 
 
+class RoleGrantIn(BaseModel):
+    role: str
+    capability: str
+
+
 class AccessRuleIn(BaseModel):
     action: str          # read | write | manage
     subject_type: str    # global_role | member | space_role
@@ -355,3 +360,66 @@ async def revoke_capability(body: GrantIn, user: Annotated[LoginUserIn, Depends(
         raise HTTPException(403, "Admin/SuperAdmin role required to revoke capabilities")
     await rbac.revoke_capability(body.member, body.capability)
     return {"status": "revoked", "member": body.member, "capability": body.capability}
+
+
+@router.get("/admin/capabilities/available",
+            dependencies=[Depends(require_scopes(["admin"]))],
+            summary="List all KG capabilities and which are delegatable (admin only)",
+            description="Catalog of query_service capabilities. 'grantable' are the ones "
+                        "an admin may delegate to a user or role/group; 'grant' and "
+                        "'sparql_admin' are admin-intrinsic (not delegatable).")
+async def available_capabilities(user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required")
+    return {
+        "all": sorted(rbac.ALL_CAPS),
+        "grantable": sorted(rbac.GRANTABLE_CAPS),
+        "admin_only": sorted(rbac.ALL_CAPS - rbac.GRANTABLE_CAPS),
+        "descriptions": {
+            rbac.CREATE_PRIVATE_SPACE: "Create your own individual/private space",
+            rbac.CREATE_TEAM_SPACE: "Create a team (shared) space",
+            rbac.MANAGE_TEAM_SPACE: "Manage a team space's members, visibility, graphs, access rules",
+            rbac.INGEST: "Ingest data (also needs per-space write: membership or a space write access rule)",
+            rbac.RECOVER: "Recover stuck/errored ingest jobs",
+            rbac.READ_PRIVATE: "Read non-public content you're a member of",
+            rbac.SPARQL_ADMIN: "Run arbitrary SPARQL (admin-only, not delegatable)",
+            rbac.GRANT: "Grant/revoke capabilities to others (admin-only, not delegatable)",
+        },
+    }
+
+
+@router.get("/admin/capabilities/role",
+            dependencies=[Depends(require_scopes(["admin"]))],
+            summary="List capabilities granted to a role/group (admin only)")
+async def role_capabilities(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    role: Annotated[str, Query(..., description="Role/group name, e.g. 'uk_collaborator'")],
+):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required")
+    return {"role": role, "grants": await rbac.list_role_grants(role)}
+
+
+@router.post("/admin/capabilities/grant-role",
+             dependencies=[Depends(require_scopes(["admin"]))],
+             summary="Grant a capability to a whole role/group (admin only)",
+             description="Give every member of a role/group a delegatable capability — "
+                         "e.g. grant 'ingest' or 'create_private_space' to a custom group "
+                         "like 'uk_collaborator'. 'grant'/'sparql_admin' are not delegatable.")
+async def grant_role_capability(body: RoleGrantIn, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required to grant capabilities")
+    if body.capability not in rbac.GRANTABLE_CAPS:
+        raise HTTPException(400, f"capability is not delegatable; valid: {sorted(rbac.GRANTABLE_CAPS)}")
+    await rbac.grant_role_capability(body.role, body.capability, _agent(user))
+    return {"status": "granted", "role": body.role, "capability": body.capability}
+
+
+@router.post("/admin/capabilities/revoke-role",
+             dependencies=[Depends(require_scopes(["admin"]))],
+             summary="Revoke a capability from a role/group (admin only)")
+async def revoke_role_capability(body: RoleGrantIn, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required to revoke capabilities")
+    await rbac.revoke_role_capability(body.role, body.capability)
+    return {"status": "revoked", "role": body.role, "capability": body.capability}
