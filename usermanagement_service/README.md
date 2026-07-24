@@ -134,6 +134,52 @@ own protected routes (alongside the legacy v2 token).
 accounts are **banned** (reversible, preserves provenance/audit history), never
 deleted.
 
+## 🔑 OAuth provider setup (Globus / ORCID / GitHub)
+
+BrainKB uses the **Authorization Code + PKCE** flow. The backend builds its
+callback (redirect URI) as:
+
+```
+${USERMANAGEMENT_PUBLIC_BASE_URL}/api/auth/{provider}/callback
+```
+
+so for **Globus** the redirect URL to register is:
+
+| Environment | Redirect URL to register |
+|---|---|
+| Local | `http://localhost:8004/api/auth/globus/callback` |
+| Deployment | `https://<usermanagement-public-host>/api/auth/globus/callback` |
+
+It must **exactly** match `${USERMANAGEMENT_PUBLIC_BASE_URL}/api/auth/globus/callback`.
+One app can register **both** URLs. This is the **usermanagement backend** callback
+(`:8004`) — not the frontend and not query_service. The web login and the
+CLI/skill paste-code login (`/api/auth/cli/start`) use the **same** callback, so
+only this one redirect is needed. (`USERMANAGEMENT_FRONTEND_CALLBACK_URL` is where
+the browser is sent *after* a web login; it is not registered with the provider.)
+
+> ⚠️ **App type matters.** A Globus **Service Account** (client-credentials) app
+> has no redirect and **cannot** do user sign-in. Register a Globus app that
+> **supports redirect URLs** (developers.globus.org → your Project → *Add an app* →
+> a portal/web-app registration, not a service account) and add the redirect
+> URL(s) above. Use that app's Client UUID + secret.
+
+Configure in `.env`:
+
+```
+GLOBUS_CLIENT_ID=<redirect-capable app's Client UUID>
+GLOBUS_CLIENT_SECRET=<that app's client secret>
+USERMANAGEMENT_PUBLIC_BASE_URL=http://localhost:8004        # local
+# USERMANAGEMENT_PUBLIC_BASE_URL=https://api.yourhost.org   # deploy (public HTTPS)
+# GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET, ORCID_CLIENT_ID / ORCID_CLIENT_SECRET similarly
+```
+
+- Scopes requested at authorize time: `openid email profile` (standard OIDC). If a
+  provider rejects the authorize, add those scopes to the app.
+- Globus requires **HTTPS** redirects for non-localhost (localhost may be `http`).
+- Verify: `GET /api/auth/providers` shows `globus: configured=true`, and
+  `POST /api/auth/cli/start {"provider":"globus"}` returns an `authorize_url`
+  pointing at `auth.globus.org` with your `redirect_uri`.
+
 ## 🎯 User Roles
 
 ### Content Contribution
