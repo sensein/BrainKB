@@ -111,6 +111,48 @@ a write-capable role for the `ingest` capability). Rules can also target a singl
 `member` (email) or a `space_role`. Remove the rule to revoke. See
 `RBAC_MODEL.md` and `SPACES_MODEL.md` for the full model.
 
+### Creating a custom group and giving it powers
+
+Creating a group and assigning it always works; a **brand-new custom role starts
+with no powers** (only `read_private`) — you then **grant** it capabilities. Full
+flow (Admin/SuperAdmin):
+
+```
+# 1. create the group/category (usermanagement)
+POST /api/admin/roles                      {name: "uk_collaborator", category, description}
+# 2. give the group a power (query_service) — global capability
+POST /api/admin/capabilities/grant-role    {role: "uk_collaborator", capability: "ingest"}
+# 3. put a user in the group (usermanagement)
+POST /api/admin/users/{profile_id}/roles   {role: "uk_collaborator"}
+# → every uk_collaborator can now ingest
+```
+
+**Global vs per-space** — two ways to let a group ingest:
+- **Global** (§ grant-role above): the group can ingest into any space where it
+  has write authorization (membership/owner/admin) — a broad, workspace-wide power.
+- **Per-space** (§ access rule above): the group can ingest into **one** named
+  space only. Narrower; preferred when scoping a group to a specific workspace.
+
+### Identity & admin actions catalog (usermanagement `/api/admin`)
+
+Beyond the KG capabilities above, these are the management actions and who may do
+them (Admin unless noted):
+
+| Action | Endpoint / tool |
+|---|---|
+| Create / list custom groups (roles) | `POST/GET /api/admin/roles` · `brainkb_create_role`, `brainkb_available_roles` |
+| Assign / remove a role on a user | `POST/DELETE /api/admin/users/{id}/roles` · `brainkb_assign_role` / `brainkb_remove_role` *(Admin role = **SuperAdmin-only**)* |
+| Grant / revoke a capability to a **user** | `brainkb_grant_capability` / `brainkb_revoke_capability` |
+| Grant / revoke a capability to a **group** | `brainkb_grant_role_capability` / `brainkb_revoke_role_capability` |
+| List capability catalog / a group's caps | `brainkb_list_capabilities` · `brainkb_role_capabilities` |
+| Create / list permissions (resource·action) | `POST/GET /api/admin/permissions` · `brainkb_create_permission`, `brainkb_list_permissions` |
+| Per-space access rules (read/write/manage) | `brainkb_add_access_rule` / `brainkb_remove_access_rule` |
+| Activate / deactivate login | `brainkb_activate_user` / `brainkb_deactivate_user` |
+| Ban / unban (removal — **no delete**) | `brainkb_ban_user` / `brainkb_unban_user` *(banning an Admin = **SuperAdmin-only**)* |
+
+Onboarding is via Globus/ORCID/GitHub sign-in (auto-creates the profile + default
+role); there is **no self-registration** (`/api/register` → 405).
+
 ## Endpoints (prefix `/api`)
 
 ### Query
