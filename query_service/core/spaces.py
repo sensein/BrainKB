@@ -173,13 +173,21 @@ async def member_role(space_id: str, member: Optional[str]) -> Optional[str]:
 
 
 async def list_visible_spaces(member: Optional[str]) -> List[Dict[str, Any]]:
-    """Spaces the caller may see: all public spaces plus any they are a member of.
-    Anonymous callers (member=None) see only public spaces."""
+    """Spaces the caller may see, each annotated with THIS caller's permission:
+      - your_role:  their space-membership role ('owner'|'editor'|'viewer') or None
+      - is_owner:   whether they own the space
+      - access:     how it is available to them — 'owner' | 'member' | 'public'
+      - can_write:  whether their space role permits writing/ingest (owner/editor).
+                    NOTE: an actual ingest ALSO requires the caller's global role to
+                    grant the `ingest` capability and to pass any per-space access
+                    rules — this flag reflects only the space-membership gate.
+    Anonymous callers (member=None) see only public spaces (your_role None)."""
     async with get_db_connection() as conn:
         if member:
             rows = await conn.fetch(
                 """
-                SELECT DISTINCT s.slug, s.name, s.description, s.owner, s.visibility, s.created_at
+                SELECT DISTINCT s.slug, s.name, s.description, s.owner, s.visibility,
+                       s.space_type, s.created_at, m.role AS your_role
                 FROM spaces s
                 LEFT JOIN space_members m ON m.space_id = s.space_id AND m.member = $1
                 WHERE s.visibility = 'public' OR m.member IS NOT NULL
@@ -190,17 +198,28 @@ async def list_visible_spaces(member: Optional[str]) -> List[Dict[str, Any]]:
         else:
             rows = await conn.fetch(
                 """
-                SELECT s.slug, s.name, s.description, s.owner, s.visibility, s.created_at
+                SELECT s.slug, s.name, s.description, s.owner, s.visibility,
+                       s.space_type, s.created_at, NULL::text AS your_role
                 FROM spaces s WHERE s.visibility = 'public'
                 ORDER BY s.created_at DESC
                 """,
             )
-        return [
-            {"slug": r["slug"], "name": r["name"], "description": r["description"],
-             "owner": r["owner"], "visibility": r["visibility"], "iri": space_iri(r["slug"]),
-             "created_at": r["created_at"]}
-            for r in rows
-        ]
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            your_role = r["your_role"]
+            is_owner = bool(member) and r["owner"] == member
+            access = "owner" if is_owner else ("member" if your_role else "public")
+            out.append({
+                "slug": r["slug"], "name": r["name"], "description": r["description"],
+                "owner": r["owner"], "visibility": r["visibility"],
+                "space_type": r["space_type"], "iri": space_iri(r["slug"]),
+                "created_at": r["created_at"],
+                "your_role": your_role,
+                "is_owner": is_owner,
+                "access": access,
+                "can_write": your_role in ("owner", "editor"),
+            })
+        return out
 
 
 async def add_member(space_id: str, member: str, role: str) -> None:
@@ -235,23 +254,68 @@ async def set_visibility(slug: str, visibility: str) -> None:
         )
 
 
-async def attach_graph(space_id: str, named_graph_iri: str) -> None:
+class GraphAlreadyBound(Exception):
+    """A named graph is already bound to a DIFFERENT space.
+
+    named_graph_iri is globally UNIQUE in space_graphs, so a graph lives in exactly
+    one space. Attaching one that another space already holds cannot succeed, and
+    must not look like it did.
+    """
+
+    def __init__(self, named_graph_iri: str, slug: str):
+        self.named_graph_iri = named_graph_iri
+        self.slug = slug
+        super().__init__(
+            f"named graph '{named_graph_iri}' is already registered to space "
+            f"'{slug}'; a graph can belong to only one space"
+        )
+
+
+async def attach_graph(space_id: str, named_graph_iri: str) -> bool:
+    """Bind a named graph to a space.
+
+    Returns True when newly attached, False when it was already attached to THIS
+    space (idempotent re-registration). Raises GraphAlreadyBound when another space
+    holds it — previously that case silently did nothing while the caller received
+    a success response.
+    """
     async with get_db_connection() as conn:
-        await conn.execute(
+        row = await conn.fetchrow(
             """
             INSERT INTO space_graphs (space_id, named_graph_iri, added_at)
             VALUES ($1, $2, $3)
             ON CONFLICT (named_graph_iri) DO NOTHING
+            RETURNING id
             """,
             space_id, named_graph_iri, time.time(),
         )
+        if row is None:
+            # The insert was a no-op: the graph is already bound. Determine whether
+            # it is bound HERE (fine) or to another space (a conflict we must
+            # report). Crucially, do NOT touch the search index in the latter case:
+            # search access-filtering keys off graph_search_index.space_id, so
+            # repointing it would let this space's visibility/membership govern
+            # another space's graph while space_graphs still says otherwise.
+            owner = await conn.fetchrow(
+                """
+                SELECT s.space_id, s.slug FROM space_graphs g
+                JOIN spaces s ON s.space_id = g.space_id
+                WHERE g.named_graph_iri = $1
+                """,
+                named_graph_iri,
+            )
+            if owner is not None and owner["space_id"] != space_id:
+                raise GraphAlreadyBound(named_graph_iri, owner["slug"])
+
         # Point any already-indexed rows for this graph at the space so search
         # access-filtering picks up the (new) workspace immediately. Done inline
-        # (not via core.search) to avoid an import cycle.
+        # (not via core.search) to avoid an import cycle. Only reached when the
+        # graph genuinely belongs to this space.
         await conn.execute(
             "UPDATE graph_search_index SET space_id = $1 WHERE named_graph_iri = $2",
             space_id, named_graph_iri,
         )
+        return row is not None
 
 
 # ---------------------------------------------------------------------------
