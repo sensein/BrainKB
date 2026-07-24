@@ -29,12 +29,42 @@ from core.database import (
     user_contribution_repo, user_role_repo, user_country_repo, user_organization_repo,
     user_education_repo, user_expertise_repo, available_role_repo, available_country_repo
 )
+from core.models.database_models import UserProfile as UserProfileModel
 from core.security import get_current_user, require_scopes, require_all_scopes
 from core.shared import convert_row_to_dict
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["User Management"])
 
+
+
+@router.get("/me")
+async def get_me(jwt_user: Annotated[dict, Depends(get_current_user)]):
+    """Return the JWT-carrying user's profile summary (email, profile_id, roles,
+    auth_source, orcid_id, github). Useful for the UI to decide what to render
+    without an extra DB lookup per page."""
+    orcid_id = None
+    github_username = None
+    name = None
+    profile_id = jwt_user.get("profile_id")
+    if profile_id:
+        async with user_db_manager.get_async_session() as session:
+            profile = await session.get(UserProfileModel, profile_id)
+            if profile:
+                orcid_id = profile.orcid_id
+                github_username = profile.github
+                name = profile.name
+    return {
+        "email": jwt_user.get("email"),
+        "name": name,
+        "profile_id": profile_id,
+        "user_id": jwt_user.get("user_id"),
+        "orcid_id": orcid_id,
+        "github": github_username,
+        "roles": jwt_user.get("roles", []),
+        "scopes": jwt_user.get("scopes", []),
+        "auth_source": jwt_user.get("auth_source", "password"),
+    }
 
 
 # User Profile Endpoints
@@ -271,7 +301,10 @@ async def create_profile(jwt_user: Annotated[dict, Depends(get_current_user)],
             organizations_data = profile.organizations or []
             education_data = profile.education or []
             expertise_data = profile.expertise_areas or []
-            roles_data = profile.roles or []
+            # `roles` from the request body is ignored on the public endpoint —
+            # role assignment is admin-only via /api/admin/users/{id}/roles.
+            # Defaults are seeded by the OAuth callback (Curator) and the
+            # bootstrap superadmin allowlist (SuperAdmin + Admin).
 
             profile_data = profile.dict(exclude={'countries', 'organizations', 'education', 'expertise_areas', 'roles'})
             profile_instance = await user_profile_repo.create_or_update_profile(
@@ -323,15 +356,8 @@ async def create_profile(jwt_user: Annotated[dict, Depends(get_current_user)],
                     years_experience=expertise_data.years_experience
                 )
 
-            # Add roles if provided
-            for role_data in roles_data:
-                await user_role_repo.assign_role(
-                    session=session,
-                    profile_id=profile_instance.id,
-                    role=role_data.role,
-                    is_active=role_data.is_active,
-                    expires_at=role_data.expires_at
-                )
+            # NOTE: roles are intentionally NOT applied from the request body
+            # on this public endpoint. Use /api/admin/users/{id}/roles instead.
 
             # Log activity with enhanced information
             await user_activity_repo.log_activity(
@@ -352,6 +378,30 @@ async def create_profile(jwt_user: Annotated[dict, Depends(get_current_user)],
     except Exception as e:
         logger.error(f"Error creating profile: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error {e}")
+
+
+@router.delete("/profile", status_code=204)
+async def delete_own_profile(
+    jwt_user: Annotated[dict, Depends(get_current_user)],
+):
+    """Delete the authenticated user's own profile. Admins should use
+    DELETE /api/admin/users/{profile_id} to delete other users."""
+    try:
+        email = jwt_user.get("email")
+        if not email:
+            raise HTTPException(status_code=400, detail="JWT is missing email claim")
+        async with user_db_manager.get_async_session() as session:
+            profile = await user_profile_repo.get_by_email(session, email)
+            if not profile:
+                raise HTTPException(status_code=404, detail="Profile not found")
+            await session.delete(profile)
+            await session.commit()
+            return None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting own profile: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/profile", response_model=dict)
@@ -397,7 +447,8 @@ async def update_profile(
             organizations_data = update_data.pop('organizations', None)
             education_data = update_data.pop('education', None)
             expertise_data = update_data.pop('expertise_areas', None)
-            roles_data = update_data.pop('roles', None)
+            # `roles` is dropped from the public update — see note below.
+            update_data.pop('roles', None)
             
             # Update profile with new data
             for key, value in update_data.items():
@@ -463,17 +514,11 @@ async def update_profile(
                         years_experience=exp_data['years_experience']
                     )
             
-            # Update roles if provided
-            if roles_data is not None:
-                logger.info(f"Updating roles: {roles_data}")
-                await user_role_repo.remove_all_roles(session, profile.id)
-                for role_data in roles_data:
-                    await user_role_repo.assign_role(
-                        session=session,
-                        profile_id=profile.id,
-                        role=role_data['role'],
-                        is_active=role_data['is_active']
-                    )
+            # NOTE: roles are intentionally NOT updated from this endpoint.
+            # Self-service role assignment was a privilege-escalation hole —
+            # any user could grant themselves Admin. Roles are now managed
+            # exclusively via /api/admin/users/{id}/roles (require_admin).
+            # The default role (Curator) is seeded by the OAuth callback.
             
             # Log activity with enhanced information
             await user_activity_repo.log_activity(

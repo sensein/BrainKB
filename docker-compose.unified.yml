@@ -33,7 +33,8 @@ services:
       - "${API_TOKEN_PORT:-8000}:8000"
       - "${QUERY_SERVICE_PORT:-8010}:8010"
       - "${ML_SERVICE_PORT:-8007}:8007"
-      
+      - "${USERMANAGEMENT_SERVICE_PORT:-8004}:8004"
+
     volumes:
       - ./logs:/var/log/supervisor
     networks:
@@ -162,4 +163,9 @@ volumes:
 networks:
   brainkb-network:
     external: true
+    # Pin the network name so it stays the same regardless of the compose
+    # project (folder) name. The brainkb-ui stack joins the same network by
+    # this fixed name. Create it once before bringing up either stack:
+    #     docker network create brainkb-network
+    name: brainkb-network
 

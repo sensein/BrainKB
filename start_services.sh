@@ -262,6 +262,9 @@ get_supervisor_name() {
         api-token-manager|api-tokenmanager|token-manager)
             echo "api_tokenmanager"
             ;;
+        usermanagement-service|user-management-service|usermanagement|user-management)
+            echo "usermanagement_service"
+            ;;
         *)
             echo ""
             ;;
@@ -281,6 +284,7 @@ handle_microservice() {
         echo "  - query-service (or query_service)"
         echo "  - ml-service (or ml_service)"
         echo "  - api-token-manager (or api_tokenmanager, token-manager)"
+        echo "  - usermanagement-service (or user-management-service, usermanagement)"
         return 1
     fi
     

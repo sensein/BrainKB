@@ -10,6 +10,7 @@
 # software or the use or other dealings in the software.
 # -----------------------------------------------------------------------------
 
+import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from enum import Enum
@@ -19,22 +20,30 @@ from pydantic import BaseModel, EmailStr, Field, validator
 class UserRoleEnum(str, Enum):
     """This is the user role for the BrainKB platform. Each user who are registered will have one of these
     roles, with default being the curator"""
+    # SuperAdmin: protected, immutable from the UI/API.
+    # Bootstrap-seeded only (USERMANAGEMENT_BOOTSTRAP_SUPERADMIN_EMAILS) and
+    # cannot be banned, deleted, or have its role stripped through admin endpoints.
+    SUPERADMIN = "SuperAdmin"
+    # Admin: regular platform administrator. Multiple admins can coexist;
+    # each can ban/delete/demote any other Admin (but not a SuperAdmin).
+    ADMIN = "Admin"
+
     # Content Contribution Roles
     SUBMITTER = "Submitter"
     ANNOTATOR = "Annotator"
     MAPPER = "Mapper"
     CURATOR = "Curator"
-    
+
     # Quality Control Roles
     REVIEWER = "Reviewer"
     VALIDATOR = "Validator"
     CONFLICT_RESOLVER = "Conflict Resolver"
-    
+
     # Knowledge Management Roles
     KNOWLEDGE_CONTRIBUTOR = "Knowledge Contributor"
     EVIDENCE_TRACER = "Evidence Tracer"
     PROVENANCE_TRACKER = "Provenance Tracker"
-    
+
     # Community Management Roles
     MODERATOR = "Moderator"
     AMBASSADOR = "Ambassador"
@@ -57,6 +66,8 @@ class ActivityType(str, Enum):
     CONFLICT_RESOLUTION = "conflict_resolution"
     DISCUSSION_PARTICIPATION = "discussion_participation"
     COMMUNITY_OUTREACH = "community_outreach"
+    USER_BAN = "user_ban"
+    USER_UNBAN = "user_unban"
 
 
 class ContributionType(str, Enum):
@@ -86,13 +97,6 @@ class ContributionStatus(str, Enum):
 
 
 # Authentication Models
-class UserIn(BaseModel):
-    """JWT User registration input model"""
-    full_name: str = Field(..., min_length=1, max_length=255, description="User's full name")
-    email: EmailStr = Field(..., description="User's email address")
-    password: str = Field(..., min_length=8, description="User's password")
-
-
 class LoginUserIn(BaseModel):
     """JWT User login input model"""
     email: EmailStr = Field(..., description="User's email address")
@@ -209,17 +213,29 @@ class UserExpertiseInput(BaseModel):
 
 
 class UserRoleInput(BaseModel):
-    """User role input model (for creating/updating)"""
+    """User role input model (for creating/updating).
+
+    Accepts any role name that matches the canonical format. We don't check
+    membership in Web_available_role here because that's a DB-layer concern
+    — and admins should be able to assign roles they've just defined via
+    /api/admin/roles without two requests racing each other through
+    Pydantic. The format pattern matches the one in AvailableRoleInput so
+    the two endpoints stay consistent.
+    """
     role: str = Field(..., description="Role name")
     is_active: bool = Field(default=True, description="Whether the role is active")
     expires_at: Optional[datetime] = Field(None, description="Role expiration date")
-    
+
     @validator('role')
     def validate_role(cls, v):
-        """Validate that the role is one of the allowed values"""
-        valid_roles = [role.value for role in UserRoleEnum]
-        if v not in valid_roles:
-            raise ValueError(f'Role must be one of: {", ".join(valid_roles)}')
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Role name is required")
+        if not _ROLE_NAME_PATTERN.match(v):
+            raise ValueError(
+                "Role name must start with a letter and contain only letters, "
+                "numbers, spaces, hyphens, or underscores (max 100 chars)"
+            )
         return v
 
 
@@ -397,28 +413,62 @@ class AvailableRole(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+# Letters, numbers, spaces, hyphen, underscore. Must start with a letter to
+# keep names sortable / paste-safe in URLs and JSON keys downstream.
+_ROLE_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9 _-]{0,99}$")
+_ROLE_CATEGORY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9 _-]{0,49}$")
+
+
 class AvailableRoleInput(BaseModel):
-    """Available role input model for creating/updating"""
+    """Available role input model for creating/updating.
+
+    Roles fall into two buckets:
+
+      * **Canonical roles** (UserRoleEnum) — Admin, Curator, Reviewer, etc.
+        These are referenced by name in code (default OAuth role assignment,
+        admin checks, bootstrap seeding). They must exist and must keep their
+        names. Bootstrap re-seeds them on every startup if missing.
+
+      * **Custom roles** — anything else admins create for organisational
+        purposes ("MIT User", "Lab X Member", "External Collaborator", ...).
+        These are free-form and only used for role-based page access; no code
+        path references them by name.
+
+    The validator therefore enforces *format* (printable, length 1–100,
+    sensible characters) rather than membership in the canonical enum —
+    otherwise admins can't introduce organisational roles via the UI. Same
+    relaxation applies to ``category``: a small set of canonical buckets are
+    suggested, but custom values are accepted.
+    """
     name: str = Field(..., max_length=100, description="Role name")
     description: Optional[str] = Field(None, description="Role description")
     category: Optional[str] = Field(None, max_length=50, description="Role category")
     is_active: bool = Field(default=True, description="Whether the role is active")
-    
+
     @validator('name')
     def validate_role_name(cls, v):
-        """Validate that the role name is one of the allowed values"""
-        valid_roles = [role.value for role in UserRoleEnum]
-        if v not in valid_roles:
-            raise ValueError(f'Role name must be one of: {", ".join(valid_roles)}')
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Role name is required")
+        if not _ROLE_NAME_PATTERN.match(v):
+            raise ValueError(
+                "Role name must start with a letter and contain only letters, "
+                "numbers, spaces, hyphens, or underscores (max 100 chars)"
+            )
         return v
-    
+
     @validator('category')
     def validate_category(cls, v):
-        """Validate that the category is one of the allowed values"""
-        if v is not None:
-            valid_categories = ['Content', 'Quality', 'Knowledge', 'Community']
-            if v not in valid_categories:
-                raise ValueError(f'Category must be one of: {", ".join(valid_categories)}')
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return None
+        if not _ROLE_CATEGORY_PATTERN.match(v):
+            raise ValueError(
+                "Category must start with a letter and contain only letters, "
+                "numbers, spaces, hyphens, or underscores (max 50 chars)"
+            )
         return v
 
 
@@ -450,3 +500,88 @@ class AvailableCountryInput(BaseModel):
             if v not in valid_regions:
                 raise ValueError(f'Region must be one of: {", ".join(valid_regions)}')
         return v
+
+
+# Permission models
+class PermissionInput(BaseModel):
+    name: str = Field(..., max_length=100)
+    resource: str = Field(..., max_length=100)
+    action: str = Field(..., max_length=50)
+    description: Optional[str] = None
+
+
+class Permission(BaseModel):
+    id: Optional[int] = None
+    name: str
+    resource: str
+    action: str
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class RolePermissionAssignment(BaseModel):
+    """Assign a set of permissions to a role."""
+    permission_ids: List[int] = Field(default_factory=list)
+
+
+# Page access models
+class PageAccessInput(BaseModel):
+    page_key: str = Field(..., max_length=100, description="Stable identifier for a UI page/feature")
+    description: Optional[str] = None
+    is_public: bool = Field(default=False)
+    allowed_roles: List[str] = Field(default_factory=list, description="Role names allowed to access this page")
+    allowed_user_emails: List[EmailStr] = Field(default_factory=list, description="Individual users allowed via email override")
+
+
+class PageAccess(BaseModel):
+    id: Optional[int] = None
+    page_key: str
+    description: Optional[str] = None
+    is_public: bool = False
+    allowed_roles: List[str] = Field(default_factory=list)
+    allowed_user_emails: List[str] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class PageAccessCheck(BaseModel):
+    page_key: str
+    allowed: bool
+    reason: str = Field(..., description="'public' | 'role' | 'user_override' | 'denied' | 'not_found'")
+
+
+# OAuth models
+class OAuthLoginStart(BaseModel):
+    authorize_url: str
+    state: str
+
+
+class OAuthProviderEnum(str, Enum):
+    GITHUB = "github"
+    ORCID = "orcid"
+    GLOBUS = "globus"
+
+
+class OAuthIdentityOut(BaseModel):
+    id: int
+    provider: str
+    provider_user_id: str
+    profile_id: int
+    email: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+# Admin-facing user list
+class AdminUserListItem(BaseModel):
+    profile_id: int
+    name: str
+    email: str
+    orcid_id: Optional[str] = None
+    roles: List[str] = Field(default_factory=list)
+    providers: List[str] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
+    is_banned: bool = False
+    banned_at: Optional[datetime] = None
+    banned_by: Optional[int] = None
+    ban_reason: Optional[str] = None

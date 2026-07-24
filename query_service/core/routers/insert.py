@@ -24,7 +24,7 @@ import logging
 from core.pydantic_schema import InputKGTripleSchema, NamedGraphSchema
 from typing import Annotated, List, Dict, Any, Optional, Tuple
 from core.models.user import LoginUserIn
-from core.security import get_current_user, require_scopes
+from core.security import get_current_user, require_scopes, verify_user_access
 from fastapi import Depends
 from core.shared import (
     convert_ttl_to_named_graph, named_graph_metadata, convert_json_to_ttl, 
@@ -53,6 +53,7 @@ import uuid
 import asyncio
 import tempfile
 import os
+import shutil
 import time
 import httpx
 from pathlib import Path
@@ -434,11 +435,28 @@ async def upload_single_file_path(
         resp_text = resp.text
     except Exception:
         resp_text = ""
-    
+
     max_len = 2000
     if resp_text and len(resp_text) > max_len:
         resp_text = resp_text[:max_len] + "... [truncated]"
-    
+
+    # Surface provenance-attachment failures. process_file_with_provenance returns
+    # success=False when it was asked to attach provenance but rdflib parsing failed;
+    # in that case the ORIGINAL (un-provenanced) file was uploaded. Previously this
+    # was silently swallowed and the job still reported success, hiding a data-integrity
+    # gap. We now flag it explicitly so the job result records it.
+    provenance_requested = not skip_provenance and ext in [
+        "ttl", "turtle", "nt", "nq", "jsonld", "json", "rdf", "owl"
+    ]
+    provenance_failed = provenance_requested and not provenance_success
+    if provenance_failed:
+        warning = (
+            f"WARNING: provenance could not be attached to {filename} "
+            f"(RDF parsing failed); the original file was uploaded WITHOUT provenance metadata. "
+        )
+        logger.warning(f"[upload_single_file_path] {warning.strip()}")
+        resp_text = warning + (resp_text or "")
+
     return {
         "file": filename,
         "ext": ext,
@@ -446,6 +464,8 @@ async def upload_single_file_path(
         "elapsed_s": elapsed,
         "http_status": resp.status_code,
         "success": success,
+        "provenance_attached": provenance_requested and provenance_success,
+        "provenance_requested": provenance_requested,
         "bps": bps,
         "response_body": resp_text,
     }
@@ -646,6 +666,19 @@ async def run_ingest_job(
         except Exception as e:
             logger.error(f"[run_ingest_job] Failed to verify job {job_id} status in finally block: {e}", exc_info=True)
 
+        # Clean up temporary job files. Uploads can be up to 1.5 GB each and were
+        # previously never removed, so /tmp/oxigraph_jobs grew unbounded. The recovery
+        # path only marks jobs as 'error' (it does not reprocess these files), so it is
+        # safe to remove them once the job has reached a terminal state.
+        try:
+            details = await get_job_details(job_id)
+            job_dir = details.get("job_dir") if details else None
+            if job_dir and os.path.isdir(job_dir):
+                shutil.rmtree(job_dir, ignore_errors=True)
+                logger.info(f"[run_ingest_job] Cleaned up temporary job directory for {job_id}: {job_dir}")
+        except Exception as e:
+            logger.warning(f"[run_ingest_job] Failed to clean up job directory for {job_id}: {e}")
+
 
 async def check_job_recoverable(
     job_id: str,
@@ -686,7 +719,22 @@ async def check_job_recoverable(
                     "reason": "Job not found or does not belong to user",
                     "job_id": job_id,
                 }
-            
+
+            # Liveness check: if the background task is still alive in THIS process,
+            # the job is genuinely running (regardless of age) and must not be recovered.
+            # Recovering an active job would mark it 'error' mid-flight and can cause
+            # duplicate/partial ingests. Note: this only sees tasks in the current worker
+            # process; cross-worker liveness is not visible here (see _running_job_tasks).
+            task = _running_job_tasks.get(job_id)
+            if task is not None and not task.done():
+                return {
+                    "recoverable": False,
+                    "process_running": True,
+                    "reason": "Job is still actively running in this server process; an active job cannot be recovered.",
+                    "job_id": job_id,
+                    "status": job["status"],
+                }
+
             # Check if job is already marked as unrecoverable
             if job.get("unrecoverable"):
                 return {
@@ -1017,6 +1065,9 @@ async def insert_knowledge_graph_triples(
     - Validates that the named graph is registered before ingestion.
     - Attaches provenance information to the ingested data in background.
     """
+    # Ensure the caller can only create jobs under their own identity
+    verify_user_access(user_id, user)
+
     # First, check if the named graph is registered
     if not await check_named_graph_exists(named_graph_iri):
         return JSONResponse(
@@ -1126,6 +1177,9 @@ async def insert_file_knowledge_graph_triples(
     Validates that the named graph is registered before ingestion.
     Attaches provenance information to ingested files.
     """
+    # Ensure the caller can only create jobs under their own identity
+    verify_user_access(user_id, user)
+
     # First, check if the named graph is registered
     if not await check_named_graph_exists(named_graph_iri):
         return JSONResponse(
@@ -1297,6 +1351,7 @@ async def list_jobs(
     List all jobs for a user with pagination and optional time range filters.
     Returns paginated list of jobs with their basic information.
     """
+    verify_user_access(user_id, user)
     return await list_user_jobs(
         user_id=user_id,
         limit=limit,
@@ -1319,6 +1374,7 @@ async def get_job_detail(
     Get detailed information for a single job by job_id and user_id.
     Returns full job details including summary (when job is done/error).
     """
+    verify_user_access(user_id, user)
     job = await get_job_by_id_and_user(job_id, user_id)
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
@@ -1477,6 +1533,7 @@ async def check_job_recoverable_endpoint(
     
     Use this endpoint before calling the recover endpoint to avoid unnecessary processing.
     """
+    verify_user_access(user_id, user)
     try:
         result = await check_job_recoverable(
             job_id=job_id,
@@ -1532,6 +1589,7 @@ async def recover_stuck_jobs_endpoint(
     
     Returns the number of jobs recovered and details about recovered jobs.
     """
+    verify_user_access(user_id, user)
     try:
         # For single job recovery, MUST check recoverability first (includes process check)
         if job_id:
