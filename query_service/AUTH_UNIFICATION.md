@@ -571,7 +571,8 @@ sandbox has no browser); the mechanics around it are verified.
 - **Model.** `Web_personal_access_token` (token_hash unique, prefix, name,
   profile_id, jwt_user_id, email, revoked, expires_at, last_used_at). Endpoints:
   create / list / revoke (session-auth) + `pat/exchange` (PAT-auth). Env:
-  `USERMANAGEMENT_PAT_DEFAULT_DAYS` (90), `_MAX_DAYS` (365), `_MAX_PER_USER` (20).
+  `USERMANAGEMENT_PAT_DEFAULT_DAYS` (**3** — short-lived by default; a user may
+  still request up to the cap), `_MAX_DAYS` (365), `_MAX_PER_USER` (20).
 - **MCP.** `BRAINKB_TOKEN` env + `brainkb_use_token` set a PAT; `_token_for`
   recognizes the `brainkb_pat_` prefix and PAT-exchanges (header, session, or env).
   Tools: `brainkb_create_token`, `brainkb_list_tokens`, `brainkb_revoke_token`.
