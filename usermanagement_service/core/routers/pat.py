@@ -47,7 +47,7 @@ router = APIRouter()
 
 _PAT_PREFIX = "brainkb_pat_"
 # Default lifetime and hard cap for a PAT, in days (configurable via env).
-_PAT_DEFAULT_DAYS = max(1, int(os.getenv("USERMANAGEMENT_PAT_DEFAULT_DAYS", "90")))
+_PAT_DEFAULT_DAYS = max(1, int(os.getenv("USERMANAGEMENT_PAT_DEFAULT_DAYS", "3")))
 _PAT_MAX_DAYS = max(1, int(os.getenv("USERMANAGEMENT_PAT_MAX_DAYS", "365")))
 # Upper bound on how many active (unrevoked, unexpired) tokens a user may hold —
 # a light guard against unbounded token sprawl.
