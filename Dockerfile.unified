@@ -224,7 +224,7 @@ if [ -z "${USERMANAGEMENT_JWT_PRIVATE_KEY_PEM}" ] && [ -z "${USERMANAGEMENT_JWT_
     mkdir -p "${SSO_KEY_DIR}"
     if [ ! -s "${SSO_KEY_FILE}" ]; then
         echo "Generating SSO RS256 signing key at ${SSO_KEY_FILE}..."
-        if openssl genpkey -algorithm RSA -pkcs8 -pkeyopt rsa_keygen_bits:2048 -out "${SSO_KEY_FILE}" 2>/dev/null; then
+        if openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "${SSO_KEY_FILE}" 2>/dev/null; then
             chmod 600 "${SSO_KEY_FILE}"
             echo "SSO signing key generated."
         else
