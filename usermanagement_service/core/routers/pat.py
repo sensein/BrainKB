@@ -49,6 +49,12 @@ _PAT_PREFIX = "brainkb_pat_"
 # Default lifetime and hard cap for a PAT, in days (configurable via env).
 _PAT_DEFAULT_DAYS = max(1, int(os.getenv("USERMANAGEMENT_PAT_DEFAULT_DAYS", "3")))
 _PAT_MAX_DAYS = max(1, int(os.getenv("USERMANAGEMENT_PAT_MAX_DAYS", "365")))
+# Sliding expiry: when true (default), each successful use pushes the PAT's expiry
+# forward by _PAT_DEFAULT_DAYS (the idle window) — so an actively-used token keeps
+# working and never re-prompts, while an unused one expires after that many idle
+# days. The extension is capped at created_at + _PAT_MAX_DAYS (an absolute ceiling,
+# so a token can't roll forever). Set false for fixed-lifetime tokens.
+_PAT_SLIDING = os.getenv("USERMANAGEMENT_PAT_SLIDING", "true").strip().lower() not in ("0", "false", "no")
 # Upper bound on how many active (unrevoked, unexpired) tokens a user may hold —
 # a light guard against unbounded token sprawl.
 _PAT_MAX_PER_USER = max(1, int(os.getenv("USERMANAGEMENT_PAT_MAX_PER_USER", "20")))
@@ -204,6 +210,18 @@ async def pat_exchange(body: PatExchangeIn):
         email = row.email
         profile_id = row.profile_id
         jwt_user_id = row.jwt_user_id
+
+        # Sliding expiry: recent use extends the window so an actively-used token
+        # never re-prompts; an idle one still expires after _PAT_DEFAULT_DAYS. Cap
+        # the roll at created_at + _PAT_MAX_DAYS so it can't live forever. Only ever
+        # push expiry forward, never shorten it.
+        if _PAT_SLIDING:
+            now = datetime.utcnow()
+            sliding = now + timedelta(days=_PAT_DEFAULT_DAYS)
+            cap = (row.created_at or now) + timedelta(days=_PAT_MAX_DAYS)
+            new_exp = min(sliding, cap)
+            if new_exp > row.expires_at:
+                row.expires_at = new_exp
 
         profile = await user_profile_repo.get_by_email(session, email)
         if profile is not None:
