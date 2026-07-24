@@ -46,16 +46,20 @@ from core.configuration import config
 _ADMIN_TIER_ROLES = {"Admin", "SuperAdmin"}
 
 
-def _is_superadmin(admin: dict) -> bool:
-    """True if the acting caller holds SuperAdmin (or is a bootstrap superadmin)."""
-    if isinstance(admin, dict) and "SuperAdmin" in (admin.get("roles") or []):
-        return True
+async def _is_superadmin(admin: dict) -> bool:
+    """True if the acting caller currently holds SuperAdmin. Roles are re-read from
+    the DB (not trusted from the token) so a just-demoted SuperAdmin can't still act.
+    The bootstrap-superadmin allowlist is honored for first sign-in."""
     email = ((admin.get("sub") or admin.get("email")) if isinstance(admin, dict) else "") or ""
-    return bool(email and email.lower() in config.bootstrap_superadmin_emails)
+    if email and email.lower() in config.bootstrap_superadmin_emails:
+        return True
+    from core.security import _current_roles_from_db
+    roles = await _current_roles_from_db(email.lower(), admin.get("profile_id") if isinstance(admin, dict) else None)
+    return "SuperAdmin" in roles
 
 
-def _require_superadmin(admin: dict, action: str) -> None:
-    if not _is_superadmin(admin):
+async def _require_superadmin(admin: dict, action: str) -> None:
+    if not await _is_superadmin(admin):
         raise HTTPException(status_code=403, detail=f"Only a SuperAdmin can {action}.")
 
 logger = logging.getLogger(__name__)
@@ -348,7 +352,7 @@ async def assign_role_to_user(
             raise HTTPException(status_code=404, detail="User not found")
         # Only a SuperAdmin may create/grant admin-tier roles (Admin/SuperAdmin).
         if body.role in _ADMIN_TIER_ROLES:
-            _require_superadmin(admin, f"assign the {body.role} role")
+            await _require_superadmin(admin, f"assign the {body.role} role")
         await user_role_repo.assign_role(
             session=session,
             profile_id=profile_id,
@@ -386,7 +390,7 @@ async def remove_role_from_user(
             )
         # Demoting an Admin (removing the Admin role) is SuperAdmin-only.
         if role_name == "Admin":
-            _require_superadmin(admin, "remove the Admin role")
+            await _require_superadmin(admin, "remove the Admin role")
         await user_role_repo.remove_role(session, profile_id, role_name)
         roles = await user_role_repo.get_user_role_names(session, profile_id)
         await session.commit()
@@ -578,7 +582,7 @@ async def ban_user(
             )
         # Banning an Admin is SuperAdmin-only (SuperAdmin > Admin).
         if "Admin" in (target_roles or []):
-            _require_superadmin(admin, "ban an Admin account")
+            await _require_superadmin(admin, "ban an Admin account")
 
         banned_at = datetime.utcnow()
         profile.is_banned = True
