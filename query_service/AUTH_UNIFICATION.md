@@ -6,6 +6,12 @@ Single-issuer RS256 + JWKS SSO with per-audience tokens is live-verified for
 `brainkb_mcp` is migrated to single sign-on. Legacy HS256 tokens still validate
 during migration. `chat_service` deferred (not in use). The only step not
 exercisable in the dev sandbox is the actual Globus browser consent.
+
+Several further decisions were taken **during** implementation — onboarding via
+OAuth (no self-registration), `/api/token` → `/api/login`, role/group-level
+capability grants, SuperAdmin-over-Admin, ban-not-delete, OAuth login via the
+skill (paste-code), and expiring sessions. Each is recorded with its problem and
+rationale in **§9. Implementation decisions log**.
 Audience: BrainKB maintainers
 Scope: `query_service`, `usermanagement_service`, `APItokenmanager` (Django), and downstream services (`ml_service`, `chat_service`, `brainkb_mcp`).
 
@@ -417,3 +423,92 @@ implemented behavior:
 - **Do later, deliberately:** single-issuer **audience-scoped SSO** (§4.2 Option B2)
   when ready to operate JWKS + `aud` properly.
 - **Do not:** collapse to one shared-secret token usable across all services.
+
+---
+
+## 9. Implementation decisions log (problems → decisions)
+
+Decisions taken while building Phases 1–2. Each: the problem, the decision, and
+where it lives. All are live-verified except the Globus browser consent (dev
+sandbox has no browser); the mechanics around it are verified.
+
+### 9.1 Onboarding: no self-registration — OAuth first-login creates the user
+- **Problem.** Two onboarding paths existed: a password `/api/register` (created a
+  `Web_jwtuser`, initially role-less / inactive, needing admin activation) *and*
+  OAuth. The password path produced role-less "orphan" accounts and an extra
+  activation step, and duplicated identity creation.
+- **Decision.** A user is created **only** on first Globus/ORCID/GitHub login,
+  which auto-provisions + links the profile and assigns a default role
+  (`provision_identity`). Self-registration is **disabled**: `/api/register` →
+  `405` on `query_service` and `ml_service`; the MCP `brainkb_register` tool was
+  removed.
+- **Trade-off.** No API path to create a *password* account anymore (Globus is the
+  identity source). Existing/seeded password accounts still log in.
+
+### 9.2 Endpoint naming: `/api/token` → `/api/login`
+- **Problem.** "token" was ambiguous next to the SSO refresh/exchange tokens, and
+  read as an issuance detail rather than "log in".
+- **Decision.** Password login is **`/api/login`** on `query_service`,
+  `usermanagement`, `ml_service`; **`/api/token` kept as a hidden deprecated
+  alias** (same handler) so existing clients don't break. MCP prefers `/api/login`
+  and falls back to `/api/token`.
+
+### 9.3 Authorization: grant capabilities to a whole group/role
+- **Problem.** Capabilities could be granted per-**user** (`user_capability_grants`)
+  or scoped to a space (access rules), but a **custom group/role** (e.g.
+  `uk_collaborator`) could only ever get the hardcoded `read_private` — no way to
+  give a whole group `ingest`/`create_private_space`, etc.
+- **Decision.** New `role_capability_grants` table + `grant/revoke_role_capability`
+  and `/admin/capabilities/grant-role|revoke-role|role|available` endpoints.
+  Effective caps = role-derived ∪ **role/group grants** ∪ per-user grants. Only the
+  delegatable set is grantable (`grant`/`sparql_admin` stay admin-intrinsic — no
+  escalation). Also: a **space write access rule now GRANTS ingest** to a group
+  (previously rules could only restrict).
+
+### 9.4 Admin hierarchy: SuperAdmin-over-Admin
+- **Problem.** Any Admin could assign/remove the `Admin` role on, or ban, another
+  Admin — no real hierarchy; a peer/rogue Admin could lock others out.
+- **Decision.** Assigning/removing the `Admin` (or `SuperAdmin`) role and banning
+  an Admin are **SuperAdmin-only**. `SuperAdmin` stays bootstrap-seeded and
+  protected (never removable/bannable). Regular Admins manage non-admin users.
+
+### 9.5 Removal: ban, never hard-delete
+- **Problem.** Hard-deleting a user destroys provenance/audit history and is
+  irreversible.
+- **Decision.** **We don't delete.** `DELETE /api/admin/users/{id}` → `405`;
+  removal is a reversible **ban** (`/ban` + `DELETE /ban` to lift), which preserves
+  history. `deactivate` toggles login access.
+
+### 9.6 OAuth login through the skill (paste-code)
+- **Problem.** OAuth needs a browser consent the MCP can't perform, and the normal
+  callback redirects to the **web UI** — so "Globus login via skill" seemed to
+  require the website.
+- **Decision.** An out-of-band **paste-code** flow: `POST /api/auth/cli/start`
+  (state marked `cli`) → user signs in → the callback mints an SSO refresh token,
+  stores it behind a short one-time **code**, and shows a minimal page (no SPA) →
+  `POST /api/auth/cli/exchange {code}` returns the refresh token (single-use). MCP:
+  `brainkb_globus_login` → `brainkb_finish_login(code)`.
+
+### 9.7 Sessions expire (logins are not forever)
+- **Problem.** The MCP cached credentials/refresh, so a login effectively lasted
+  forever (a cached password could silently re-login).
+- **Decision.** A cached session lives only until its **refresh token expires**
+  (`USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN`, default 12h), hard-capped by
+  `MCP_SESSION_TTL_MIN`. On lapse the MCP forgets the credentials and prompts a new
+  login; `brainkb_whoami` reports `session_expires_in_min`.
+
+### 9.8 Operational decisions
+- **SSO signing key** auto-provisioned at container start to `/app/secrets` (a
+  persistent volume) so the JWKS `kid` is stable across the 4 gunicorn workers and
+  redeploys — fixing a real multi-worker "MissingGreenlet"/per-worker-key failure
+  found in testing. An explicit `USERMANAGEMENT_JWT_PRIVATE_KEY_PEM/_FILE` overrides.
+- **Rate limiting** (per-caller, source-IP) in the MCP; `login`/OAuth-start use a
+  strict bucket. Large **file** ingest is not byte-capped and uses no read/write
+  timeout (raw-text ingest is capped) so ~5 GB TTL/JSON-LD uploads aren't aborted.
+
+### Still open (deliberately deferred)
+- Retire the legacy HS256 `/api/login`(`/token`) paths once all clients use SSO;
+  fold in `APItokenmanager`.
+- Tighten usermanagement `require_admin` to re-read roles from the DB (it currently
+  trusts the token `roles` claim; SSO tokens are short-lived + re-read at exchange).
+- `chat_service` RS256 verification (same `core/jwks.py` pattern) — not in use.
