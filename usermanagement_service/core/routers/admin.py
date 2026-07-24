@@ -37,6 +37,26 @@ from core.models.user import (
     AdminUserListItem, UserRoleInput, ActivityType,
 )
 from core.security import require_admin
+from core.configuration import config
+
+# Roles that make someone part of the admin tier. Managing these (assign/remove
+# the role, or ban/delete such an account) is SuperAdmin-only — the hierarchy is
+# SuperAdmin > Admin. The SuperAdmin role itself is additionally protected from
+# removal/ban/delete everywhere below.
+_ADMIN_TIER_ROLES = {"Admin", "SuperAdmin"}
+
+
+def _is_superadmin(admin: dict) -> bool:
+    """True if the acting caller holds SuperAdmin (or is a bootstrap superadmin)."""
+    if isinstance(admin, dict) and "SuperAdmin" in (admin.get("roles") or []):
+        return True
+    email = ((admin.get("sub") or admin.get("email")) if isinstance(admin, dict) else "") or ""
+    return bool(email and email.lower() in config.bootstrap_superadmin_emails)
+
+
+def _require_superadmin(admin: dict, action: str) -> None:
+    if not _is_superadmin(admin):
+        raise HTTPException(status_code=403, detail=f"Only a SuperAdmin can {action}.")
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -304,25 +324,16 @@ async def count_users(_admin: Annotated[dict, Depends(require_admin)]):
         return {"count": result.scalar_one()}
 
 
-@router.delete("/users/{profile_id}", status_code=204)
+@router.delete("/users/{profile_id}")
 async def delete_user(profile_id: int, _admin: Annotated[dict, Depends(require_admin)]):
-    async with user_db_manager.get_async_session() as session:
-        profile = await session.get(UserProfileModel, profile_id)
-        if not profile:
-            raise HTTPException(status_code=404, detail="User not found")
-        # SuperAdmin accounts are protected — they cannot be deleted via the
-        # admin endpoints. Drop them from the bootstrap allowlist + restart
-        # if this is genuinely needed.
-        target_roles = await user_role_repo.get_user_role_names(session, profile_id)
-        if "SuperAdmin" in (target_roles or []):
-            raise HTTPException(
-                status_code=403,
-                detail="SuperAdmin accounts cannot be deleted via the admin UI.",
-            )
-        # Cascades delete activities, roles, contributions, countries, orgs, education, expertise, oauth_identity.
-        await session.delete(profile)
-        await session.commit()
-        return None
+    """User deletion is DISABLED by policy — ban the account instead
+    (`POST /users/{profile_id}/ban`). Banning is reversible and preserves the
+    user's provenance/audit history; hard deletion is not offered."""
+    raise HTTPException(
+        status_code=405,
+        detail="User deletion is disabled. Ban the account instead "
+               "(POST /users/{profile_id}/ban) — reversible and preserves history.",
+    )
 
 
 @router.post("/users/{profile_id}/roles", response_model=List[str])
@@ -335,6 +346,9 @@ async def assign_role_to_user(
         profile = await session.get(UserProfileModel, profile_id)
         if not profile:
             raise HTTPException(status_code=404, detail="User not found")
+        # Only a SuperAdmin may create/grant admin-tier roles (Admin/SuperAdmin).
+        if body.role in _ADMIN_TIER_ROLES:
+            _require_superadmin(admin, f"assign the {body.role} role")
         await user_role_repo.assign_role(
             session=session,
             profile_id=profile_id,
@@ -358,7 +372,7 @@ async def assign_role_to_user(
 async def remove_role_from_user(
     profile_id: int,
     role_name: str,
-    _admin: Annotated[dict, Depends(require_admin)],
+    admin: Annotated[dict, Depends(require_admin)],
 ):
     async with user_db_manager.get_async_session() as session:
         profile = await session.get(UserProfileModel, profile_id)
@@ -370,6 +384,9 @@ async def remove_role_from_user(
                 status_code=403,
                 detail="The SuperAdmin role cannot be removed via the admin UI.",
             )
+        # Demoting an Admin (removing the Admin role) is SuperAdmin-only.
+        if role_name == "Admin":
+            _require_superadmin(admin, "remove the Admin role")
         await user_role_repo.remove_role(session, profile_id, role_name)
         roles = await user_role_repo.get_user_role_names(session, profile_id)
         await session.commit()
@@ -534,9 +551,9 @@ async def ban_user(
     """Suspend a user. Body: { "reason": str }. Idempotent — re-banning an
     already-banned user updates the reason and timestamp.
 
-    Refuses to ban yourself or to ban a SuperAdmin. Regular Admins are
-    bannable directly — multiple admins can coexist, and one admin moderating
-    another is part of the model.
+    Refuses to ban yourself or a SuperAdmin. Banning an Admin is SuperAdmin-only
+    (hierarchy: SuperAdmin > Admin); regular Admins can ban non-admin users.
+    Banning is how accounts are removed — deletion is disabled (we don't delete).
     """
     reason = (payload.get("reason") or "").strip() if isinstance(payload, dict) else ""
     if not reason:
@@ -559,9 +576,13 @@ async def ban_user(
                 status_code=403,
                 detail="SuperAdmin accounts cannot be banned via the admin UI.",
             )
+        # Banning an Admin is SuperAdmin-only (SuperAdmin > Admin).
+        if "Admin" in (target_roles or []):
+            _require_superadmin(admin, "ban an Admin account")
 
+        banned_at = datetime.utcnow()
         profile.is_banned = True
-        profile.banned_at = datetime.utcnow()
+        profile.banned_at = banned_at
         profile.banned_by = actor_id
         profile.ban_reason = reason
         await session.flush()
@@ -575,12 +596,14 @@ async def ban_user(
             user_agent=None,
         )
         await session.commit()
+        # Build the response from locals — after commit the ORM attributes are
+        # expired and touching them would trigger async lazy-load (MissingGreenlet).
         return {
             "profile_id": profile_id,
             "is_banned": True,
-            "banned_at": profile.banned_at.isoformat() if profile.banned_at else None,
-            "banned_by": profile.banned_by,
-            "ban_reason": profile.ban_reason,
+            "banned_at": banned_at.isoformat(),
+            "banned_by": actor_id,
+            "ban_reason": reason,
         }
 
 
