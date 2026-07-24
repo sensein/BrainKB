@@ -22,7 +22,7 @@ from core.database import (
     user_db_manager, jwt_user_repo, user_profile_repo, user_role_repo,
 )
 from core.models.user import LoginUserIn
-from core.security import authenticate_user
+from core.security import authenticate_user, get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,22 @@ router = APIRouter()
 wellknown_router = APIRouter()
 
 _bearer = HTTPBearer(auto_error=True)
+
+# Scopes are derived from roles (RBAC is the source of truth) so no separate
+# scope-management (the old Django APItokenmanager) is needed.
+_WRITE_ROLES = {"Admin", "SuperAdmin", "Curator", "Lab Member", "Submitter",
+                "Annotator", "Mapper", "Knowledge Contributor"}
+_ADMIN_ROLES = {"Admin", "SuperAdmin"}
+
+
+def _scopes_for_roles(roles) -> list:
+    rset = set(roles or [])
+    scopes = ["read"]
+    if rset & _WRITE_ROLES:
+        scopes.append("write")
+    if rset & _ADMIN_ROLES:
+        scopes.append("admin")
+    return scopes
 
 
 class ExchangeIn(BaseModel):
@@ -119,6 +135,51 @@ async def sso_exchange(
         scopes=scopes,
         auth_source=payload.get("auth_source", "password"),
         jwt_user_id=jwt_user.id,
+    )
+    return {
+        "access_token": access,
+        "token_type": "bearer",
+        "aud": body.audience,
+        "expires_in": tokens_rs256.access_token_ttl_seconds(),
+    }
+
+
+@router.post("/auth/session-exchange", tags=["SSO"])
+async def sso_session_exchange(
+    body: ExchangeIn,
+    current_user: dict = Depends(get_current_user),
+):
+    """Exchange an authenticated **session token** (the web UI's usermanagement
+    JWT — v2 or SSO) for a short-lived per-service access token (`aud=<service>`).
+
+    This lets the web UI call query_service / ml_service with an audience-scoped
+    token derived from the logged-in user, instead of a shared service-account
+    password — so no password login is needed for those calls. Roles are re-read
+    fresh from the DB and scopes are derived from them (RBAC is authoritative)."""
+    if body.audience not in config.token_audiences:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown audience '{body.audience}'. Allowed: {config.token_audiences}",
+        )
+    email = current_user.get("email") or current_user.get("sub")
+    if not email:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="no identity in token")
+
+    async with user_db_manager.get_async_session() as session:
+        profile = await user_profile_repo.get_by_email(session, email)
+        profile_id = profile.id if profile else current_user.get("profile_id")
+        roles = await user_role_repo.get_user_role_names(session, profile.id) if profile else []
+        jwt_user = await jwt_user_repo.get_by_email_any_status(session, email)
+        jwt_user_id = jwt_user.id if jwt_user else current_user.get("user_id")
+
+    access = tokens_rs256.create_access_token(
+        audience=body.audience,
+        email=email,
+        profile_id=profile_id,
+        roles=roles,
+        scopes=_scopes_for_roles(roles),
+        auth_source=current_user.get("auth_source", "session"),
+        jwt_user_id=jwt_user_id,
     )
     return {
         "access_token": access,
