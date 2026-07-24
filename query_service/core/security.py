@@ -145,7 +145,10 @@ async def get_current_user(
     except JWTError as e:
         raise credentials_exception from e
     user = await get_user(email=email)
-    if user is None:
+    # get_user returns False (not None) when there is no active user row, so check
+    # falsiness — otherwise `False` slips through as the "user" and downstream code
+    # (_agent, role lookup) breaks, yielding a misleading 403 instead of a 401.
+    if not user:
         raise credentials_exception
     return user
 
@@ -169,7 +172,9 @@ async def get_current_user_optional(request: Request):
         email = payload.get("sub")
         if not email:
             return None
-        return await get_user(email=email)
+        # get_user returns False when no active user row; normalize to None so
+        # callers' truthiness/None checks behave (anonymous, not a bogus `False`).
+        return (await get_user(email=email)) or None
     except (ExpiredSignatureError, JWTError, Exception):
         return None
 
@@ -282,10 +287,11 @@ async def authenticate_websocket(websocket: WebSocket, required_scopes: Optional
         
         # Get user from database (same as get_current_user)
         user = await get_user(email=email)
-        if user is None:
+        # get_user returns False (not None) when no active user row — check falsiness.
+        if not user:
             logger.warning(f"User not found for email: {email}")
             return None
-        
+
         return user
         
     except Exception as e:
