@@ -25,8 +25,9 @@ Two token schemes are accepted (see `AUTH_UNIFICATION.md`):
   equal `query_service`, so a token minted for another service is rejected
   (containment). Configure with `QUERY_SERVICE_SSO_JWKS_URL` /
   `QUERY_SERVICE_SSO_ISSUER` / `QUERY_SERVICE_SSO_AUDIENCE`.
-- **Legacy HS256** — this service's own `/api/token`, signed with its own secret.
-  Still accepted during migration; both schemes work side by side.
+- **Legacy HS256** — this service's own password login at **`/api/login`**
+  (`/api/token` is a deprecated alias), signed with its own secret. Still accepted
+  during migration; both schemes work side by side.
 
 Scope policy (same for either scheme):
 
@@ -34,11 +35,11 @@ Scope policy (same for either scheme):
 - **Mutations** (ingest, register/attach graph, recover, create/modify space) → `write`
 - **Arbitrary SPARQL** (`/query/sparql/`) → `admin`
 - **Public-space reads** → no token required (anonymous), see Spaces below
-- `/register`, `/token` → public
+- `/login` (and deprecated alias `/token`) → public
 
-`POST /register` creates the credential **and** a canonical `Web_user_profile`
-with a default role (so a password user is a first-class identity, not a role-less
-orphan); the account starts inactive until an admin activates it. Authorization is
+**Onboarding is via Globus/ORCID/GitHub sign-in — there is no self-registration.**
+`POST /register` is **disabled** (returns 405). A user's profile + default role are
+auto-created/linked on first OAuth login (usermanagement). Authorization is
 role-based (see `RBAC_MODEL.md`) and read from the DB, not just the token.
 
 Users may only act on their own `user_id` (enforced), and job-scoped endpoints are

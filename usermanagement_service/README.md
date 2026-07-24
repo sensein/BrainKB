@@ -81,10 +81,11 @@ Once running, visit:
 ### Key Endpoints
 
 End-user sign-up happens automatically on first OAuth callback (see
-*Configuring the Admin role* below) — there is no public `/register` endpoint.
-The `/api/token` endpoint mints a JWT for service-account password login only.
+*Configuring the Admin role* below) — there is **no self-registration**; users are
+created on first OAuth login. Password login is at `/api/login` (`/api/token` is a
+deprecated alias) for accounts that already exist.
 
-- `POST /api/token` - Legacy HS256 password login (mints a v2 JWT)
+- `POST /api/login` - Legacy HS256 password login (mints a v2 JWT); `/api/token` = deprecated alias
 - `GET  /api/auth/providers` - List OAuth providers + which are configured
 - `GET  /api/auth/{provider}/login` - Start OAuth flow (returns `authorize_url`)
 - `GET  /api/auth/{provider}/callback` - OAuth callback; auto-creates profile + linked credential + default `Curator` role on first sign-in

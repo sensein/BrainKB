@@ -12,30 +12,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/register", status_code=201)
+@router.post("/register", include_in_schema=False)
 async def register(user: UserIn):
-    """
-    Register a new user. Uses proper connection management to avoid connection leaks.
-    
-    Note: The unique constraint check is handled atomically by the database.
-    This prevents race conditions where two concurrent requests could both pass
-    a pre-check and then both attempt to insert the same email.
-    """
-    async with get_db_connection() as conn:
-        hashed_password = await get_password_hash(user.password)
-        
-        # Let the database enforce uniqueness atomically - no pre-check needed
-        # insert_data will catch UniqueViolationError and return a user-friendly message
-        return await insert_data(
-            conn=conn, fullname=user.full_name, email=user.email, password=hashed_password
-        )
+    """Self-registration is DISABLED — there is no separate register step.
+    Users are onboarded by signing in with Globus / ORCID / GitHub
+    (usermanagement `/api/auth/{provider}/login`, or `brainkb_globus_login` in the
+    skill), which auto-creates and links the profile on first login."""
+    raise HTTPException(
+        status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        detail=("Self-registration is disabled. Sign in with Globus / ORCID / GitHub "
+                "— your account is created automatically on first login."),
+    )
 
 
-@router.post("/token", include_in_schema=True)
+@router.post("/login")
+@router.post("/token", include_in_schema=False)  # deprecated alias of /login
 async def login(user: LoginUserIn):
     """
-    Authenticate user and return JWT token. Uses proper connection management to avoid connection leaks.
-    Reuses the same database connection for both authentication and scope retrieval to minimize connection pool usage.
+    Authenticate (password) and return a JWT. Primary path is `/api/login`;
+    `/api/token` is kept as a deprecated alias for backward compatibility.
     """
     async with get_db_connection() as conn:
         authenticated_user = await authenticate_user(user.email, user.password, conn)

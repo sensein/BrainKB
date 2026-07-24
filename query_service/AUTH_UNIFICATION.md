@@ -22,37 +22,43 @@ tokens still validate during migration.
 
 ### A. Password / SSO login + per-service calls (via the MCP)
 
+![Auth flow A — login, exchange, per-service access](docs/auth/flow-a.png)
+
+<details><summary>Diagram source (Mermaid)</summary>
+
 ```mermaid
 sequenceDiagram
     actor U as User
     participant MCP as brainkb_mcp / skill
-    participant UM as usermanagement<br/>(issuer + JWKS)
+    participant UM as usermanagement issuer + JWKS
     participant QS as query_service
     participant ML as ml_service
-
     U->>MCP: brainkb_login(email, password)
     MCP->>UM: POST /api/auth/login
-    UM-->>MCP: refresh token (aud=brainkb-auth)
-    Note over MCP: cache refresh per session<br/>(expires with the token)
-
-    U->>MCP: "ingest / search ..." (a KG tool)
-    MCP->>UM: POST /api/auth/exchange {audience: query_service}
-    UM-->>MCP: access token (aud=query_service, ~15m)
+    UM-->>MCP: refresh token, aud=brainkb-auth
+    Note over MCP: cache refresh per session, expires with token
+    U->>MCP: a KG tool (ingest / search)
+    MCP->>UM: POST /api/auth/exchange audience=query_service
+    UM-->>MCP: access token, aud=query_service, ~15m
     MCP->>QS: request + Bearer access token
     QS->>UM: GET /.well-known/jwks.json (cached ~10m)
-    QS-->>MCP: 200 — verify RS256 + iss + aud=query_service
-
-    U->>MCP: "list users ..." (an admin tool)
-    MCP->>UM: POST /api/auth/exchange {audience: usermanagement}
-    UM-->>MCP: access token (aud=usermanagement)
-    MCP->>UM: admin call + Bearer (verify aud=usermanagement)
-    Note over MCP,ML: same exchange for aud=ml_service, etc.<br/>a query_service token is REJECTED elsewhere (403/401)
+    QS-->>MCP: 200 verify RS256 + iss + aud=query_service
+    U->>MCP: an admin tool (list users)
+    MCP->>UM: POST /api/auth/exchange audience=usermanagement
+    UM-->>MCP: access token, aud=usermanagement
+    MCP->>UM: admin call + Bearer, verify aud=usermanagement
+    Note over MCP,ML: same exchange for aud=ml_service. a query_service token is rejected elsewhere
 ```
+</details>
 
 ### B. OAuth login via the skill (Globus / ORCID / GitHub — paste-code)
 
 The browser consent is unavoidable (only the user can approve at the provider),
 but the result is picked up out-of-band — no web UI needed.
+
+![Auth flow B — OAuth paste-code login via the skill](docs/auth/flow-b.png)
+
+<details><summary>Diagram source (Mermaid)</summary>
 
 ```mermaid
 sequenceDiagram
@@ -61,23 +67,27 @@ sequenceDiagram
     participant BR as Browser
     participant UM as usermanagement
     participant P as Globus / ORCID / GitHub
-
     U->>MCP: brainkb_globus_login()
-    MCP->>UM: POST /api/auth/cli/start {provider}
-    UM-->>MCP: authorize_url (state.mode=cli)
+    MCP->>UM: POST /api/auth/cli/start provider
+    UM-->>MCP: authorize_url, state.mode=cli
     MCP-->>U: open this URL
     U->>BR: open URL, sign in
     BR->>P: consent
-    P->>UM: GET /api/auth/{provider}/callback?code&state
-    UM->>UM: provision/link profile + default role<br/>mint refresh token, store behind a short CODE
+    P->>UM: GET /api/auth/provider/callback with code + state
+    UM->>UM: provision profile + default role, mint refresh, store behind short CODE
     UM-->>BR: minimal page shows CODE
     U->>MCP: brainkb_finish_login(CODE)
-    MCP->>UM: POST /api/auth/cli/exchange {code}
-    UM-->>MCP: refresh token (single-use code)
+    MCP->>UM: POST /api/auth/cli/exchange code
+    UM-->>MCP: refresh token, single-use code
     Note over MCP: now exchanges per service as in flow A
 ```
+</details>
 
 ### C. Trust / containment overview
+
+![Auth flow C — single issuer, per-audience tokens, JWKS verification](docs/auth/flow-c.png)
+
+<details><summary>Diagram source (Mermaid)</summary>
 
 ```mermaid
 flowchart LR
@@ -85,7 +95,7 @@ flowchart LR
       MCP[brainkb_mcp / skill]
       WEB[Web UI]
     end
-    UM["usermanagement<br/>issuer • RS256 private key<br/>/.well-known/jwks.json<br/>login · exchange · OAuth"]
+    UM["usermanagement<br/>issuer - RS256 private key<br/>/.well-known/jwks.json<br/>login - exchange - OAuth"]
     QS[query_service<br/>aud=query_service]
     ML[ml_service<br/>aud=ml_service]
     MCP -- login / exchange --> UM
@@ -95,9 +105,8 @@ flowchart LR
     MCP -- "Bearer aud=usermanagement" --> UM
     QS -- "fetch public keys (JWKS)" --> UM
     ML -- "fetch public keys (JWKS)" --> UM
-    QS -. "rejects aud≠query_service" .-> QS
-    ML -. "rejects aud≠ml_service" .-> ML
 ```
+</details>
 
 Sessions are **not forever**: a cached login lasts until its refresh token expires
 (`USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN`, default 12h; MCP additionally caps via
