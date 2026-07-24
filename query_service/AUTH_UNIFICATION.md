@@ -520,9 +520,21 @@ sandbox has no browser); the mechanics around it are verified.
   strict bucket. Large **file** ingest is not byte-capped and uses no read/write
   timeout (raw-text ingest is capped) so ~5 GB TTL/JSON-LD uploads aren't aborted.
 
+### 9.9 `require_admin` re-reads roles from the DB (done)
+- **Problem.** `require_admin` trusted the token's `roles` claim, so a revoked/
+  demoted admin kept access until their token expired.
+- **Decision.** `require_admin` (and the `_is_superadmin` gate on admin-tier
+  actions) now re-read **active roles from the DB** (`_current_roles_from_db` by
+  profile_id/email); the bootstrap-superadmin allowlist is still honored for first
+  sign-in. Verified: an old token claiming `roles=[Admin]` is accepted while the
+  role exists, and rejected (403) the moment the role is removed in the DB.
+
 ### Still open (deliberately deferred)
-- Retire the legacy HS256 `/api/login`(`/token`) paths once all clients use SSO;
-  fold in `APItokenmanager`.
-- Tighten usermanagement `require_admin` to re-read roles from the DB (it currently
-  trusts the token `roles` claim; SSO tokens are short-lived + re-read at exchange).
+- **Retire the legacy HS256 `/api/login`(`/token`) paths + fold in
+  `APItokenmanager`.** *Gated on "all clients on SSO", which is NOT yet true* — the
+  MCP still falls back to legacy, and other clients (e.g. the web UI) may still use
+  password login; `/api/token` is intentionally kept as a compatibility alias.
+  Removing it now would break password login. Retire only after confirming every
+  client authenticates via SSO (login → exchange / OAuth), then delete the legacy
+  routes and migrate `APItokenmanager`'s user/scope store into usermanagement.
 - `chat_service` RS256 verification (same `core/jwks.py` pattern) — not in use.
