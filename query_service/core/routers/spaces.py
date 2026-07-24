@@ -221,6 +221,14 @@ async def add_graph(slug: str, body: SpaceGraphIn, user: Annotated[LoginUserIn, 
     if not named_graph_url.endswith("/"):
         named_graph_url += "/"
 
+    # Bind first: a graph is globally unique to one space, so if another space
+    # already holds it this must fail with a conflict rather than register registry
+    # metadata for a graph we cannot attach.
+    try:
+        await sp.attach_graph(space["space_id"], named_graph_url)
+    except sp.GraphAlreadyBound as e:
+        raise HTTPException(409, str(e))
+
     # Register in the graph registry if not already there (idempotent-ish).
     if not await check_named_graph_exists(named_graph_url):
         await insert_data_gdb_async(named_graph_metadata(
@@ -228,7 +236,6 @@ async def add_graph(slug: str, body: SpaceGraphIn, user: Annotated[LoginUserIn, 
             description=body.description,
             agent_uri=str(agent_ref(_agent(user))),
         ))
-    await sp.attach_graph(space["space_id"], named_graph_url)
     space = await sp.get_space(slug)
     await sp.mirror_space_to_rdf(space)
     return space
