@@ -59,7 +59,7 @@ Two independent layers apply to every mutating call:
 |---|---|
 | `create_private_space` | Create your own individual/private space |
 | `create_team_space` | Create a **team** (shared) space |
-| `manage_team_space` | Manage a team space's members, visibility, graphs, and access rules |
+| `manage_team_space` | Manage a team space's members/visibility/graphs/rules — **only for team spaces you own or are assigned to** (a member of), *not* all team spaces (Admin/SuperAdmin manage all) |
 | `ingest` | Ingest data into a graph — **also** needs per-space write (owner/editor membership **or** a space write access rule; see below) |
 | `recover` | Recover stuck/errored ingest jobs |
 | `read_private` | Read non-public content you're a member of |
@@ -91,9 +91,19 @@ delegatable. `grant` and `sparql_admin` are **not** delegatable (they come only
 from an Admin/SuperAdmin role), so grants can't escalate a non-admin into an admin.
 Effective capabilities = role-derived ∪ role/group grants ∪ per-user grants.
 
-**SuperAdmin vs Admin:** identical KG capabilities here. SuperAdmin is a
-bootstrap-seeded, protected marker (can't be banned/deleted/role-stripped);
-role *assignment* is owned by the usermanagement service, not query_service.
+**SuperAdmin vs Admin — who they are and who creates them:**
+- **SuperAdmin** is the top authority, **bootstrapped at deployment** from
+  `USERMANAGEMENT_BOOTSTRAP_SUPERADMIN_EMAILS` (seeded on that user's first login).
+  It's a protected marker — can't be banned, deleted, or role-stripped. Only a
+  **SuperAdmin** can grant the `Admin` (or `SuperAdmin`) role to others.
+- **Admin** is created by a **SuperAdmin** assigning the `Admin` role
+  (`brainkb_assign_role(email, "Admin")` — SuperAdmin-only). Admins have the same
+  KG capabilities but are themselves manageable (a SuperAdmin can demote/ban them).
+- **Scope of "manage all":** only Admin/SuperAdmin manage *every* team space.
+  A non-admin (even with `manage_team_space`) manages **only** the team spaces they
+  **created (own)** or were **assigned to** (a member, or matched by a per-space
+  `manage` rule). Role *assignment* itself is owned by usermanagement, not
+  query_service.
 
 ### Giving a whole group ingest access to a team space
 

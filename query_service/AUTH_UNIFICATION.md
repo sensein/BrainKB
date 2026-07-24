@@ -465,12 +465,26 @@ sandbox has no browser); the mechanics around it are verified.
   escalation). Also: a **space write access rule now GRANTS ingest** to a group
   (previously rules could only restrict).
 
-### 9.4 Admin hierarchy: SuperAdmin-over-Admin
+### 9.4 Admin hierarchy: SuperAdmin-over-Admin (and who creates whom)
 - **Problem.** Any Admin could assign/remove the `Admin` role on, or ban, another
   Admin — no real hierarchy; a peer/rogue Admin could lock others out.
 - **Decision.** Assigning/removing the `Admin` (or `SuperAdmin`) role and banning
   an Admin are **SuperAdmin-only**. `SuperAdmin` stays bootstrap-seeded and
   protected (never removable/bannable). Regular Admins manage non-admin users.
+- **Who creates whom.** **SuperAdmin** is bootstrapped at deployment via
+  `USERMANAGEMENT_BOOTSTRAP_SUPERADMIN_EMAILS` (seeded on first login) and can grant
+  `SuperAdmin`/`Admin` to others. **Admin** is created by a SuperAdmin assigning the
+  `Admin` role. Admin and SuperAdmin have the same KG capabilities; the difference
+  is that SuperAdmin is the protected, admin-managing tier.
+
+### 9.4a `manage_team_space` is scoped, not blanket
+- **Problem.** A `manage_team_space` holder could manage **every** team space —
+  effectively a platform-wide admin power leaking through a delegatable capability.
+- **Decision.** A non-admin manages a team space **only** if they **own** it
+  (created it), are matched by a per-space `manage` access rule, or hold
+  `manage_team_space` **and are a member of that space** — i.e. only spaces they
+  created or were assigned to. **Admin/SuperAdmin** still manage all. (query_service
+  `_can_manage`.) Verified: non-member holder → 403; owner/member-holder/admin → OK.
 
 ### 9.5 Removal: ban, never hard-delete
 - **Problem.** Hard-deleting a user destroys provenance/audit history and is
