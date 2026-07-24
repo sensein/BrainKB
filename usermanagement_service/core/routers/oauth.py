@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import os
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional
@@ -57,12 +58,22 @@ def _redirect_uri_for(provider_name: str) -> str:
 
 
 # Unambiguous alphabet (no I/L/O/0/1) for the paste-code shown to users.
-_CLI_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+_CLI_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # 30 symbols
+# Paste-code length (raw chars, before dash grouping). The code is short-LIVED
+# (~10 min) and single-use, but we still make it HIGH-ENTROPY for defense in
+# depth: 20 chars over a 30-symbol alphabet ≈ 98 bits (~1e29 combinations),
+# infeasible to brute-force within the 10-minute window even without rate limits.
+# Clamped to 24 so the dash-grouped value still fits the
+# Web_oauth_cli_result.code column (String(32)); configurable via env.
+_CLI_CODE_LEN = min(24, max(8, int(os.getenv("USERMANAGEMENT_CLI_CODE_LEN", "20"))))
 
 
 def _gen_cli_code() -> str:
-    raw = "".join(secrets.choice(_CLI_CODE_ALPHABET) for _ in range(8))
-    return f"{raw[:4]}-{raw[4:]}"
+    """A long, single-use, ~10-min paste-code, grouped in 4s for readability,
+    e.g. ``A3KM-7QRS-9WXY-2BCD-EFGH``. High entropy so it can't be guessed in the
+    short window; it is only a handle exchanged once for the real refresh token."""
+    raw = "".join(secrets.choice(_CLI_CODE_ALPHABET) for _ in range(_CLI_CODE_LEN))
+    return "-".join(raw[i:i + 4] for i in range(0, len(raw), 4))
 
 
 def _cli_success_page(code: str) -> str:
