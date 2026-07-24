@@ -23,12 +23,13 @@ from fastapi.middleware.cors import CORSMiddleware
 environment = load_environment()["ENV_STATE"]
 
 
-origins = [  
+origins = [
+    "https://brainkb.org",
+    "https://www.brainkb.org",
     "https://beta.brainkb.org",
-"https://sandbox.brainkb.org",
-    "http://localhost:3000/",
+    "https://sandbox.brainkb.org",
     "http://localhost:3000",
-    "http://127.0.0.1:3000:"
+    "http://127.0.0.1:3000",
 ]
 
 if environment == "prods":

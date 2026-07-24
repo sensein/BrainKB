@@ -123,11 +123,13 @@ app = FastAPI(lifespan=lifespan)
 logger = logging.getLogger(__name__)
 
 origins = [
+    "https://brainkb.org",
+    "https://www.brainkb.org",
     "https://beta.brainkb.org",
     "https://sandbox.brainkb.org",
     "localhost:3000",
     "http://localhost:3000",
-    "http://127.0.0.1:300",
+    "http://127.0.0.1:3000",
 ]
 
 app.add_middleware(

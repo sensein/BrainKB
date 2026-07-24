@@ -167,7 +167,10 @@ env_state = env.get("ENV_STATE", "production").lower()
 
 # CORS Configuration
 origins = [
+    "https://brainkb.org",
+    "https://www.brainkb.org",
     "https://beta.brainkb.org",
+    "https://sandbox.brainkb.org",
     "http://localhost",
     "http://localhost:3000",
     "http://localhost:3001",
