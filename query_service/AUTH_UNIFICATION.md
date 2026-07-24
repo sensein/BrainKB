@@ -1,10 +1,108 @@
 # BrainKB Authentication & Identity — Unification Design
 
-Status: **Phase 1 + Phase 2 implemented** (branch `auth-unification`). Phase 2
-(single-issuer RS256 + JWKS SSO, per-audience tokens) is code-complete and
-pending a fresh deployment for live verification.
+Status: **Phase 1 + Phase 2 implemented & verified** (branch `auth-unification`).
+Single-issuer RS256 + JWKS SSO with per-audience tokens is live-verified for
+`query_service`, `usermanagement_service` (its own routes), and `ml_service`; the
+`brainkb_mcp` is migrated to single sign-on. Legacy HS256 tokens still validate
+during migration. `chat_service` deferred (not in use). The only step not
+exercisable in the dev sandbox is the actual Globus browser consent.
 Audience: BrainKB maintainers
 Scope: `query_service`, `usermanagement_service`, `APItokenmanager` (Django), and downstream services (`ml_service`, `chat_service`, `brainkb_mcp`).
+
+---
+
+## 0. Current authentication flow (as implemented)
+
+usermanagement is the **single issuer**. One login mints a short-lived **refresh
+token**; clients **exchange** it for narrow, per-service **access tokens**
+(`aud=<service>`). Each service verifies against the issuer's **JWKS** and requires
+its own audience, so a token minted for one service can't be replayed against
+another (containment via `aud`, not shared secrets). Legacy HS256 per-service
+tokens still validate during migration.
+
+### A. Password / SSO login + per-service calls (via the MCP)
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant MCP as brainkb_mcp / skill
+    participant UM as usermanagement<br/>(issuer + JWKS)
+    participant QS as query_service
+    participant ML as ml_service
+
+    U->>MCP: brainkb_login(email, password)
+    MCP->>UM: POST /api/auth/login
+    UM-->>MCP: refresh token (aud=brainkb-auth)
+    Note over MCP: cache refresh per session<br/>(expires with the token)
+
+    U->>MCP: "ingest / search ..." (a KG tool)
+    MCP->>UM: POST /api/auth/exchange {audience: query_service}
+    UM-->>MCP: access token (aud=query_service, ~15m)
+    MCP->>QS: request + Bearer access token
+    QS->>UM: GET /.well-known/jwks.json (cached ~10m)
+    QS-->>MCP: 200 — verify RS256 + iss + aud=query_service
+
+    U->>MCP: "list users ..." (an admin tool)
+    MCP->>UM: POST /api/auth/exchange {audience: usermanagement}
+    UM-->>MCP: access token (aud=usermanagement)
+    MCP->>UM: admin call + Bearer (verify aud=usermanagement)
+    Note over MCP,ML: same exchange for aud=ml_service, etc.<br/>a query_service token is REJECTED elsewhere (403/401)
+```
+
+### B. OAuth login via the skill (Globus / ORCID / GitHub — paste-code)
+
+The browser consent is unavoidable (only the user can approve at the provider),
+but the result is picked up out-of-band — no web UI needed.
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant MCP as brainkb_mcp / skill
+    participant BR as Browser
+    participant UM as usermanagement
+    participant P as Globus / ORCID / GitHub
+
+    U->>MCP: brainkb_globus_login()
+    MCP->>UM: POST /api/auth/cli/start {provider}
+    UM-->>MCP: authorize_url (state.mode=cli)
+    MCP-->>U: open this URL
+    U->>BR: open URL, sign in
+    BR->>P: consent
+    P->>UM: GET /api/auth/{provider}/callback?code&state
+    UM->>UM: provision/link profile + default role<br/>mint refresh token, store behind a short CODE
+    UM-->>BR: minimal page shows CODE
+    U->>MCP: brainkb_finish_login(CODE)
+    MCP->>UM: POST /api/auth/cli/exchange {code}
+    UM-->>MCP: refresh token (single-use code)
+    Note over MCP: now exchanges per service as in flow A
+```
+
+### C. Trust / containment overview
+
+```mermaid
+flowchart LR
+    subgraph Clients
+      MCP[brainkb_mcp / skill]
+      WEB[Web UI]
+    end
+    UM["usermanagement<br/>issuer • RS256 private key<br/>/.well-known/jwks.json<br/>login · exchange · OAuth"]
+    QS[query_service<br/>aud=query_service]
+    ML[ml_service<br/>aud=ml_service]
+    MCP -- login / exchange --> UM
+    WEB -- OAuth / login --> UM
+    MCP -- "Bearer aud=query_service" --> QS
+    MCP -- "Bearer aud=ml_service" --> ML
+    MCP -- "Bearer aud=usermanagement" --> UM
+    QS -- "fetch public keys (JWKS)" --> UM
+    ML -- "fetch public keys (JWKS)" --> UM
+    QS -. "rejects aud≠query_service" .-> QS
+    ML -. "rejects aud≠ml_service" .-> ML
+```
+
+Sessions are **not forever**: a cached login lasts until its refresh token expires
+(`USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN`, default 12h; MCP additionally caps via
+`MCP_SESSION_TTL_MIN`). On expiry the MCP forgets the credentials and prompts a new
+login.
 
 ---
 
@@ -262,13 +360,32 @@ Remaining Phase 2 rollout (not yet done):
 
 ---
 
-## 6. Impact on `brainkb_mcp`
+## 6. `brainkb_mcp` — how it authenticates (implemented)
 
-After Phase 1, the MCP no longer needs **two logins** (`query_service` +
-`usermanagement`). A single `brainkb_login` authenticates one identity; admin/user
-management and KG operations share it. This directly simplifies the dual-service
-auth currently in `server.py` (`_um()` / separate token handling). After Phase 2,
-the MCP would validate/forward a single audience-scoped token.
+The MCP is migrated to single sign-on (see the diagrams in §0). Summary of the
+implemented behavior:
+
+- **One login, per-service exchange.** `brainkb_login(email, password)` mints a
+  refresh token cached for the session; `_token_for(audience)` exchanges it on
+  demand for a `query_service` or `usermanagement` access token. The old
+  two-login model (`_um_login` / separate `_UM_TOKENS`) is gone — one login now
+  covers both KG and admin tools.
+- **OAuth via the skill** (Globus/ORCID/GitHub): `brainkb_globus_login()` →
+  authorize URL → user signs in → browser shows a short code →
+  `brainkb_finish_login(code)` (backend `/api/auth/cli/start` + `/cli/exchange`,
+  flow B in §0). No web UI required.
+- **Header pass-through (stateless, multi-user remote):** a caller may send
+  `Authorization: Bearer <token>`. A **refresh** token unlocks all services (the
+  MCP exchanges it per service); a single **service access token** is used as-is.
+- **Sessions expire.** The cached session lasts until its refresh token expires
+  (`USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN`), hard-capped by `MCP_SESSION_TTL_MIN`.
+  On lapse the MCP forgets the credentials and asks the user to log in again;
+  `brainkb_whoami` reports `session_expires_in_min`.
+- **Legacy fallback.** If the backend has no SSO, the MCP falls back to the
+  per-service `/api/token` login automatically, so it keeps working during
+  migration.
+- **Abuse protection.** Per-caller (source-IP) rate limiting; login/register are
+  the strict `auth` bucket. See `brainkb_mcp/README.md`.
 
 ---
 
