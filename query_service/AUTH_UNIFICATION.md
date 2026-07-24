@@ -246,11 +246,17 @@ Phase 2 rollout — services now verifying RS256 (aud-scoped, JWKS):
   (covers SSE), and the websocket path. Verified live: ml-aud → 200,
   query_service-aud → 401, legacy HS256 → 200.
 
+- **brainkb_mcp** — migrated to single sign-on: `brainkb_login` mints a refresh
+  token (cached per session) that the MCP exchanges on demand for per-service
+  access tokens (`query_service`, `usermanagement`). One login now covers both KG
+  and admin tools — the old two-login logic is gone. Legacy `/api/token` remains
+  an automatic fallback. A header caller can pass a refresh token to unlock all
+  services. Verified live: login → exchange(query_service|usermanagement) → both
+  services accept their token; a query_service token is rejected at usermanagement.
+
 Remaining Phase 2 rollout (not yet done):
 - **chat_service**: same `core/jwks.py` pattern (using `requests`, no httpx) —
   deferred; service not currently in use.
-- `brainkb_mcp`: log in once, then request per-service access tokens via
-  `/api/auth/exchange` for whichever service a tool calls.
 - Once clients have migrated, retire the legacy HS256 `/api/token` paths and
   fold in `APItokenmanager`; tighten `require_admin` to re-read roles from the DB.
 
