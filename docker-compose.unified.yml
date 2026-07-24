@@ -37,6 +37,9 @@ services:
 
     volumes:
       - ./logs:/var/log/supervisor
+      # Persist the auto-generated SSO RS256 signing key across redeploys so the
+      # JWKS `kid` stays stable (see Dockerfile.unified start.sh + AUTH_UNIFICATION.md).
+      - ./secrets:/app/secrets
     networks:
       - brainkb-network
     depends_on:

@@ -210,6 +210,32 @@ PYTHON_SCRIPT
     echo "Django migrations completed"
 fi
 
+# --- Auto-provision the SSO signing key (auth Phase 2, RS256 + JWKS) ---
+# usermanagement signs SSO tokens with an RS256 private key and publishes the
+# public half at /.well-known/jwks.json. An explicit key
+# (USERMANAGEMENT_JWT_PRIVATE_KEY_PEM or _FILE) always wins. Otherwise we
+# generate a persistent key here, ONCE, so the JWKS `kid` is stable across all
+# gunicorn workers and restarts (a per-worker ephemeral key would break
+# cross-worker verification). Persist it on the /app/secrets volume so it also
+# survives redeploys. Exported env is inherited by supervisord's children.
+if [ -z "${USERMANAGEMENT_JWT_PRIVATE_KEY_PEM}" ] && [ -z "${USERMANAGEMENT_JWT_PRIVATE_KEY_FILE}" ]; then
+    SSO_KEY_DIR="${USERMANAGEMENT_JWT_KEY_DIR:-/app/secrets}"
+    SSO_KEY_FILE="${SSO_KEY_DIR}/um_jwt_private.pem"
+    mkdir -p "${SSO_KEY_DIR}"
+    if [ ! -s "${SSO_KEY_FILE}" ]; then
+        echo "Generating SSO RS256 signing key at ${SSO_KEY_FILE}..."
+        if openssl genpkey -algorithm RSA -pkcs8 -pkeyopt rsa_keygen_bits:2048 -out "${SSO_KEY_FILE}" 2>/dev/null; then
+            chmod 600 "${SSO_KEY_FILE}"
+            echo "SSO signing key generated."
+        else
+            echo "WARNING: openssl key generation failed; usermanagement will fall back to a shared ephemeral key."
+        fi
+    else
+        echo "Using existing SSO RS256 signing key at ${SSO_KEY_FILE}."
+    fi
+    [ -s "${SSO_KEY_FILE}" ] && export USERMANAGEMENT_JWT_PRIVATE_KEY_FILE="${SSO_KEY_FILE}"
+fi
+
 # Ensure supervisor socket directory exists and is writable (in case /var/run is tmpfs)
 mkdir -p /var/run
 chmod 755 /var/run

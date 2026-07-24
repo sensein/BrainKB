@@ -216,10 +216,13 @@ migration, not a flag-day cutover.
 
 Deployment env (set before/at the fresh deploy):
 
-- usermanagement: `USERMANAGEMENT_JWT_PRIVATE_KEY_PEM` **or** `_FILE`
-  (**required for production** — persistent, stable `kid`; without it a shared
-  ephemeral key is auto-generated and logged as a warning),
-  `USERMANAGEMENT_JWT_ISSUER` (default `brainkb-usermanagement`),
+- usermanagement: `USERMANAGEMENT_JWT_PRIVATE_KEY_PEM` **or** `_FILE` — normally
+  **not needed**: the unified container's `start.sh` auto-generates a persistent
+  RS256 key at `/app/secrets/um_jwt_private.pem` (mounted from `./secrets`) on
+  first boot, giving a stable `kid` across the 4 gunicorn workers and redeploys.
+  Set `_PEM`/`_FILE` only to supply your own key. (If key generation is somehow
+  unavailable, the service falls back to a shared ephemeral key and logs a
+  warning.) Plus `USERMANAGEMENT_JWT_ISSUER` (default `brainkb-usermanagement`),
   `USERMANAGEMENT_ACCESS_TOKEN_TTL_MIN` (15), `USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN`
   (720), `USERMANAGEMENT_TOKEN_AUDIENCES` (`query_service,ml_service,chat_service`).
 - query_service: `QUERY_SERVICE_SSO_JWKS_URL` (default
