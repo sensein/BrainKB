@@ -118,6 +118,7 @@ async def sso_exchange(
         roles=roles,
         scopes=scopes,
         auth_source=payload.get("auth_source", "password"),
+        jwt_user_id=jwt_user.id,
     )
     return {
         "access_token": access,

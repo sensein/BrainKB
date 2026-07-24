@@ -80,7 +80,7 @@ def load_environment(env_name="env"):
         "USERMANAGEMENT_ACCESS_TOKEN_TTL_MIN": os.getenv("USERMANAGEMENT_ACCESS_TOKEN_TTL_MIN", "15"),
         "USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN": os.getenv("USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN", "720"),
         # Services a refresh token may be exchanged for (valid aud values).
-        "USERMANAGEMENT_TOKEN_AUDIENCES": os.getenv("USERMANAGEMENT_TOKEN_AUDIENCES", "query_service,ml_service,chat_service"),
+        "USERMANAGEMENT_TOKEN_AUDIENCES": os.getenv("USERMANAGEMENT_TOKEN_AUDIENCES", "usermanagement,query_service,ml_service,chat_service"),
 
         # OAuth / Admin Bootstrap
         "USERMANAGEMENT_PUBLIC_BASE_URL": os.getenv("USERMANAGEMENT_PUBLIC_BASE_URL", "http://localhost:8004"),
@@ -196,7 +196,7 @@ class Configuration:
 
     @property
     def token_audiences(self) -> list:
-        raw = self._env_vars.get("USERMANAGEMENT_TOKEN_AUDIENCES", "query_service,ml_service,chat_service") or ""
+        raw = self._env_vars.get("USERMANAGEMENT_TOKEN_AUDIENCES", "usermanagement,query_service,ml_service,chat_service") or ""
         return [a.strip() for a in raw.split(",") if a.strip()]
     
     @property

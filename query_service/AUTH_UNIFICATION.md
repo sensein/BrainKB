@@ -235,9 +235,20 @@ refresh token; RS256→JWK verification roundtrip validates `aud`+`iss`; jose
 accepts JWK dicts. Full login→exchange→query_service acceptance, wrong-`aud`
 rejection, and legacy-HS256 coexistence to be confirmed on the fresh deployment.
 
-Remaining Phase 2 rollout (same pattern, not yet done):
-- `ml_service` / `chat_service`: drop in a `core/jwks.py` verifier (audience
-  `ml_service` / `chat_service`) and dual-verify like query_service.
+Phase 2 rollout — services now verifying RS256 (aud-scoped, JWKS):
+- **query_service** (`aud=query_service`) — verified live.
+- **usermanagement** (`aud=usermanagement`) — its own protected routes now
+  accept SSO tokens via `verify_token` (local public-key verify, since it is the
+  issuer); `usermanagement` added to the exchangeable audiences. Verified live:
+  usermanagement-aud → 200, query_service-aud → 401, legacy v2 → 200.
+- **ml_service** (`aud=ml_service`) — `core/jwks.py` verifier + `decode_token_any`
+  wired into `get_current_user`, `verify_scopes`/`require_scopes`, `decode_jwt`
+  (covers SSE), and the websocket path. Verified live: ml-aud → 200,
+  query_service-aud → 401, legacy HS256 → 200.
+
+Remaining Phase 2 rollout (not yet done):
+- **chat_service**: same `core/jwks.py` pattern (using `requests`, no httpx) —
+  deferred; service not currently in use.
 - `brainkb_mcp`: log in once, then request per-service access tokens via
   `/api/auth/exchange` for whichever service a tool calls.
 - Once clients have migrated, retire the legacy HS256 `/api/token` paths and

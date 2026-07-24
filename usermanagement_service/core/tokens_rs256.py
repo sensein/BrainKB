@@ -176,6 +176,7 @@ def create_access_token(
     roles: List[str],
     scopes: List[str],
     auth_source: str = "password",
+    jwt_user_id: Optional[int] = None,
 ) -> str:
     """Mint a narrow, short-lived access token for a single service (aud=<service>)."""
     _load_or_generate()
@@ -185,6 +186,7 @@ def create_access_token(
         "aud": audience,
         "sub": email,
         "typ": ACCESS_TYP,
+        "user_id": jwt_user_id,
         "profile_id": profile_id,
         "roles": roles,
         "scopes": scopes,
@@ -193,6 +195,30 @@ def create_access_token(
         "exp": now + timedelta(minutes=config.access_token_ttl_min),
     }
     return jwt.encode(claims, _private_pem, algorithm=ALGORITHM, headers={"kid": _kid})
+
+
+def verify_access_token(token: str, audience: str) -> Optional[Dict[str, Any]]:
+    """Verify an RS256 access token for ``audience`` using our OWN public key
+    (usermanagement is the issuer, so no network/JWKS fetch is needed). Returns
+    the claims on success, or None if it is not a valid RS256 access token for
+    this audience. Never raises — callers fall back to legacy HS256."""
+    _load_or_generate()
+    try:
+        header = jwt.get_unverified_header(token)
+    except Exception:
+        return None
+    if header.get("alg") != ALGORITHM:
+        return None
+    try:
+        payload = jwt.decode(
+            token, _public_pem, algorithms=[ALGORITHM],
+            audience=audience, issuer=config.jwt_issuer,
+        )
+    except Exception:
+        return None
+    if payload.get("typ") not in (None, ACCESS_TYP):
+        return None
+    return payload
 
 
 def verify_refresh_token(token: str) -> Dict[str, Any]:

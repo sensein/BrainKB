@@ -11,6 +11,7 @@
 # -----------------------------------------------------------------------------
 
 import logging
+import os
 import base64
 import hashlib
 from datetime import datetime, timedelta
@@ -159,11 +160,32 @@ def decrypt_token(ciphertext: Optional[str]) -> Optional[str]:
         return None
 
 
+# The audience this service accepts in RS256 SSO access tokens (Phase 2). A token
+# minted for another service (aud=query_service, ...) is NOT accepted here.
+SERVICE_AUDIENCE = os.getenv("USERMANAGEMENT_SERVICE_AUDIENCE", "usermanagement")
+
+
 def verify_token(token: str) -> Union[dict, None]:
-    """Verify and decode a JWT token"""
+    """Verify and decode a bearer token, newest scheme first:
+
+      1. Phase 2 SSO RS256 access token minted for THIS service
+         (aud == usermanagement), verified with our own public key — we are the
+         issuer, so no network fetch.
+      2. Legacy HS256 v2 token signed with this service's own secret.
+
+    Returns the claims dict, or None if neither validates. Backward-compatible:
+    existing HS256 tokens keep working during migration."""
+    # 1) RS256 SSO access token for this service.
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
+        from core import tokens_rs256
+        payload = tokens_rs256.verify_access_token(token, audience=SERVICE_AUDIENCE)
+        if payload is not None:
+            return payload
+    except Exception as e:
+        logger.debug(f"RS256 verify skipped/failed, trying HS256: {e}")
+    # 2) Legacy HS256 token.
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError as e:
         logger.error(f"JWT token verification failed: {str(e)}")
         return None
