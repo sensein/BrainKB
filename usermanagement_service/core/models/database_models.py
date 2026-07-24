@@ -426,6 +426,42 @@ class OAuthCliResult(Base):
     )
 
 
+class PersonalAccessToken(Base):
+    """A long-lived, opaque Personal Access Token (PAT) for CLI/MCP use.
+
+    The plaintext token is shown to the user exactly ONCE at creation and is
+    never stored — only its SHA-256 hash is persisted, so a DB leak cannot
+    recover usable tokens. A PAT is presented by the MCP/skill and exchanged at
+    ``POST /api/auth/pat/exchange`` for short-lived per-service access tokens
+    (the same RS256 tokens the refresh-token flow issues). Unlike a signed JWT a
+    PAT is revocable instantly (``revoked``) and time-bounded (``expires_at``);
+    roles are re-read from the DB at exchange time, so authorization is never
+    stale. This is the "generate once, paste into the skill config, no browser
+    afterward" credential."""
+    __tablename__ = "Web_personal_access_token"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # SHA-256 hex of the full opaque secret — the ONLY copy we keep.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    # Short, non-secret leading fragment shown in listings so a user can tell
+    # their tokens apart without exposing the secret (e.g. "brainkb_pat_9f3a").
+    prefix: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    profile_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey('Web_user_profile.id', ondelete='CASCADE'))
+    jwt_user_id: Mapped[Optional[int]] = mapped_column(Integer)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index('idx_pat_token_hash', 'token_hash'),
+        Index('idx_pat_profile_id', 'profile_id'),
+    )
+
+
 class Permission(Base):
     """Permission registry. A permission is a (resource, action) tuple, e.g. ('user', 'delete')."""
     __tablename__ = "Web_permission"

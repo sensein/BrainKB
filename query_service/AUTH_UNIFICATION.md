@@ -389,9 +389,15 @@ implemented behavior:
   authorize URL → user signs in → browser shows a short code →
   `brainkb_finish_login(code)` (backend `/api/auth/cli/start` + `/cli/exchange`,
   flow B in §0). No web UI required.
+- **Personal Access Token (browser-free, recommended).** Set `BRAINKB_TOKEN` to a
+  `brainkb_pat_…` (minted once via `brainkb_create_token`) — `_token_for` recognizes
+  the prefix and exchanges it at `/api/auth/pat/exchange` per service, no login or
+  browser afterward. `brainkb_use_token(pat)` does the same for one session.
+  Manage with `brainkb_list_tokens` / `brainkb_revoke_token`. See §9.11.
 - **Header pass-through (stateless, multi-user remote):** a caller may send
-  `Authorization: Bearer <token>`. A **refresh** token unlocks all services (the
-  MCP exchanges it per service); a single **service access token** is used as-is.
+  `Authorization: Bearer <token>`. A **refresh** token or a **PAT** unlocks all
+  services (the MCP exchanges it per service); a single **service access token**
+  is used as-is.
 - **Sessions expire.** The cached session lasts until its refresh token expires
   (`USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN`), hard-capped by `MCP_SESSION_TTL_MIN`.
   On lapse the MCP forgets the credentials and asks the user to log in again;
@@ -541,6 +547,84 @@ sandbox has no browser); the mechanics around it are verified.
   `ml_service`/`query_service` tokens; the service-account password is a deprecated
   fallback only. Verified backend-side (session token → aud token → 200 at
   query_service); the UI change needs deploy testing.
+
+### 9.11 Personal Access Tokens (PATs) — browser-free CLI/MCP auth
+- **Problem.** CLI/MCP auth required either a password login or a one-time Globus
+  browser paste-code **every session** — and both mint an RS256 refresh token that
+  depends on the SSO key material (the per-worker key-file we had to persist). Users
+  wanted a "generate once, paste into the skill config, no browser afterward"
+  credential.
+- **Decision.** Add an **opaque, DB-backed Personal Access Token**. A user mints one
+  while logged in (`POST /api/auth/tokens` → shown once as `brainkb_pat_…`), sets it
+  as `BRAINKB_TOKEN` in the MCP config, and every call thereafter exchanges it at
+  `POST /api/auth/pat/exchange` for the same short-lived `aud=<service>` access token
+  the refresh flow issues. No browser/login after the one-time mint.
+- **Why opaque (not a signed/long-lived JWT).** (1) **Instantly revocable** — a
+  signed JWT lives until it expires; an opaque token is a DB row we flip. (2) **No
+  key material exposed to the user** — they handle one string, never a key; this is
+  exactly the "no RSA/key for CLI" ask. (3) **Roles re-read live** at exchange time,
+  so a ban/demotion takes effect immediately. Only the SHA-256 hash is stored, so a
+  DB leak yields no usable tokens.
+- **Why services need no change.** The PAT is validated only at usermanagement; the
+  token it *exchanges into* is the ordinary RS256 per-service token, so query/ml
+  verify it via JWKS unchanged — containment (`aud`) preserved.
+- **Model.** `Web_personal_access_token` (token_hash unique, prefix, name,
+  profile_id, jwt_user_id, email, revoked, expires_at, last_used_at). Endpoints:
+  create / list / revoke (session-auth) + `pat/exchange` (PAT-auth). Env:
+  `USERMANAGEMENT_PAT_DEFAULT_DAYS` (90), `_MAX_DAYS` (365), `_MAX_PER_USER` (20).
+- **MCP.** `BRAINKB_TOKEN` env + `brainkb_use_token` set a PAT; `_token_for`
+  recognizes the `brainkb_pat_` prefix and PAT-exchanges (header, session, or env).
+  Tools: `brainkb_create_token`, `brainkb_list_tokens`, `brainkb_revoke_token`.
+- **Verified live** (unified container): create → list → exchange → **200** at
+  query_service → revoke → exchange **401** (instant revocation); exchange re-read
+  roles fresh from the DB (`auth_source=pat`).
+- **Note (signing scheme).** Considered switching the internal SSO tokens to an
+  HS256 shared secret. **Decision: no change for now** — stay on RS256/JWKS (full
+  reasoning in §9.12). The PAT is independent of this (opaque, DB-validated); it
+  exchanges into whatever the issuer mints.
+
+### 9.12 Why the SSO access tokens are RS256 (asymmetric) and not a shared HS256 secret
+- **Question raised.** For a four-service deployment, wouldn't a single shared
+  secret (HS256) be simpler than RSA — no JWKS, no public-key distribution, no
+  per-worker key generation? (It would; the shared secret *is* the key. The
+  question is what that simplicity costs.)
+- **The core property RS256 buys: a verifier that cannot forge.**
+  usermanagement is the **sole issuer**; query/ml/chat only **verify**.
+  - **RS256 (what we use).** The issuer holds the **private** key (signs); every
+    other service holds only the **public** key (published at
+    `/.well-known/jwks.json`) and can *verify without holding any secret capable of
+    minting*. If ml_service is compromised, the attacker gets a public key — they
+    **still cannot mint tokens** for any service.
+  - **HS256 (shared secret).** Signing and verifying use the **same** secret. Every
+    service that verifies must hold a secret that can equally **forge**. Compromise
+    of *any one* service (or a leaked env/log) lets the attacker mint tokens for
+    **all** services with arbitrary `sub`/`roles`/`scopes`/`aud`. The other services
+    cannot distinguish the forgery from a genuine token.
+- **Containment is the whole point of Phase 2.** Per-`aud` tokens give crypto-enforced
+  containment: a token minted for `query_service` is provably unusable at
+  `ml_service`. Under HS256 that containment degrades to *trust-based* — any
+  secret-holder can set `aud` to anything — which undoes a property we deliberately
+  built (see §4.2 / Phase 2).
+- **Other HS256 costs (not removed, just relocated).** A shared secret still has to
+  be distributed to every service, environment, and worker, and **rotated
+  everywhere simultaneously**; its compromise radius is all four services at once.
+  So HS256 removes *asymmetric-key* management but not *secret* management.
+- **Why RSA's operational pain is acceptable.** The one real downside we hit was
+  provisioning the private key across gunicorn workers (fixed by persisting one key
+  to a shared file; production sets `USERMANAGEMENT_JWT_PRIVATE_KEY_PEM/_FILE`
+  explicitly). That is a one-time deploy concern, not a per-request cost — RS256
+  verification is local and stateless (no introspection call), same as HS256.
+- **When we *would* switch.** If the four services ever collapse into a context where
+  asymmetry provably buys nothing (and stays that way) *and* the key-provisioning
+  overhead outweighs containment, HS256 is defensible — but only with: strict
+  `algorithms=["HS256"]` (never let the JWT header pick the alg), enforced
+  `iss`+`aud`, a ≥256-bit secret from a secret manager (not `.env` in Git), separate
+  secrets per environment, and the internet-facing MCP holding **no** secret (it
+  only relays, so it never becomes a forger). Until there's a concrete reason,
+  RS256's "verifier ≠ issuer" property is worth its modest operational cost.
+- **If reversing:** keep it a **config** switch, not a rewrite — retain RS256 verify
+  paths so a future distributed/split deployment can re-enable asymmetric signing
+  without new code.
 
 ### Still open (deliberately deferred)
 - **Retire the legacy HS256 `/api/login`(`/token`) paths + fold in

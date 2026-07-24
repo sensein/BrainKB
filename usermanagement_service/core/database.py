@@ -27,7 +27,7 @@ from core.models.database_models import (
     Base, JWTUser, UserProfile, UserActivity, UserContribution, UserRole,
     UserCountry, UserOrganization, UserEducation, UserExpertise, AvailableRole, AvailableCountry,
     OAuthIdentity, OAuthState, OAuthCliResult, Permission, RolePermission, PageAccess, PageAccessRole, PageAccessUser,
-    AdminSetting,
+    AdminSetting, PersonalAccessToken,
 )
 from core.models.user import ActivityType, ContributionStatus
 
@@ -1445,6 +1445,66 @@ class OAuthCliResultRepository(UserBaseRepository):
             logger.error(f"Error purging oauth cli results: {str(e)}")
 
 
+class PersonalAccessTokenRepository(UserBaseRepository):
+    """Personal Access Tokens (opaque, hashed at rest). Used by the CLI/MCP to
+    authenticate without a browser after a one-time mint. Only the SHA-256 hash
+    is stored; the plaintext is returned to the user once at creation."""
+
+    def __init__(self):
+        super().__init__(PersonalAccessToken)
+
+    async def create(self, session: AsyncSession, *, token_hash: str, prefix: str,
+                     name: str, profile_id: Optional[int], jwt_user_id: Optional[int],
+                     email: str, expires_at: datetime) -> PersonalAccessToken:
+        row = PersonalAccessToken(
+            token_hash=token_hash, prefix=prefix, name=name or "", profile_id=profile_id,
+            jwt_user_id=jwt_user_id, email=email, expires_at=expires_at, revoked=False,
+        )
+        session.add(row)
+        await session.flush()
+        return row
+
+    async def get_valid_by_hash(self, session: AsyncSession, token_hash: str) -> Optional[PersonalAccessToken]:
+        """Return the PAT for a hash if it is usable (exists, not revoked, not
+        expired), else None. Touches last_used_at as a side effect."""
+        result = await session.execute(
+            select(PersonalAccessToken).where(PersonalAccessToken.token_hash == token_hash)
+        )
+        row = result.scalar_one_or_none()
+        if row is None or row.revoked or row.expires_at < datetime.utcnow():
+            return None
+        row.last_used_at = datetime.utcnow()
+        await session.flush()
+        return row
+
+    async def list_for_profile(self, session: AsyncSession, profile_id: int) -> List[PersonalAccessToken]:
+        result = await session.execute(
+            select(PersonalAccessToken)
+            .where(PersonalAccessToken.profile_id == profile_id)
+            .order_by(PersonalAccessToken.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def get_owned(self, session: AsyncSession, pat_id: int,
+                        profile_id: int) -> Optional[PersonalAccessToken]:
+        result = await session.execute(
+            select(PersonalAccessToken).where(
+                PersonalAccessToken.id == pat_id,
+                PersonalAccessToken.profile_id == profile_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def revoke(self, session: AsyncSession, pat_id: int, profile_id: int) -> bool:
+        """Revoke a PAT the caller owns. Returns True if a row was revoked."""
+        row = await self.get_owned(session, pat_id, profile_id)
+        if row is None or row.revoked:
+            return False
+        row.revoked = True
+        await session.flush()
+        return True
+
+
 class PermissionRepository(UserBaseRepository):
     def __init__(self):
         super().__init__(Permission)
@@ -1627,6 +1687,7 @@ available_country_repo = AvailableCountryRepository()
 oauth_identity_repo = OAuthIdentityRepository()
 oauth_state_repo = OAuthStateRepository()
 oauth_cli_result_repo = OAuthCliResultRepository()
+personal_access_token_repo = PersonalAccessTokenRepository()
 permission_repo = PermissionRepository()
 role_permission_repo = RolePermissionRepository()
 page_access_repo = PageAccessRepository() 
