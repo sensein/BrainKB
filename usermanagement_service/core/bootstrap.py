@@ -182,6 +182,10 @@ async def apply_inline_schema_migrations() -> None:
         # Web_user_profile is the canonical user; profile_id is the link.
         'ALTER TABLE "Web_jwtuser" ADD COLUMN IF NOT EXISTS profile_id INTEGER REFERENCES "Web_user_profile"(id) ON DELETE SET NULL',
         'CREATE INDEX IF NOT EXISTS ix_jwtuser_profile_id ON "Web_jwtuser"(profile_id)',
+        # OAuth CLI/skill paste-code flow: mark whether a state was started by the
+        # browser (web) or the MCP/skill (cli). New table Web_oauth_cli_result is
+        # created by create_all().
+        'ALTER TABLE "Web_oauth_state" ADD COLUMN IF NOT EXISTS mode VARCHAR(16) DEFAULT \'web\'',
         # Backfill the link for pre-existing rows by matching email (the old
         # implicit join key). Case-insensitive so mixed-case duplicates align.
         'UPDATE "Web_jwtuser" u SET profile_id = p.id FROM "Web_user_profile" p '

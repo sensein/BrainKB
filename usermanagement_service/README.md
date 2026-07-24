@@ -98,6 +98,11 @@ another. See `../query_service/AUTH_UNIFICATION.md`.
 - `GET  /.well-known/jwks.json` - Public keys for verifying SSO tokens
 - `POST /api/auth/login` - `{email, password}` → refresh token (aud `brainkb-auth`)
 - `POST /api/auth/exchange` - Bearer refresh + `{audience}` → per-service access token
+- `POST /api/auth/cli/start` - `{provider}` → authorize URL for a CLI/skill OAuth
+  login (paste-code). The provider callback shows a short one-time code (minimal
+  page, no SPA) instead of redirecting to the frontend.
+- `POST /api/auth/cli/exchange` - `{code}` → SSO refresh token (single-use). Lets
+  the MCP/skill complete a Globus/ORCID/GitHub login without the web UI.
 
 The signing key is auto-provisioned at container start (persisted on the
 `./secrets` volume) unless `USERMANAGEMENT_JWT_PRIVATE_KEY_PEM`/`_FILE` is set.

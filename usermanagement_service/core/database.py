@@ -26,7 +26,7 @@ from core.configuration import config
 from core.models.database_models import (
     Base, JWTUser, UserProfile, UserActivity, UserContribution, UserRole,
     UserCountry, UserOrganization, UserEducation, UserExpertise, AvailableRole, AvailableCountry,
-    OAuthIdentity, OAuthState, Permission, RolePermission, PageAccess, PageAccessRole, PageAccessUser,
+    OAuthIdentity, OAuthState, OAuthCliResult, Permission, RolePermission, PageAccess, PageAccessRole, PageAccessUser,
     AdminSetting,
 )
 from core.models.user import ActivityType, ContributionStatus
@@ -1409,6 +1409,42 @@ class OAuthStateRepository(UserBaseRepository):
             logger.error(f"Error purging expired oauth states: {str(e)}")
 
 
+class OAuthCliResultRepository(UserBaseRepository):
+    """CLI/skill paste-code OAuth results: code -> refresh token, single-use."""
+
+    def __init__(self):
+        super().__init__(OAuthCliResult)
+
+    async def store(self, session: AsyncSession, *, code: str, refresh_token: str,
+                    email: Optional[str], expires_at: datetime) -> OAuthCliResult:
+        row = OAuthCliResult(code=code, refresh_token=refresh_token, email=email,
+                             expires_at=expires_at, consumed=False)
+        session.add(row)
+        await session.flush()
+        return row
+
+    async def consume(self, session: AsyncSession, code: str) -> Optional[OAuthCliResult]:
+        """Return the result for a code if valid (exists, unexpired, unconsumed),
+        marking it consumed. Returns None otherwise."""
+        result = await session.execute(select(OAuthCliResult).where(OAuthCliResult.code == code))
+        row = result.scalar_one_or_none()
+        if row is None or row.consumed or row.expires_at < datetime.utcnow():
+            return None
+        row.consumed = True
+        await session.flush()
+        return row
+
+    async def purge_expired(self, session: AsyncSession) -> None:
+        try:
+            await session.execute(
+                text('DELETE FROM "Web_oauth_cli_result" WHERE expires_at < :now OR consumed = true'),
+                {"now": datetime.utcnow()},
+            )
+            await session.flush()
+        except SQLAlchemyError as e:
+            logger.error(f"Error purging oauth cli results: {str(e)}")
+
+
 class PermissionRepository(UserBaseRepository):
     def __init__(self):
         super().__init__(Permission)
@@ -1590,6 +1626,7 @@ available_role_repo = AvailableRoleRepository()
 available_country_repo = AvailableCountryRepository()
 oauth_identity_repo = OAuthIdentityRepository()
 oauth_state_repo = OAuthStateRepository()
+oauth_cli_result_repo = OAuthCliResultRepository()
 permission_repo = PermissionRepository()
 role_permission_repo = RolePermissionRepository()
 page_access_repo = PageAccessRepository() 

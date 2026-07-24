@@ -394,12 +394,35 @@ class OAuthState(Base):
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     code_verifier: Mapped[Optional[str]] = mapped_column(String(256))
     redirect_after_login: Mapped[Optional[str]] = mapped_column(String(500))
+    # 'web' (default, browser redirect to the SPA) or 'cli' (paste-code flow for
+    # the MCP/skill — the callback shows a short code instead of redirecting).
+    mode: Mapped[str] = mapped_column(String(16), default="web")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     __table_args__ = (
         Index('idx_oauth_state_state', 'state'),
         Index('idx_oauth_state_expires_at', 'expires_at'),
+    )
+
+
+class OAuthCliResult(Base):
+    """Result bucket for the CLI/skill paste-code OAuth flow. After a CLI-initiated
+    OAuth callback provisions the user and mints an SSO refresh token, that token is
+    stored here keyed by a short human-typable code, shown in the browser. The
+    MCP/skill exchanges the code for the refresh token (single-use, short-lived)."""
+    __tablename__ = "Web_oauth_cli_result"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(255))
+    consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index('idx_oauth_cli_result_code', 'code'),
     )
 
 

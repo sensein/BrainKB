@@ -22,12 +22,16 @@ from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 
 from core.configuration import config
+from pydantic import BaseModel
+
+from core import tokens_rs256
 from core.database import (
     user_db_manager, user_profile_repo, jwt_user_repo,
-    oauth_identity_repo, oauth_state_repo, user_activity_repo, provision_identity,
+    oauth_identity_repo, oauth_state_repo, oauth_cli_result_repo,
+    user_activity_repo, provision_identity,
 )
 from core.models.user import ActivityType, OAuthLoginStart, UserRoleEnum
 from core.models.database_models import UserProfile as UserProfileModel
@@ -50,6 +54,41 @@ def _pkce_pair() -> tuple[str, str]:
 
 def _redirect_uri_for(provider_name: str) -> str:
     return f"{config.public_base_url.rstrip('/')}/api/auth/{provider_name}/callback"
+
+
+# Unambiguous alphabet (no I/L/O/0/1) for the paste-code shown to users.
+_CLI_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def _gen_cli_code() -> str:
+    raw = "".join(secrets.choice(_CLI_CODE_ALPHABET) for _ in range(8))
+    return f"{raw[:4]}-{raw[4:]}"
+
+
+def _cli_success_page(code: str) -> str:
+    """Minimal self-contained page shown after a CLI/skill OAuth login. Displays the
+    one-time code the user pastes back into the skill. No SPA/frontend needed."""
+    safe = (code or "").replace("<", "").replace(">", "")
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>BrainKB login</title>"
+        "<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;"
+        "background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;"
+        "justify-content:center;margin:0}.card{background:#1e293b;padding:2.5rem;border-radius:14px;"
+        "max-width:420px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.4)}"
+        "h1{font-size:1.2rem;margin:0 0 .5rem}p{color:#94a3b8;font-size:.95rem;line-height:1.5}"
+        ".code{font-family:ui-monospace,Menlo,monospace;font-size:2rem;letter-spacing:.15em;"
+        "background:#0f172a;color:#38bdf8;padding:1rem;border-radius:10px;margin:1.2rem 0;"
+        "user-select:all}</style></head><body><div class='card'>"
+        "<h1>✅ Signed in to BrainKB</h1>"
+        "<p>Copy this one-time code and paste it back into your assistant "
+        "(<code>brainkb_finish_login</code>):</p>"
+        f"<div class='code'>{safe}</div>"
+        "<p>The code expires in ~10 minutes and can be used once. "
+        "You can close this tab afterward.</p>"
+        "</div></body></html>"
+    )
 
 
 async def _upsert_profile_for_oauth(session, userinfo) -> UserProfileModel:
@@ -108,17 +147,13 @@ async def list_providers():
     }
 
 
-@router.get("/auth/{provider_name}/login", response_model=OAuthLoginStart)
-async def oauth_login(
-    provider_name: str,
-    redirect_after_login: Optional[str] = Query(None, description="Relative path to send the user to after login completes"),
-):
-    """Start an OAuth flow. Returns the authorize URL; the UI redirects the browser there."""
+async def _begin_oauth(provider_name: str, redirect_after_login: Optional[str], mode: str):
+    """Mint + persist OAuth state (+PKCE) and return (authorize_url, state).
+    ``mode`` is 'web' (browser → SPA) or 'cli' (MCP/skill paste-code)."""
     try:
         provider = get_provider(provider_name)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider_name}")
-
     if not provider.is_configured():
         raise HTTPException(status_code=503, detail=f"{provider_name} OAuth is not configured on the server")
 
@@ -130,12 +165,8 @@ async def oauth_login(
 
     redirect_uri = _redirect_uri_for(provider.name)
     authorize_url = provider.authorize_url(
-        redirect_uri=redirect_uri,
-        state=state,
-        code_challenge=code_challenge,
+        redirect_uri=redirect_uri, state=state, code_challenge=code_challenge,
     )
-
-    # Persist state so the callback (on a different request) can validate it.
     async with user_db_manager.get_async_session() as session:
         await oauth_state_repo.create(
             session,
@@ -143,11 +174,65 @@ async def oauth_login(
             provider=provider.name,
             code_verifier=code_verifier,
             redirect_after_login=redirect_after_login,
+            mode=mode,
             expires_at=datetime.utcnow() + timedelta(minutes=10),
         )
         await session.commit()
+    return authorize_url, state
 
+
+@router.get("/auth/{provider_name}/login", response_model=OAuthLoginStart)
+async def oauth_login(
+    provider_name: str,
+    redirect_after_login: Optional[str] = Query(None, description="Relative path to send the user to after login completes"),
+):
+    """Start an OAuth flow (browser/SPA). Returns the authorize URL; the UI redirects the browser there."""
+    authorize_url, state = await _begin_oauth(provider_name, redirect_after_login, "web")
     return OAuthLoginStart(authorize_url=authorize_url, state=state)
+
+
+class _CliStartIn(BaseModel):
+    provider: str = "globus"
+
+
+@router.post("/auth/cli/start", tags=["SSO"])
+async def oauth_cli_start(body: _CliStartIn):
+    """Start an OAuth flow for the MCP/skill (paste-code). Returns an authorize URL;
+    open it in a browser, sign in with the provider, then paste the short code the
+    browser shows into `brainkb_finish_login`. No web UI required."""
+    authorize_url, state = await _begin_oauth(body.provider, None, "cli")
+    return {
+        "authorize_url": authorize_url,
+        "state": state,
+        "mode": "cli",
+        "instructions": ("Open authorize_url in a browser and sign in. When it "
+                         "shows a code, paste it into brainkb_finish_login(code)."),
+    }
+
+
+class _CliExchangeIn(BaseModel):
+    code: str
+
+
+@router.post("/auth/cli/exchange", tags=["SSO"])
+async def oauth_cli_exchange(body: _CliExchangeIn):
+    """Exchange the paste-code (shown after a CLI OAuth login) for an SSO refresh
+    token. Single-use and short-lived."""
+    code = (body.code or "").strip().upper()
+    async with user_db_manager.get_async_session() as session:
+        await oauth_cli_result_repo.purge_expired(session)
+        row = await oauth_cli_result_repo.consume(session, code)
+        # Read the token INSIDE the session — after commit the ORM attribute is
+        # expired and touching it would trigger async lazy-load (MissingGreenlet).
+        refresh_token = row.refresh_token if row is not None else None
+        await session.commit()
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Invalid, expired, or already-used code.")
+    return {
+        "refresh_token": refresh_token,
+        "token_type": "refresh",
+        "expires_in": tokens_rs256.refresh_token_ttl_seconds(),
+    }
 
 
 @router.get("/auth/{provider_name}/callback")
@@ -187,6 +272,7 @@ async def oauth_callback(
             raise HTTPException(status_code=400, detail="OAuth state expired")
         code_verifier = state_row.code_verifier
         redirect_after_login = state_row.redirect_after_login
+        login_mode = getattr(state_row, "mode", "web") or "web"
         await session.commit()
 
     redirect_uri = _redirect_uri_for(provider.name)
@@ -200,6 +286,7 @@ async def oauth_callback(
     if not userinfo.provider_user_id:
         return RedirectResponse(_frontend_error_redirect("provider returned no user id"), status_code=302)
 
+    cli_code = None
     async with user_db_manager.get_async_session() as session:
         try:
             profile = await _upsert_profile_for_oauth(session, userinfo)
@@ -263,6 +350,24 @@ async def oauth_callback(
                 scopes=scopes,
                 auth_source=provider.name,
             )
+            # CLI/skill (paste-code) flow: mint an SSO refresh token and stash it
+            # behind a short code the browser will display for the user to paste.
+            if login_mode == "cli":
+                refresh = tokens_rs256.create_refresh_token(
+                    email=profile.email,
+                    profile_id=profile.id,
+                    roles=existing_roles,
+                    scopes=scopes,
+                    auth_source=provider.name,
+                )
+                cli_code = _gen_cli_code()
+                await oauth_cli_result_repo.store(
+                    session,
+                    code=cli_code,
+                    refresh_token=refresh,
+                    email=profile.email,
+                    expires_at=datetime.utcnow() + timedelta(minutes=10),
+                )
             await session.commit()
         except HTTPException:
             await session.rollback()
@@ -271,6 +376,10 @@ async def oauth_callback(
             await session.rollback()
             logger.exception("Error finalizing OAuth login")
             return RedirectResponse(_frontend_error_redirect(f"finalize_failed: {e}"), status_code=302)
+
+    # CLI/skill login: show the paste-code page instead of redirecting to the SPA.
+    if login_mode == "cli":
+        return HTMLResponse(_cli_success_page(cli_code))
 
     qs = {"token": token}
     if redirect_after_login:
