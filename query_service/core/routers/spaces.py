@@ -42,16 +42,25 @@ def _agent(user) -> str:
 
 
 async def _can_manage(space: dict, email: str) -> bool:
-    """Who may manage a space (members/visibility/graphs): the space owner, an
-    Admin/SuperAdmin, a holder of manage_team_space (team spaces), or someone
-    matched by a per-space 'manage' access rule."""
-    if await sp.member_role(space["space_id"], email) == "owner":
-        return True
+    """Who may manage a space (members/visibility/graphs/access-rules):
+
+      * **Admin/SuperAdmin** — every space (platform-wide).
+      * **Owner** (the creator) — their own space.
+      * A non-admin with **manage_team_space** — ONLY team spaces they are
+        **assigned to** (a member of), not every team space.
+      * Anyone matched by a per-space **'manage'** access rule (explicit assignment).
+
+    i.e. unless you're an Admin, you can manage only the team spaces you created or
+    were assigned to — never all of them."""
     if await rbac.is_admin(email):
         return True
-    if space.get("space_type") == "team" and await rbac.has_capability(email, rbac.MANAGE_TEAM_SPACE):
+    srole = await sp.member_role(space["space_id"], email)
+    if srole == "owner":
         return True
     if await sp.matches_access_rule(space["space_id"], "manage", email):
+        return True
+    if (space.get("space_type") == "team" and srole is not None
+            and await rbac.has_capability(email, rbac.MANAGE_TEAM_SPACE)):
         return True
     return False
 
