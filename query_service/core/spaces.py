@@ -344,6 +344,32 @@ async def space_action_permitted(space: Dict[str, Any], action: str, email: Opti
     return await matches_access_rule(space_id, action, email)
 
 
+async def can_write_space(space: Dict[str, Any], email: Optional[str]) -> Tuple[bool, str]:
+    """Whether ``email`` may WRITE (ingest) into ``space``. Write is GRANTED by any
+    of:
+      * global Admin/SuperAdmin,
+      * owner/editor membership of the space,
+      * a matching **write** access rule — by ``global_role`` (a group/role),
+        ``member`` (an email), or ``space_role``.
+
+    This is what lets an admin hand a whole group ingest access to a team space
+    without adding every user as a member: add a write rule with
+    ``subject_type=global_role`` (e.g. ``Lab Member``). The caller still needs the
+    ``INGEST`` capability (a write-capable role) — enforced separately at the
+    endpoint — so a read-only group can't ingest even with a write rule."""
+    from core import rbac
+    space_id = space["space_id"]
+    if await rbac.is_admin(email):
+        return True, "admin"
+    role = await member_role(space_id, email)
+    if role in WRITE_ROLES:
+        return True, f"member ({role})"
+    if await matches_access_rule(space_id, "write", email):
+        return True, "space write access rule (group/role/member)"
+    return False, ("requires owner/editor membership, or a space write access rule "
+                   "granting your group/role write (ask an admin)")
+
+
 async def authorize(named_graph_iri: str, member: Optional[str], need: str) -> Tuple[bool, str]:
     """
     Decide whether ``member`` (a user email, or None if anonymous) may read/write

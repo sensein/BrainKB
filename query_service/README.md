@@ -44,6 +44,62 @@ role-based (see `RBAC_MODEL.md`) and read from the DB, not just the token.
 Users may only act on their own `user_id` (enforced), and job-scoped endpoints are
 owner-only.
 
+## Capabilities & roles (RBAC)
+
+Two independent layers apply to every mutating call:
+
+1. **JWT scope** (`read`/`write`/`admin`) — API-access gate at the endpoint.
+2. **Capability** — *who is allowed to do what*, derived from the user's **role(s)**
+   (read from the DB, not just the token) plus any admin-delegated grants.
+
+### Capabilities — what each one means
+
+| Capability | Meaning |
+|---|---|
+| `create_private_space` | Create your own individual/private space |
+| `create_team_space` | Create a **team** (shared) space |
+| `manage_team_space` | Manage a team space's members, visibility, graphs, and access rules |
+| `ingest` | Ingest data into a graph — **also** needs per-space write (owner/editor membership **or** a space write access rule; see below) |
+| `recover` | Recover stuck/errored ingest jobs |
+| `read_private` | Read non-public content you're a member of |
+| `sparql_admin` | Run arbitrary SPARQL (`/query/sparql/`) |
+| `grant` | Grant/revoke capabilities to other users |
+
+### Which roles get which capabilities
+
+| Role tier | Capabilities |
+|---|---|
+| **SuperAdmin / Admin** | **all** of the above |
+| **Write roles** — Curator, Lab Member, Submitter, Annotator, Mapper, Knowledge Contributor | `create_private_space`, `ingest`, `recover`, `read_private` |
+| **Any other active role** (Reviewer, Validator, Moderator, …) | `read_private` |
+| **No role** | public reads only — no create/ingest/private read |
+
+**Delegation (Admin only):** an admin can grant the *grantable* capabilities —
+`create_private_space`, `create_team_space`, `manage_team_space`, `ingest`,
+`recover`, `read_private` — to a specific user. `grant` and `sparql_admin` are
+**not** delegatable (they come only from an Admin/SuperAdmin role), so the grant
+endpoint can't escalate a non-admin into an admin.
+
+**SuperAdmin vs Admin:** identical KG capabilities here. SuperAdmin is a
+bootstrap-seeded, protected marker (can't be banned/deleted/role-stripped);
+role *assignment* is owned by the usermanagement service, not query_service.
+
+### Giving a whole group ingest access to a team space
+
+Ingesting into a space-mapped graph needs the `ingest` capability **and** write
+authorization on the space. Write is granted by any of: global Admin, owner/editor
+membership, **or a per-space write access rule**. So to let a whole group ingest
+without adding each person as a member, an admin (or space manager) adds a rule:
+
+```
+action=write, subject_type=global_role, subject_value="<group/role>"   # e.g. "Lab Member"
+```
+
+Every user in that group can then ingest into the space's graphs (they still need
+a write-capable role for the `ingest` capability). Rules can also target a single
+`member` (email) or a `space_role`. Remove the rule to revoke. See
+`RBAC_MODEL.md` and `SPACES_MODEL.md` for the full model.
+
 ## Endpoints (prefix `/api`)
 
 ### Query

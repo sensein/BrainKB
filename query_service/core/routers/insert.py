@@ -48,7 +48,6 @@ from core.database import (
     batch_insert_job_results,
 )
 from core.configuration import load_environment
-from core.spaces import authorize as authorize_space_access
 from core import spaces as _spaces
 from core import rbac
 from core.provenance import (
@@ -1188,23 +1187,20 @@ async def insert_knowledge_graph_triples(
             {"error": "Not authorized to ingest: a write-capable role is required."},
             status_code=403,
         )
-    # If the graph belongs to a space, enforce space write-authorization
-    # (owner/editor). Unmapped legacy graphs fall through (scope check applies).
+    # If the graph belongs to a space, enforce space write authorization: owner/
+    # editor membership, global admin, OR a space write access rule granting a
+    # group/role/member write (see spaces.can_write_space) — this is how an admin
+    # hands a whole group ingest access. Unmapped legacy graphs fall through to the
+    # endpoint scope check.
     _graph_key = named_graph_iri if named_graph_iri.endswith("/") else named_graph_iri + "/"
-    _allowed, _reason = await authorize_space_access(_graph_key, _agent_email(user), "write")
-    if not _allowed:
-        return JSONResponse(
-            {"error": f"Not authorized to ingest into this graph: {_reason}", "named_graph_iri": named_graph_iri},
-            status_code=403,
-        )
-    # Fine-grained per-space write rules (if any) further restrict who can ingest.
     _space_for_graph = await _spaces.get_space_for_graph(_graph_key)
-    if _space_for_graph and not await _spaces.space_action_permitted(_space_for_graph, "write", _agent_email(user)):
-        return JSONResponse(
-            {"error": "Not authorized to ingest into this graph: restricted by a space access rule.",
-             "named_graph_iri": named_graph_iri},
-            status_code=403,
-        )
+    if _space_for_graph is not None:
+        _allowed, _reason = await _spaces.can_write_space(_space_for_graph, _agent_email(user))
+        if not _allowed:
+            return JSONResponse(
+                {"error": f"Not authorized to ingest into this graph: {_reason}", "named_graph_iri": named_graph_iri},
+                status_code=403,
+            )
 
     job_id = uuid.uuid4().hex
 
@@ -1325,23 +1321,20 @@ async def insert_file_knowledge_graph_triples(
             {"error": "Not authorized to ingest: a write-capable role is required."},
             status_code=403,
         )
-    # If the graph belongs to a space, enforce space write-authorization
-    # (owner/editor). Unmapped legacy graphs fall through (scope check applies).
+    # If the graph belongs to a space, enforce space write authorization: owner/
+    # editor membership, global admin, OR a space write access rule granting a
+    # group/role/member write (see spaces.can_write_space) — this is how an admin
+    # hands a whole group ingest access. Unmapped legacy graphs fall through to the
+    # endpoint scope check.
     _graph_key = named_graph_iri if named_graph_iri.endswith("/") else named_graph_iri + "/"
-    _allowed, _reason = await authorize_space_access(_graph_key, _agent_email(user), "write")
-    if not _allowed:
-        return JSONResponse(
-            {"error": f"Not authorized to ingest into this graph: {_reason}", "named_graph_iri": named_graph_iri},
-            status_code=403,
-        )
-    # Fine-grained per-space write rules (if any) further restrict who can ingest.
     _space_for_graph = await _spaces.get_space_for_graph(_graph_key)
-    if _space_for_graph and not await _spaces.space_action_permitted(_space_for_graph, "write", _agent_email(user)):
-        return JSONResponse(
-            {"error": "Not authorized to ingest into this graph: restricted by a space access rule.",
-             "named_graph_iri": named_graph_iri},
-            status_code=403,
-        )
+    if _space_for_graph is not None:
+        _allowed, _reason = await _spaces.can_write_space(_space_for_graph, _agent_email(user))
+        if not _allowed:
+            return JSONResponse(
+                {"error": f"Not authorized to ingest into this graph: {_reason}", "named_graph_iri": named_graph_iri},
+                status_code=403,
+            )
 
     job_id = uuid.uuid4().hex  # generate for job tracking
     
