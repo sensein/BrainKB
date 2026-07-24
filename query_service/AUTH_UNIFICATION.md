@@ -529,12 +529,26 @@ sandbox has no browser); the mechanics around it are verified.
   sign-in. Verified: an old token claiming `roles=[Admin]` is accepted while the
   role exists, and rejected (403) the moment the role is removed in the DB.
 
+### 9.10 Web UI migrated off the password service account (SSO session-exchange)
+- **Problem.** The `brainkb-ui` audit showed user login is already OAuth-only, but
+  ML/query calls used a shared **service-account password** on `/api/token`
+  (`NEXT_PUBLIC_JWT_USER/PASSWORD`), and two NER routes took form-entered
+  credentials. That was the last thing blocking password-login retirement.
+- **Decision.** New `POST /api/auth/session-exchange` (usermanagement): swap an
+  authenticated **session token** (the UI's usermanagement JWT) for a short-lived
+  `aud=<service>` access token, **scopes derived from roles** (RBAC authoritative —
+  removes the need for the Django scope manager). The UI now session-exchanges for
+  `ml_service`/`query_service` tokens; the service-account password is a deprecated
+  fallback only. Verified backend-side (session token → aud token → 200 at
+  query_service); the UI change needs deploy testing.
+
 ### Still open (deliberately deferred)
 - **Retire the legacy HS256 `/api/login`(`/token`) paths + fold in
-  `APItokenmanager`.** *Gated on "all clients on SSO", which is NOT yet true* — the
-  MCP still falls back to legacy, and other clients (e.g. the web UI) may still use
-  password login; `/api/token` is intentionally kept as a compatibility alias.
-  Removing it now would break password login. Retire only after confirming every
-  client authenticates via SSO (login → exchange / OAuth), then delete the legacy
-  routes and migrate `APItokenmanager`'s user/scope store into usermanagement.
+  `APItokenmanager`.** Now unblocked for the web UI (migrated to session-exchange,
+  §9.10) and the MCP (SSO). **Do after** confirming, on a real deploy, that the UI
+  works via session-exchange — then: (1) restrict/remove password login (keep a
+  SuperAdmin break-glass if wanted), (2) remove the `api_tokenmanager` Django
+  program from `Dockerfile.unified` + change the container healthcheck off `:8000`
+  + drop its start.sh migration steps (`Web_jwtuser`/`Web_scope` tables are created
+  by usermanagement `create_all`).
 - `chat_service` RS256 verification (same `core/jwks.py` pattern) — not in use.
