@@ -74,11 +74,21 @@ Two independent layers apply to every mutating call:
 | **Any other active role** (Reviewer, Validator, Moderator, …) | `read_private` |
 | **No role** | public reads only — no create/ingest/private read |
 
-**Delegation (Admin only):** an admin can grant the *grantable* capabilities —
+**Delegation (Admin/SuperAdmin only):** the *grantable* capabilities —
 `create_private_space`, `create_team_space`, `manage_team_space`, `ingest`,
-`recover`, `read_private` — to a specific user. `grant` and `sparql_admin` are
-**not** delegatable (they come only from an Admin/SuperAdmin role), so the grant
-endpoint can't escalate a non-admin into an admin.
+`recover`, `read_private` — can be granted to either:
+
+- **an individual** — `POST /admin/capabilities/grant` `{member, capability}`
+  (revoke: `/admin/capabilities/revoke`); or
+- **a whole role/group** — `POST /admin/capabilities/grant-role`
+  `{role, capability}` (revoke: `/admin/capabilities/revoke-role`; inspect:
+  `GET /admin/capabilities/role?role=`). This gives every member of a role/group
+  (including a custom group like `uk_collaborator`) the capability.
+
+`GET /admin/capabilities/available` lists the full catalog and which are
+delegatable. `grant` and `sparql_admin` are **not** delegatable (they come only
+from an Admin/SuperAdmin role), so grants can't escalate a non-admin into an admin.
+Effective capabilities = role-derived ∪ role/group grants ∪ per-user grants.
 
 **SuperAdmin vs Admin:** identical KG capabilities here. SuperAdmin is a
 bootstrap-seeded, protected marker (can't be banned/deleted/role-stripped);

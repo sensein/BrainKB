@@ -110,6 +110,24 @@ own protected routes (alongside the legacy v2 token).
 - `GET /api/users/roles` - Get user roles
 - `POST /api/users/roles` - Assign role
 
+### Admin: roles, permissions & moderation (`/api/admin`, Admin/SuperAdmin)
+
+- `GET/POST /api/admin/roles`, `PUT /api/admin/roles/{id}` — list/create custom
+  roles/groups (e.g. `uk_collaborator`).
+- `GET/POST /api/admin/permissions` — list all permissions and **add new ones**
+  (`{name, resource, action, description}`); attach to roles via
+  `PUT /api/admin/roles/{id}/permissions`.
+- `POST /api/admin/users/{profile_id}/roles`, `DELETE .../roles/{role}` — assign/
+  remove a user's role. **Assigning/removing the `Admin` role is SuperAdmin-only**
+  (hierarchy: SuperAdmin > Admin); the `SuperAdmin` role is protected.
+- `POST /api/admin/users/{profile_id}/ban` + `DELETE …/ban` — ban/unban. **Banning
+  an Admin is SuperAdmin-only.** Banning is the removal mechanism.
+- `POST /api/admin/users/{activate,deactivate}` — toggle login access.
+
+**No hard deletion.** `DELETE /api/admin/users/{id}` is disabled (returns `405`) —
+accounts are **banned** (reversible, preserves provenance/audit history), never
+deleted.
+
 ## 🎯 User Roles
 
 ### Content Contribution
