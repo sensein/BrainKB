@@ -18,13 +18,28 @@ private/public spaces.
 
 ## Auth & scopes
 
-Tokens are issued by the JWT/token manager and validated here. Scope policy:
+Two token schemes are accepted (see `AUTH_UNIFICATION.md`):
+
+- **Single sign-on (RS256)** — access tokens minted by usermanagement (the single
+  issuer) and verified here against its published **JWKS**; the token's `aud` must
+  equal `query_service`, so a token minted for another service is rejected
+  (containment). Configure with `QUERY_SERVICE_SSO_JWKS_URL` /
+  `QUERY_SERVICE_SSO_ISSUER` / `QUERY_SERVICE_SSO_AUDIENCE`.
+- **Legacy HS256** — this service's own `/api/token`, signed with its own secret.
+  Still accepted during migration; both schemes work side by side.
+
+Scope policy (same for either scheme):
 
 - **GET (reads)** → `read`
 - **Mutations** (ingest, register/attach graph, recover, create/modify space) → `write`
 - **Arbitrary SPARQL** (`/query/sparql/`) → `admin`
 - **Public-space reads** → no token required (anonymous), see Spaces below
 - `/register`, `/token` → public
+
+`POST /register` creates the credential **and** a canonical `Web_user_profile`
+with a default role (so a password user is a first-class identity, not a role-less
+orphan); the account starts inactive until an admin activates it. Authorization is
+role-based (see `RBAC_MODEL.md`) and read from the DB, not just the token.
 
 Users may only act on their own `user_id` (enforced), and job-scoped endpoints are
 owner-only.

@@ -52,7 +52,9 @@ Once started, services are accessible at:
     tracking (per-job delta graphs + query/compare endpoints).
   - **Spaces**: team-owned, private/public containers of named graphs — keep data
     private to members or publish it publicly (anonymous read). Per-endpoint JWT
-    scopes (`read`/`write`/`admin`).
+    scopes (`read`/`write`/`admin`); role-based authorization (see
+    `query_service/RBAC_MODEL.md`). Accepts both SSO (RS256/JWKS) and legacy
+    HS256 tokens.
   - **Search**: hybrid full-text search — Postgres locator index (aware of
     workspace + visibility) finds subjects, data is fetched from Oxigraph. Results
     are access-filtered (anonymous sees public only).
@@ -67,7 +69,24 @@ Once started, services are accessible at:
     optional API keys (OpenRouter, NCBI, Semantic Scholar, CORE).
 - **Oxigraph SPARQL**: `http://localhost:7878/` (password protected) graph database
 - **pgAdmin**: `http://localhost:5051/`
-- **User management service**: http://localhost:8004
+- **User management service (FastAPI)**: `http://localhost:8004`
+  - Canonical **identity** service: user profiles, roles/RBAC, and OAuth sign-in
+    (Globus / ORCID / GitHub). One canonical user; the credential row is linked to
+    the profile (identity unification).
+  - **Single sign-on** issuer (RS256 + JWKS): one login mints a refresh token,
+    exchanged for narrow per-service access tokens (`aud=<service>`) that each
+    service verifies via `/.well-known/jwks.json`. A token for one service can't
+    be replayed against another. Legacy per-service HS256 tokens still work.
+  - Admins can activate users and assign roles/groups. See
+    `query_service/AUTH_UNIFICATION.md` and `usermanagement_service/README.md`.
+
+## Authentication
+
+BrainKB is moving to a single sign-on model — usermanagement is the sole token
+issuer and each service verifies audience-scoped RS256 tokens against its JWKS,
+while legacy per-service HS256 tokens remain accepted during migration. The full
+design, phases, and deployment env are in
+[query_service/AUTH_UNIFICATION.md](query_service/AUTH_UNIFICATION.md).
 
 
 ## Documentation
