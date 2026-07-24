@@ -1652,3 +1652,85 @@ class AdminSettingRepository:
 
 
 admin_setting_repo = AdminSettingRepository()
+
+
+# ---------------------------------------------------------------------------
+# Identity provisioning (Phase 1 unification)
+# ---------------------------------------------------------------------------
+
+async def provision_identity(
+    session: AsyncSession,
+    *,
+    email: str,
+    full_name: Optional[str] = None,
+    password_hash: Optional[str] = None,
+    default_role: str = "Curator",
+    existing_profile: Optional[UserProfile] = None,
+) -> tuple:
+    """Single source of truth for creating/linking a BrainKB identity.
+
+    Idempotently guarantees that, for ``email``, there is:
+      * a canonical ``Web_user_profile`` (the user of record),
+      * a ``Web_jwtuser`` credential row linked to it via ``profile_id``,
+      * at least one role (``default_role``) on the profile,
+      * ``Admin`` + ``SuperAdmin`` if the email is in the bootstrap allowlist.
+
+    The caller owns the session/transaction (this does NOT commit). OAuth's rich
+    profile matching (by oauth-identity / orcid) stays in the router, which
+    passes the already-resolved profile via ``existing_profile``; password
+    onboarding passes just ``email`` + ``password_hash``. A pre-existing
+    credential's password is never overwritten here (login stays deterministic).
+
+    Returns ``(profile, jwt_user, role_names)``.
+    """
+    import secrets as _secrets
+    from core.security import get_password_hash  # lazy: avoid import cycle
+    from core.models.user import UserRoleEnum
+
+    email = (email or "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required to provision an identity")
+    display_name = full_name or email.split("@")[0]
+
+    # 1) Canonical profile — reuse the resolved one, else find/create by email.
+    profile = existing_profile or await user_profile_repo.get_by_email(session, email)
+    if profile is None:
+        profile = await user_profile_repo.create_profile(session, name=display_name, email=email)
+
+    # 2) Credential row (get-or-create). get_by_email_any_status avoids
+    #    re-inserting (and colliding on the unique email) for inactive shells.
+    jwt_user = await jwt_user_repo.get_by_email_any_status(session, email)
+    if jwt_user is None:
+        # OAuth/no-password onboarding gets an unusable random secret; a real
+        # hash is used only when the caller set a password (registration).
+        secret = password_hash or get_password_hash(_secrets.token_urlsafe(48))
+        jwt_user = await jwt_user_repo.create_user(
+            session=session, full_name=display_name, email=email, password=secret,
+        )
+
+    # 3) Link credential -> profile (the whole point of Phase 1). Set only when
+    #    unset/stale so we never thrash an already-correct link.
+    if getattr(jwt_user, "profile_id", None) != profile.id:
+        jwt_user.profile_id = profile.id
+        jwt_user.updated_at = datetime.utcnow()
+        await session.flush()
+
+    # 4) Default role if the profile has none yet.
+    role_names = await user_role_repo.get_user_role_names(session, profile.id)
+    if not role_names and default_role:
+        await user_role_repo.assign_role(
+            session, profile_id=profile.id, role=default_role, is_active=True,
+        )
+        role_names = [default_role]
+
+    # 5) Bootstrap-superadmin allowlist: elevate on first sight. Seed both Admin
+    #    (permissions / page access) and SuperAdmin (the protected marker).
+    if (profile.email or "").lower() in config.bootstrap_superadmin_emails:
+        for role_name in (UserRoleEnum.ADMIN.value, UserRoleEnum.SUPERADMIN.value):
+            if role_name not in role_names:
+                await user_role_repo.assign_role(
+                    session, profile_id=profile.id, role=role_name, is_active=True,
+                )
+                role_names.append(role_name)
+
+    return profile, jwt_user, role_names

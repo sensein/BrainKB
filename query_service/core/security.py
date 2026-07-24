@@ -48,11 +48,34 @@ def access_token_expire_minutes() -> int:
     return 30
 
 
-def create_access_token(email: str, scopes: List[str]) -> str:
+def create_access_token(
+    email: str,
+    scopes: List[str],
+    *,
+    user_id: Optional[int] = None,
+    profile_id: Optional[int] = None,
+    roles: Optional[List[str]] = None,
+) -> str:
+    """Mint a query_service access token.
+
+    Claims are standardized to match usermanagement's v2 token shape
+    (``sub``/``scopes``/``profile_id``/``roles``/``auth_source``) so the token
+    is uniform across services. It is still signed with query_service's OWN
+    secret — per-service token isolation is preserved; a token minted here is
+    not accepted elsewhere. ``roles``/``profile_id`` are informational: query
+    authorization re-reads roles from the DB (see core.rbac), so a stale claim
+    cannot grant access.
+    """
     expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
         minutes=access_token_expire_minutes()
     )
-    jwt_data = {"sub": email, "exp": expire, "scopes": scopes}
+    jwt_data = {"sub": email, "exp": expire, "scopes": scopes, "auth_source": "password"}
+    if user_id is not None:
+        jwt_data["user_id"] = user_id
+    if profile_id is not None:
+        jwt_data["profile_id"] = profile_id
+    if roles is not None:
+        jwt_data["roles"] = roles
     encoded_jwt = jwt.encode(jwt_data, key=SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 

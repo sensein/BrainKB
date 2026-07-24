@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from core.database import get_db_connection, insert_data, get_scopes_by_user
 from core.models.user import UserIn, LoginUserIn
 from core.security import get_password_hash, authenticate_user, create_access_token
+from core import rbac
 
 logger = logging.getLogger(__name__)
 
@@ -39,5 +40,17 @@ async def login(user: LoginUserIn):
     async with get_db_connection() as conn:
         authenticated_user = await authenticate_user(user.email, user.password, conn)
         scopes = await get_scopes_by_user(user_id=authenticated_user["id"], conn=conn)
-        access_token = create_access_token(authenticated_user["email"], scopes)
+        # Enrich the token with profile_id + roles so its shape matches
+        # usermanagement's v2 token. Signed with query_service's own secret
+        # (per-service isolation preserved); roles remain informational since
+        # authorization re-reads them from the DB (core.rbac).
+        email = authenticated_user["email"]
+        profile_id = await conn.fetchval(
+            'SELECT id FROM "Web_user_profile" WHERE lower(email) = lower($1)', email
+        )
+        roles = sorted(await rbac.active_roles(email))
+        access_token = create_access_token(
+            email, scopes,
+            user_id=authenticated_user["id"], profile_id=profile_id, roles=roles,
+        )
         return {"access_token": access_token, "token_type": "bearer"}

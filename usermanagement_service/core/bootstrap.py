@@ -177,6 +177,15 @@ async def apply_inline_schema_migrations() -> None:
         'ALTER TABLE "Web_user_profile" ADD COLUMN IF NOT EXISTS banned_at TIMESTAMP',
         'ALTER TABLE "Web_user_profile" ADD COLUMN IF NOT EXISTS banned_by INTEGER REFERENCES "Web_user_profile"(id) ON DELETE SET NULL',
         'ALTER TABLE "Web_user_profile" ADD COLUMN IF NOT EXISTS ban_reason TEXT',
+        # Identity unification (Phase 1): make the credential row (Web_jwtuser)
+        # an explicit 1:1 record for a profile instead of an email-only sibling.
+        # Web_user_profile is the canonical user; profile_id is the link.
+        'ALTER TABLE "Web_jwtuser" ADD COLUMN IF NOT EXISTS profile_id INTEGER REFERENCES "Web_user_profile"(id) ON DELETE SET NULL',
+        'CREATE INDEX IF NOT EXISTS ix_jwtuser_profile_id ON "Web_jwtuser"(profile_id)',
+        # Backfill the link for pre-existing rows by matching email (the old
+        # implicit join key). Case-insensitive so mixed-case duplicates align.
+        'UPDATE "Web_jwtuser" u SET profile_id = p.id FROM "Web_user_profile" p '
+        'WHERE u.profile_id IS NULL AND lower(u.email) = lower(p.email)',
     ]
     async with user_db_manager.get_async_session() as session:
         for stmt in statements:

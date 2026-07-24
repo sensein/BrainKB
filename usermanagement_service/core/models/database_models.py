@@ -32,15 +32,22 @@ class JWTUser(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     password: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Identity unification (Phase 1): the credential row is a 1:1 record for a
+    # canonical Web_user_profile. Nullable + SET NULL so a profile delete never
+    # orphans/blocks the credential; backfilled by email in bootstrap.
+    profile_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("Web_user_profile.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Relationships - JWT only, no profile relationships
-    
+
     # Indexes
     __table_args__ = (
         Index('idx_jwtuser_email', 'email'),
         Index('idx_jwtuser_active', 'is_active'),
+        Index('idx_jwtuser_profile_id', 'profile_id'),
     )
 
 

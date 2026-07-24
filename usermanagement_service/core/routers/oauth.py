@@ -26,15 +26,13 @@ from fastapi.responses import RedirectResponse
 
 from core.configuration import config
 from core.database import (
-    user_db_manager, user_profile_repo, user_role_repo, jwt_user_repo,
-    oauth_identity_repo, oauth_state_repo, user_activity_repo,
+    user_db_manager, user_profile_repo, jwt_user_repo,
+    oauth_identity_repo, oauth_state_repo, user_activity_repo, provision_identity,
 )
 from core.models.user import ActivityType, OAuthLoginStart, UserRoleEnum
-from core.models.database_models import UserProfile as UserProfileModel, JWTUser as JWTUserModel
+from core.models.database_models import UserProfile as UserProfileModel
 from core.oauth import get_provider
-from core.security import (
-    create_access_token_v2, encrypt_token, get_password_hash,
-)
+from core.security import create_access_token_v2, encrypt_token
 
 logger = logging.getLogger(__name__)
 
@@ -93,25 +91,6 @@ async def _upsert_profile_for_oauth(session, userinfo) -> UserProfileModel:
     await session.flush()
     await session.refresh(new_profile)
     return new_profile
-
-
-async def _ensure_jwt_user_shell(session, email: str, full_name: str) -> JWTUserModel:
-    """Make sure a Web_jwtuser row exists for this email. OAuth users don't have
-    a usable password — we store a random high-entropy hash (can't be logged in
-    with, just exists so the JWT user_id claim is stable). The shell is created
-    with `is_active=False`, so the lookup must not filter by activation; using
-    `get_by_email` (active-only) here would re-INSERT on every sign-in and
-    collide with the unique-email constraint."""
-    existing = await jwt_user_repo.get_by_email_any_status(session, email)
-    if existing:
-        return existing
-    random_password = secrets.token_urlsafe(48)
-    return await jwt_user_repo.create_user(
-        session=session,
-        full_name=full_name,
-        email=email,
-        password=get_password_hash(random_password),
-    )
 
 
 # ---- routes -------------------------------------------------------------
@@ -237,22 +216,17 @@ async def oauth_callback(
                 profile.updated_at = datetime.utcnow()
                 await session.flush()
 
-            jwt_user = await _ensure_jwt_user_shell(
+            # Ensure a credential row linked to this profile, a default role,
+            # and bootstrap elevation — all via the single provisioning path.
+            # OAuth's own profile matching already ran above, so hand the
+            # resolved profile through as existing_profile.
+            profile, jwt_user, existing_roles = await provision_identity(
                 session,
                 email=profile.email,
                 full_name=profile.name or userinfo.name or profile.email,
+                default_role=UserRoleEnum.CURATOR.value,
+                existing_profile=profile,
             )
-
-            # Default role on first login = Curator.
-            existing_roles = await user_role_repo.get_user_role_names(session, profile.id)
-            if not existing_roles:
-                await user_role_repo.assign_role(
-                    session,
-                    profile_id=profile.id,
-                    role=UserRoleEnum.CURATOR.value,
-                    is_active=True,
-                )
-                existing_roles = [UserRoleEnum.CURATOR.value]
 
             # Upsert the oauth identity row (encrypt tokens at rest).
             token_expires_at = None
@@ -269,20 +243,6 @@ async def oauth_callback(
                 token_expires_at=token_expires_at,
                 raw_profile=userinfo.raw,
             )
-
-            # Bootstrap-superadmin allowlist: if configured, elevate on first sight.
-            # Seed both Admin (for permissions / page-access checks) and
-            # SuperAdmin (the immutable marker that protects the account).
-            if (profile.email or "").lower() in config.bootstrap_superadmin_emails:
-                for role_name in (UserRoleEnum.ADMIN.value, UserRoleEnum.SUPERADMIN.value):
-                    if role_name not in existing_roles:
-                        await user_role_repo.assign_role(
-                            session,
-                            profile_id=profile.id,
-                            role=role_name,
-                            is_active=True,
-                        )
-                        existing_roles.append(role_name)
 
             # Log activity.
             await user_activity_repo.log_activity(
