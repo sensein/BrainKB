@@ -1,6 +1,8 @@
 # BrainKB Authentication & Identity — Unification Design
 
-Status: **Phase 1 implemented** (branch `auth-unification`); Phase 2 proposed / for discussion.
+Status: **Phase 1 + Phase 2 implemented** (branch `auth-unification`). Phase 2
+(single-issuer RS256 + JWKS SSO, per-audience tokens) is code-complete and
+pending a fresh deployment for live verification.
 Audience: BrainKB maintainers
 Scope: `query_service`, `usermanagement_service`, `APItokenmanager` (Django), and downstream services (`ml_service`, `chat_service`, `brainkb_mcp`).
 
@@ -182,6 +184,61 @@ Phase 2); no shared issuer / JWKS / `aud`.
 3. Migrate services from local secret validation to JWKS + `aud`.
 4. Retire per-service `/api/token` login endpoints in favor of the central one;
    `APItokenmanager`'s user store is fully folded in.
+
+#### Phase 2 — what was actually implemented (branch `auth-unification`)
+
+Single-issuer, per-audience SSO with containment preserved via `aud` (Decision B
+Option B2). Additive: legacy HS256 tokens keep working, so this is a safe
+migration, not a flag-day cutover.
+
+- **usermanagement is the issuer (RS256 + JWKS).** New `core/tokens_rs256.py`:
+  loads an RS256 private key from `USERMANAGEMENT_JWT_PRIVATE_KEY_PEM`/`_FILE`,
+  or generates a **process-shared** ephemeral key persisted to a file (so all
+  uvicorn workers agree — a per-worker ephemeral key breaks cross-worker
+  verification). Publishes `GET /.well-known/jwks.json`.
+- **Login → refresh → exchange.** New `core/routers/sso.py`:
+  `POST /api/auth/login` (`{email,password}`) returns a short-lived **refresh
+  token** (`aud=brainkb-auth`, not accepted by any service);
+  `POST /api/auth/exchange` (Bearer refresh, `{audience}`) returns a narrow
+  **access token** for a single service (`aud=<service>`). Roles/scopes are
+  **re-read fresh from the DB at exchange time**, so a stale refresh token can't
+  carry stale authorization; active-credential + ban checks run here too.
+- **query_service verifies via JWKS + `aud`.** New `core/jwks.py` (sync, so the
+  sync `require_scopes` dependency can use it): fetches + caches the JWKS,
+  verifies RS256, and **requires `aud == query_service`** and the configured
+  issuer. A new `decode_token_any()` tries RS256 (SSO) first, then falls back to
+  legacy HS256; it is wired into `get_current_user`, `get_current_user_optional`,
+  `verify_scopes`/`require_scopes`, and the websocket auth path.
+- **Containment preserved.** Tokens are audience-scoped: a `query_service` token
+  cannot be replayed against `ml_service`. Enforcement is by `aud` validation,
+  not shared secrets — query_service keeps its own HS256 secret for legacy
+  tokens and never learns the issuer's private key.
+
+Deployment env (set before/at the fresh deploy):
+
+- usermanagement: `USERMANAGEMENT_JWT_PRIVATE_KEY_PEM` **or** `_FILE`
+  (**required for production** — persistent, stable `kid`; without it a shared
+  ephemeral key is auto-generated and logged as a warning),
+  `USERMANAGEMENT_JWT_ISSUER` (default `brainkb-usermanagement`),
+  `USERMANAGEMENT_ACCESS_TOKEN_TTL_MIN` (15), `USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN`
+  (720), `USERMANAGEMENT_TOKEN_AUDIENCES` (`query_service,ml_service,chat_service`).
+- query_service: `QUERY_SERVICE_SSO_JWKS_URL` (default
+  `http://127.0.0.1:8004/.well-known/jwks.json`; in a split deployment point at
+  the usermanagement service URL), `QUERY_SERVICE_SSO_ISSUER` (must match the
+  issuer), `QUERY_SERVICE_SSO_AUDIENCE` (`query_service`).
+
+Verified before deploy: JWKS endpoint serves a key; `/api/auth/login` returns a
+refresh token; RS256→JWK verification roundtrip validates `aud`+`iss`; jose
+accepts JWK dicts. Full login→exchange→query_service acceptance, wrong-`aud`
+rejection, and legacy-HS256 coexistence to be confirmed on the fresh deployment.
+
+Remaining Phase 2 rollout (same pattern, not yet done):
+- `ml_service` / `chat_service`: drop in a `core/jwks.py` verifier (audience
+  `ml_service` / `chat_service`) and dual-verify like query_service.
+- `brainkb_mcp`: log in once, then request per-service access tokens via
+  `/api/auth/exchange` for whichever service a tool calls.
+- Once clients have migrated, retire the legacy HS256 `/api/token` paths and
+  fold in `APItokenmanager`; tighten `require_admin` to re-read roles from the DB.
 
 ---
 

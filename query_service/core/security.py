@@ -29,6 +29,7 @@ from passlib.context import CryptContext
 
 from core.configuration import load_environment
 from core.database import get_user
+from core import jwks
 
 logger = logging.getLogger(__name__)
 
@@ -108,11 +109,30 @@ def decode_jwt(token: str):
         raise HTTPException(status_code=403, detail="Could not validate credentials")
 
 
+def decode_token_any(token: str) -> dict:
+    """Decode a bearer token from either scheme, newest first:
+
+      1. Phase 2 SSO RS256 access token — verified against the issuer's JWKS
+         and required to carry ``aud == this service`` (see core.jwks).
+      2. Legacy HS256 query_service token — verified with this service's own
+         secret (per-service isolation preserved).
+
+    Returns the validated claims. Raises jose ``JWTError`` /
+    ``ExpiredSignatureError`` if neither scheme validates, so existing callers'
+    exception handling (401/403) keeps working unchanged.
+    """
+    payload = jwks.verify_access_token(token)
+    if payload is not None:
+        return payload
+    # Fall back to the legacy HS256 token signed with our own secret.
+    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
 ):
     try:
-        payload = decode_jwt(token)
+        payload = decode_token_any(token)
         email = payload.get("sub")
         if email is None:
             raise credentials_exception
@@ -145,7 +165,7 @@ async def get_current_user_optional(request: Request):
     if not token:
         return None
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = decode_token_any(token)
         email = payload.get("sub")
         if not email:
             return None
@@ -155,7 +175,10 @@ async def get_current_user_optional(request: Request):
 
 
 def verify_scopes(required_scopes: List[str], token: str) -> bool:
-    decoded_token = decode_jwt(token)
+    try:
+        decoded_token = decode_token_any(token)
+    except (ExpiredSignatureError, JWTError):
+        raise HTTPException(status_code=403, detail="Could not validate credentials")
     token_scopes = decoded_token.get("scopes", [])
     return all(scope in token_scopes for scope in required_scopes)
 
@@ -233,9 +256,10 @@ async def authenticate_websocket(websocket: WebSocket, required_scopes: Optional
             logger.warning("No JWT token provided in WebSocket connection")
             return None
         
-        # Decode and validate JWT token (same logic as get_current_user)
+        # Decode and validate JWT token (same logic as get_current_user):
+        # RS256 SSO access token (aud-checked) first, then legacy HS256.
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            payload = decode_token_any(token)
         except ExpiredSignatureError:
             logger.warning("JWT token has expired")
             return None
