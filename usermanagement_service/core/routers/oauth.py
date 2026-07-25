@@ -360,6 +360,10 @@ async def oauth_callback(
                 roles=existing_roles,
                 scopes=scopes,
                 auth_source=provider.name,
+                # Web-session TTL (default 12h), not the 30-min default: this token
+                # lives in the NextAuth session and isn't auto-refreshed, so a short
+                # TTL made the UI 401 (/api/users/me) mid-session.
+                expires_minutes=config.web_session_ttl_min,
             )
             # CLI/skill (paste-code) flow: mint an SSO refresh token and stash it
             # behind a short code the browser will display for the user to paste.

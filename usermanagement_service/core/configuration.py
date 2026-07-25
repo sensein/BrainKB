@@ -79,6 +79,10 @@ def load_environment(env_name="env"):
         "USERMANAGEMENT_JWT_PRIVATE_KEY_FILE": os.getenv("USERMANAGEMENT_JWT_PRIVATE_KEY_FILE"),
         "USERMANAGEMENT_ACCESS_TOKEN_TTL_MIN": os.getenv("USERMANAGEMENT_ACCESS_TOKEN_TTL_MIN", "15"),
         "USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN": os.getenv("USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN", "720"),
+        # TTL of the web-session JWT handed to the UI at OAuth login (?token=).
+        # It lives in the NextAuth session and is NOT auto-refreshed, so a too-short
+        # value makes the UI 401 mid-session. Default 12h.
+        "USERMANAGEMENT_WEB_SESSION_TTL_MIN": os.getenv("USERMANAGEMENT_WEB_SESSION_TTL_MIN", "720"),
         # Services a refresh token may be exchanged for (valid aud values).
         "USERMANAGEMENT_TOKEN_AUDIENCES": os.getenv("USERMANAGEMENT_TOKEN_AUDIENCES", "usermanagement,query_service,ml_service,chat_service"),
 
@@ -191,6 +195,14 @@ class Configuration:
     def refresh_token_ttl_min(self) -> int:
         try:
             return int(self._env_vars.get("USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN", "720"))
+        except (TypeError, ValueError):
+            return 720
+
+    @property
+    def web_session_ttl_min(self) -> int:
+        """TTL (minutes) of the web-session JWT issued to the UI at OAuth login."""
+        try:
+            return int(self._env_vars.get("USERMANAGEMENT_WEB_SESSION_TTL_MIN", "720"))
         except (TypeError, ValueError):
             return 720
 
