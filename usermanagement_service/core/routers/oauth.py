@@ -365,6 +365,19 @@ async def oauth_callback(
                 # TTL made the UI 401 (/api/users/me) mid-session.
                 expires_minutes=config.web_session_ttl_min,
             )
+            # Web flow: also mint a longer-lived REFRESH token so the UI can renew
+            # its access token silently (no re-login) until this expires. Exchanged
+            # by the UI at /api/auth/exchange (audience=usermanagement).
+            web_refresh = None
+            if login_mode != "cli":
+                web_refresh = tokens_rs256.create_refresh_token(
+                    email=profile.email,
+                    profile_id=profile.id,
+                    roles=existing_roles,
+                    scopes=scopes,
+                    auth_source=provider.name,
+                    expires_minutes=config.web_refresh_ttl_min,
+                )
             # CLI/skill (paste-code) flow: mint an SSO refresh token and stash it
             # behind a short code the browser will display for the user to paste.
             if login_mode == "cli":
@@ -397,6 +410,8 @@ async def oauth_callback(
         return HTMLResponse(_cli_success_page(cli_code))
 
     qs = {"token": token}
+    if web_refresh:
+        qs["refresh"] = web_refresh
     if redirect_after_login:
         qs["redirect"] = redirect_after_login
     return RedirectResponse(f"{config.frontend_callback_url}?{urlencode(qs)}", status_code=302)
