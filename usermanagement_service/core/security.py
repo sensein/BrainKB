@@ -11,6 +11,7 @@
 # -----------------------------------------------------------------------------
 
 import logging
+import os
 import base64
 import hashlib
 from datetime import datetime, timedelta
@@ -159,11 +160,32 @@ def decrypt_token(ciphertext: Optional[str]) -> Optional[str]:
         return None
 
 
+# The audience this service accepts in RS256 SSO access tokens (Phase 2). A token
+# minted for another service (aud=query_service, ...) is NOT accepted here.
+SERVICE_AUDIENCE = os.getenv("USERMANAGEMENT_SERVICE_AUDIENCE", "usermanagement")
+
+
 def verify_token(token: str) -> Union[dict, None]:
-    """Verify and decode a JWT token"""
+    """Verify and decode a bearer token, newest scheme first:
+
+      1. Phase 2 SSO RS256 access token minted for THIS service
+         (aud == usermanagement), verified with our own public key — we are the
+         issuer, so no network fetch.
+      2. Legacy HS256 v2 token signed with this service's own secret.
+
+    Returns the claims dict, or None if neither validates. Backward-compatible:
+    existing HS256 tokens keep working during migration."""
+    # 1) RS256 SSO access token for this service.
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
+        from core import tokens_rs256
+        payload = tokens_rs256.verify_access_token(token, audience=SERVICE_AUDIENCE)
+        if payload is not None:
+            return payload
+    except Exception as e:
+        logger.debug(f"RS256 verify skipped/failed, trying HS256: {e}")
+    # 2) Legacy HS256 token.
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError as e:
         logger.error(f"JWT token verification failed: {str(e)}")
         return None
@@ -352,12 +374,28 @@ async def get_current_user_optional(
     return user_data
 
 
-def require_admin(current_user: Annotated[dict, Depends(get_current_user)]) -> dict:
-    """Dependency: caller must have the Admin or SuperAdmin role (profile-level).
-    Checks JWT 'roles' claim, falling back to the bootstrap superadmin email
-    allowlist for the very first sign-in (before any role is assigned in the DB)."""
+async def _current_roles_from_db(email: str, profile_id) -> list:
+    """Active role names for a user, read fresh from the DB (not the token)."""
+    from core.database import user_db_manager, user_role_repo, user_profile_repo
+    async with user_db_manager.get_async_session() as session:
+        pid = profile_id
+        if pid is None and email:
+            prof = await user_profile_repo.get_by_email(session, email)
+            pid = prof.id if prof else None
+        if pid is None:
+            return []
+        return await user_role_repo.get_user_role_names(session, pid) or []
+
+
+async def require_admin(current_user: Annotated[dict, Depends(get_current_user)]) -> dict:
+    """Dependency: caller must currently hold Admin or SuperAdmin.
+
+    Roles are re-read from the DB (not trusted from the token's `roles` claim) so a
+    revoked/demoted admin loses access immediately, without waiting for the token to
+    expire. Falls back to the bootstrap-superadmin allowlist for the very first
+    sign-in (before any role exists in the DB)."""
     email = (current_user.get("email") or "").lower()
-    roles = current_user.get("roles", []) or []
+    roles = await _current_roles_from_db(email, current_user.get("profile_id"))
 
     if UserRoleEnum.ADMIN.value in roles or UserRoleEnum.SUPERADMIN.value in roles:
         return current_user

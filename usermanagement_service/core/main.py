@@ -16,6 +16,8 @@ from core.routers.user_management import router as user_management_router
 from core.routers.oauth import router as oauth_router
 from core.routers.admin import router as admin_router
 from core.routers.access import router as access_router
+from core.routers.sso import router as sso_router, wellknown_router
+from core.routers.pat import router as pat_router
 from core.database import user_db_manager, user_activity_repo
 from core.models.user import ActivityType
 from core.security import verify_token
@@ -122,11 +124,13 @@ app = FastAPI(lifespan=lifespan)
 logger = logging.getLogger(__name__)
 
 origins = [
+    "https://brainkb.org",
+    "https://www.brainkb.org",
     "https://beta.brainkb.org",
     "https://sandbox.brainkb.org",
     "localhost:3000",
     "http://localhost:3000",
-    "http://127.0.0.1:300",
+    "http://127.0.0.1:3000",
 ]
 
 app.add_middleware(
@@ -147,6 +151,11 @@ app.include_router(user_management_router, prefix="/api", tags=["User Management
 app.include_router(oauth_router, prefix="/api", tags=["OAuth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(access_router, prefix="/api", tags=["Access Control"])
+# Phase 2 SSO: JWKS at the root well-known path; auth endpoints under /api.
+app.include_router(wellknown_router, tags=["SSO"])
+app.include_router(sso_router, prefix="/api", tags=["SSO"])
+# Personal Access Tokens (browser-free CLI/MCP auth).
+app.include_router(pat_router, prefix="/api", tags=["PAT"])
 
 
 # log all HTTP exception when raised

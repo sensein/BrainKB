@@ -61,6 +61,12 @@ def load_environment(env_name="env"):
         "JWT_POSTGRES_DATABASE_NAME": os.getenv("JWT_POSTGRES_DATABASE_NAME"),
         "JWT_ALGORITHM": os.getenv("JWT_ALGORITHM", "HS256"),
         "JWT_SECRET_KEY": os.getenv("ML_SERVICE_JWT_SECRET_KEY"),
+        # Phase 2 SSO: verify RS256 access tokens minted by usermanagement.
+        # Signature checked against the issuer's JWKS; token `aud` must equal
+        # SSO_AUDIENCE. Legacy HS256 tokens still validate too.
+        "SSO_JWKS_URL": os.getenv("ML_SERVICE_SSO_JWKS_URL", "http://127.0.0.1:8004/.well-known/jwks.json"),
+        "SSO_ISSUER": os.getenv("ML_SERVICE_SSO_ISSUER", "brainkb-usermanagement"),
+        "SSO_AUDIENCE": os.getenv("ML_SERVICE_SSO_AUDIENCE", "ml_service"),
 
     #     Ingestion specific environment
         "RABBITMQ_USERNAME": os.getenv("RABBITMQ_USERNAME"),

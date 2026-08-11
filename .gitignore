@@ -138,3 +138,6 @@ usermanagement_service
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Auto-generated SSO signing key (do not commit)
+secrets/

@@ -32,15 +32,22 @@ class JWTUser(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     password: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Identity unification (Phase 1): the credential row is a 1:1 record for a
+    # canonical Web_user_profile. Nullable + SET NULL so a profile delete never
+    # orphans/blocks the credential; backfilled by email in bootstrap.
+    profile_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("Web_user_profile.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Relationships - JWT only, no profile relationships
-    
+
     # Indexes
     __table_args__ = (
         Index('idx_jwtuser_email', 'email'),
         Index('idx_jwtuser_active', 'is_active'),
+        Index('idx_jwtuser_profile_id', 'profile_id'),
     )
 
 
@@ -387,12 +394,71 @@ class OAuthState(Base):
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     code_verifier: Mapped[Optional[str]] = mapped_column(String(256))
     redirect_after_login: Mapped[Optional[str]] = mapped_column(String(500))
+    # 'web' (default, browser redirect to the SPA) or 'cli' (paste-code flow for
+    # the MCP/skill — the callback shows a short code instead of redirecting).
+    mode: Mapped[str] = mapped_column(String(16), default="web")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     __table_args__ = (
         Index('idx_oauth_state_state', 'state'),
         Index('idx_oauth_state_expires_at', 'expires_at'),
+    )
+
+
+class OAuthCliResult(Base):
+    """Result bucket for the CLI/skill paste-code OAuth flow. After a CLI-initiated
+    OAuth callback provisions the user and mints an SSO refresh token, that token is
+    stored here keyed by a short human-typable code, shown in the browser. The
+    MCP/skill exchanges the code for the refresh token (single-use, short-lived)."""
+    __tablename__ = "Web_oauth_cli_result"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(255))
+    consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index('idx_oauth_cli_result_code', 'code'),
+    )
+
+
+class PersonalAccessToken(Base):
+    """A long-lived, opaque Personal Access Token (PAT) for CLI/MCP use.
+
+    The plaintext token is shown to the user exactly ONCE at creation and is
+    never stored — only its SHA-256 hash is persisted, so a DB leak cannot
+    recover usable tokens. A PAT is presented by the MCP/skill and exchanged at
+    ``POST /api/auth/pat/exchange`` for short-lived per-service access tokens
+    (the same RS256 tokens the refresh-token flow issues). Unlike a signed JWT a
+    PAT is revocable instantly (``revoked``) and time-bounded (``expires_at``);
+    roles are re-read from the DB at exchange time, so authorization is never
+    stale. This is the "generate once, paste into the skill config, no browser
+    afterward" credential."""
+    __tablename__ = "Web_personal_access_token"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # SHA-256 hex of the full opaque secret — the ONLY copy we keep.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    # Short, non-secret leading fragment shown in listings so a user can tell
+    # their tokens apart without exposing the secret (e.g. "brainkb_pat_9f3a").
+    prefix: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    profile_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey('Web_user_profile.id', ondelete='CASCADE'))
+    jwt_user_id: Mapped[Optional[int]] = mapped_column(Integer)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index('idx_pat_token_hash', 'token_hash'),
+        Index('idx_pat_profile_id', 'profile_id'),
     )
 
 

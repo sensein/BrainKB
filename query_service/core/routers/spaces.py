@@ -42,16 +42,25 @@ def _agent(user) -> str:
 
 
 async def _can_manage(space: dict, email: str) -> bool:
-    """Who may manage a space (members/visibility/graphs): the space owner, an
-    Admin/SuperAdmin, a holder of manage_team_space (team spaces), or someone
-    matched by a per-space 'manage' access rule."""
-    if await sp.member_role(space["space_id"], email) == "owner":
-        return True
+    """Who may manage a space (members/visibility/graphs/access-rules):
+
+      * **Admin/SuperAdmin** — every space (platform-wide).
+      * **Owner** (the creator) — their own space.
+      * A non-admin with **manage_team_space** — ONLY team spaces they are
+        **assigned to** (a member of), not every team space.
+      * Anyone matched by a per-space **'manage'** access rule (explicit assignment).
+
+    i.e. unless you're an Admin, you can manage only the team spaces you created or
+    were assigned to — never all of them."""
     if await rbac.is_admin(email):
         return True
-    if space.get("space_type") == "team" and await rbac.has_capability(email, rbac.MANAGE_TEAM_SPACE):
+    srole = await sp.member_role(space["space_id"], email)
+    if srole == "owner":
         return True
     if await sp.matches_access_rule(space["space_id"], "manage", email):
+        return True
+    if (space.get("space_type") == "team" and srole is not None
+            and await rbac.has_capability(email, rbac.MANAGE_TEAM_SPACE)):
         return True
     return False
 
@@ -212,6 +221,14 @@ async def add_graph(slug: str, body: SpaceGraphIn, user: Annotated[LoginUserIn, 
     if not named_graph_url.endswith("/"):
         named_graph_url += "/"
 
+    # Bind first: a graph is globally unique to one space, so if another space
+    # already holds it this must fail with a conflict rather than register registry
+    # metadata for a graph we cannot attach.
+    try:
+        await sp.attach_graph(space["space_id"], named_graph_url)
+    except sp.GraphAlreadyBound as e:
+        raise HTTPException(409, str(e))
+
     # Register in the graph registry if not already there (idempotent-ish).
     if not await check_named_graph_exists(named_graph_url):
         await insert_data_gdb_async(named_graph_metadata(
@@ -219,7 +236,6 @@ async def add_graph(slug: str, body: SpaceGraphIn, user: Annotated[LoginUserIn, 
             description=body.description,
             agent_uri=str(agent_ref(_agent(user))),
         ))
-    await sp.attach_graph(space["space_id"], named_graph_url)
     space = await sp.get_space(slug)
     await sp.mirror_space_to_rdf(space)
     return space
@@ -257,6 +273,11 @@ async def read_space_data(slug: str, user: Annotated[Optional[object], Depends(g
 
 class GrantIn(BaseModel):
     member: str
+    capability: str
+
+
+class RoleGrantIn(BaseModel):
+    role: str
     capability: str
 
 
@@ -355,3 +376,66 @@ async def revoke_capability(body: GrantIn, user: Annotated[LoginUserIn, Depends(
         raise HTTPException(403, "Admin/SuperAdmin role required to revoke capabilities")
     await rbac.revoke_capability(body.member, body.capability)
     return {"status": "revoked", "member": body.member, "capability": body.capability}
+
+
+@router.get("/admin/capabilities/available",
+            dependencies=[Depends(require_scopes(["admin"]))],
+            summary="List all KG capabilities and which are delegatable (admin only)",
+            description="Catalog of query_service capabilities. 'grantable' are the ones "
+                        "an admin may delegate to a user or role/group; 'grant' and "
+                        "'sparql_admin' are admin-intrinsic (not delegatable).")
+async def available_capabilities(user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required")
+    return {
+        "all": sorted(rbac.ALL_CAPS),
+        "grantable": sorted(rbac.GRANTABLE_CAPS),
+        "admin_only": sorted(rbac.ALL_CAPS - rbac.GRANTABLE_CAPS),
+        "descriptions": {
+            rbac.CREATE_PRIVATE_SPACE: "Create your own individual/private space",
+            rbac.CREATE_TEAM_SPACE: "Create a team (shared) space",
+            rbac.MANAGE_TEAM_SPACE: "Manage a team space's members, visibility, graphs, access rules",
+            rbac.INGEST: "Ingest data (also needs per-space write: membership or a space write access rule)",
+            rbac.RECOVER: "Recover stuck/errored ingest jobs",
+            rbac.READ_PRIVATE: "Read non-public content you're a member of",
+            rbac.SPARQL_ADMIN: "Run arbitrary SPARQL (admin-only, not delegatable)",
+            rbac.GRANT: "Grant/revoke capabilities to others (admin-only, not delegatable)",
+        },
+    }
+
+
+@router.get("/admin/capabilities/role",
+            dependencies=[Depends(require_scopes(["admin"]))],
+            summary="List capabilities granted to a role/group (admin only)")
+async def role_capabilities(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    role: Annotated[str, Query(..., description="Role/group name, e.g. 'uk_collaborator'")],
+):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required")
+    return {"role": role, "grants": await rbac.list_role_grants(role)}
+
+
+@router.post("/admin/capabilities/grant-role",
+             dependencies=[Depends(require_scopes(["admin"]))],
+             summary="Grant a capability to a whole role/group (admin only)",
+             description="Give every member of a role/group a delegatable capability — "
+                         "e.g. grant 'ingest' or 'create_private_space' to a custom group "
+                         "like 'uk_collaborator'. 'grant'/'sparql_admin' are not delegatable.")
+async def grant_role_capability(body: RoleGrantIn, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required to grant capabilities")
+    if body.capability not in rbac.GRANTABLE_CAPS:
+        raise HTTPException(400, f"capability is not delegatable; valid: {sorted(rbac.GRANTABLE_CAPS)}")
+    await rbac.grant_role_capability(body.role, body.capability, _agent(user))
+    return {"status": "granted", "role": body.role, "capability": body.capability}
+
+
+@router.post("/admin/capabilities/revoke-role",
+             dependencies=[Depends(require_scopes(["admin"]))],
+             summary="Revoke a capability from a role/group (admin only)")
+async def revoke_role_capability(body: RoleGrantIn, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required to revoke capabilities")
+    await rbac.revoke_role_capability(body.role, body.capability)
+    return {"status": "revoked", "role": body.role, "capability": body.capability}

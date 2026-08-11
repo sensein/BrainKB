@@ -29,6 +29,7 @@ from passlib.context import CryptContext
 
 from core.configuration import load_environment
 from core.database import get_user
+from core import jwks
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +49,34 @@ def access_token_expire_minutes() -> int:
     return 30
 
 
-def create_access_token(email: str, scopes: List[str]) -> str:
+def create_access_token(
+    email: str,
+    scopes: List[str],
+    *,
+    user_id: Optional[int] = None,
+    profile_id: Optional[int] = None,
+    roles: Optional[List[str]] = None,
+) -> str:
+    """Mint a query_service access token.
+
+    Claims are standardized to match usermanagement's v2 token shape
+    (``sub``/``scopes``/``profile_id``/``roles``/``auth_source``) so the token
+    is uniform across services. It is still signed with query_service's OWN
+    secret — per-service token isolation is preserved; a token minted here is
+    not accepted elsewhere. ``roles``/``profile_id`` are informational: query
+    authorization re-reads roles from the DB (see core.rbac), so a stale claim
+    cannot grant access.
+    """
     expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
         minutes=access_token_expire_minutes()
     )
-    jwt_data = {"sub": email, "exp": expire, "scopes": scopes}
+    jwt_data = {"sub": email, "exp": expire, "scopes": scopes, "auth_source": "password"}
+    if user_id is not None:
+        jwt_data["user_id"] = user_id
+    if profile_id is not None:
+        jwt_data["profile_id"] = profile_id
+    if roles is not None:
+        jwt_data["roles"] = roles
     encoded_jwt = jwt.encode(jwt_data, key=SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -85,11 +109,30 @@ def decode_jwt(token: str):
         raise HTTPException(status_code=403, detail="Could not validate credentials")
 
 
+def decode_token_any(token: str) -> dict:
+    """Decode a bearer token from either scheme, newest first:
+
+      1. Phase 2 SSO RS256 access token — verified against the issuer's JWKS
+         and required to carry ``aud == this service`` (see core.jwks).
+      2. Legacy HS256 query_service token — verified with this service's own
+         secret (per-service isolation preserved).
+
+    Returns the validated claims. Raises jose ``JWTError`` /
+    ``ExpiredSignatureError`` if neither scheme validates, so existing callers'
+    exception handling (401/403) keeps working unchanged.
+    """
+    payload = jwks.verify_access_token(token)
+    if payload is not None:
+        return payload
+    # Fall back to the legacy HS256 token signed with our own secret.
+    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
 ):
     try:
-        payload = decode_jwt(token)
+        payload = decode_token_any(token)
         email = payload.get("sub")
         if email is None:
             raise credentials_exception
@@ -102,7 +145,10 @@ async def get_current_user(
     except JWTError as e:
         raise credentials_exception from e
     user = await get_user(email=email)
-    if user is None:
+    # get_user returns False (not None) when there is no active user row, so check
+    # falsiness — otherwise `False` slips through as the "user" and downstream code
+    # (_agent, role lookup) breaks, yielding a misleading 403 instead of a 401.
+    if not user:
         raise credentials_exception
     return user
 
@@ -122,17 +168,22 @@ async def get_current_user_optional(request: Request):
     if not token:
         return None
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = decode_token_any(token)
         email = payload.get("sub")
         if not email:
             return None
-        return await get_user(email=email)
+        # get_user returns False when no active user row; normalize to None so
+        # callers' truthiness/None checks behave (anonymous, not a bogus `False`).
+        return (await get_user(email=email)) or None
     except (ExpiredSignatureError, JWTError, Exception):
         return None
 
 
 def verify_scopes(required_scopes: List[str], token: str) -> bool:
-    decoded_token = decode_jwt(token)
+    try:
+        decoded_token = decode_token_any(token)
+    except (ExpiredSignatureError, JWTError):
+        raise HTTPException(status_code=403, detail="Could not validate credentials")
     token_scopes = decoded_token.get("scopes", [])
     return all(scope in token_scopes for scope in required_scopes)
 
@@ -210,9 +261,10 @@ async def authenticate_websocket(websocket: WebSocket, required_scopes: Optional
             logger.warning("No JWT token provided in WebSocket connection")
             return None
         
-        # Decode and validate JWT token (same logic as get_current_user)
+        # Decode and validate JWT token (same logic as get_current_user):
+        # RS256 SSO access token (aud-checked) first, then legacy HS256.
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            payload = decode_token_any(token)
         except ExpiredSignatureError:
             logger.warning("JWT token has expired")
             return None
@@ -235,10 +287,11 @@ async def authenticate_websocket(websocket: WebSocket, required_scopes: Optional
         
         # Get user from database (same as get_current_user)
         user = await get_user(email=email)
-        if user is None:
+        # get_user returns False (not None) when no active user row — check falsiness.
+        if not user:
             logger.warning(f"User not found for email: {email}")
             return None
-        
+
         return user
         
     except Exception as e:

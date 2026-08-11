@@ -69,6 +69,19 @@ def load_environment(env_name="env"):
         "JWT_LOGIN_EMAIL": os.getenv("JWT_LOGIN_EMAIL"),
         "JWT_LOGIN_PASSWORD": os.getenv("JWT_LOGIN_PASSWORD"),
 
+        # Phase 2 SSO: RS256 single-issuer + JWKS. usermanagement is the sole
+        # issuer; a login mints a short-lived refresh token, exchanged for narrow
+        # per-service access tokens (aud=<service>). See AUTH_UNIFICATION.md.
+        "USERMANAGEMENT_JWT_ISSUER": os.getenv("USERMANAGEMENT_JWT_ISSUER", "brainkb-usermanagement"),
+        # RS256 private key: PEM string, or a file path. If neither is set an
+        # EPHEMERAL key is generated at first use (dev only; not restart-safe).
+        "USERMANAGEMENT_JWT_PRIVATE_KEY_PEM": os.getenv("USERMANAGEMENT_JWT_PRIVATE_KEY_PEM"),
+        "USERMANAGEMENT_JWT_PRIVATE_KEY_FILE": os.getenv("USERMANAGEMENT_JWT_PRIVATE_KEY_FILE"),
+        "USERMANAGEMENT_ACCESS_TOKEN_TTL_MIN": os.getenv("USERMANAGEMENT_ACCESS_TOKEN_TTL_MIN", "15"),
+        "USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN": os.getenv("USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN", "720"),
+        # Services a refresh token may be exchanged for (valid aud values).
+        "USERMANAGEMENT_TOKEN_AUDIENCES": os.getenv("USERMANAGEMENT_TOKEN_AUDIENCES", "usermanagement,query_service,ml_service,chat_service"),
+
         # OAuth / Admin Bootstrap
         "USERMANAGEMENT_PUBLIC_BASE_URL": os.getenv("USERMANAGEMENT_PUBLIC_BASE_URL", "http://localhost:8004"),
         "USERMANAGEMENT_FRONTEND_CALLBACK_URL": os.getenv("USERMANAGEMENT_FRONTEND_CALLBACK_URL", "http://localhost:3000/auth/callback"),
@@ -153,6 +166,38 @@ class Configuration:
     def jwt_bearer_token_url(self) -> str:
         """Get the JWT bearer token URL."""
         return self._env_vars.get("JWT_BEARER_TOKEN_URL", "")
+
+    # ---- Phase 2 SSO (RS256 single-issuer + JWKS) --------------------------
+    @property
+    def jwt_issuer(self) -> str:
+        return self._env_vars.get("USERMANAGEMENT_JWT_ISSUER", "brainkb-usermanagement")
+
+    @property
+    def jwt_private_key_pem(self) -> Optional[str]:
+        return self._env_vars.get("USERMANAGEMENT_JWT_PRIVATE_KEY_PEM")
+
+    @property
+    def jwt_private_key_file(self) -> Optional[str]:
+        return self._env_vars.get("USERMANAGEMENT_JWT_PRIVATE_KEY_FILE")
+
+    @property
+    def access_token_ttl_min(self) -> int:
+        try:
+            return int(self._env_vars.get("USERMANAGEMENT_ACCESS_TOKEN_TTL_MIN", "15"))
+        except (TypeError, ValueError):
+            return 15
+
+    @property
+    def refresh_token_ttl_min(self) -> int:
+        try:
+            return int(self._env_vars.get("USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN", "720"))
+        except (TypeError, ValueError):
+            return 720
+
+    @property
+    def token_audiences(self) -> list:
+        raw = self._env_vars.get("USERMANAGEMENT_TOKEN_AUDIENCES", "usermanagement,query_service,ml_service,chat_service") or ""
+        return [a.strip() for a in raw.split(",") if a.strip()]
     
     @property
     def jwt_login_username(self) -> str:
