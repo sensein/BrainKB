@@ -115,10 +115,25 @@ async def sso_exchange(
         )
 
     email = payload.get("sub")
+    auth_source = payload.get("auth_source", "password")
     async with user_db_manager.get_async_session() as session:
-        # active-only lookup: a deactivated credential can no longer exchange.
-        jwt_user = await jwt_user_repo.get_by_email(session, email)
+        # Look the credential row up regardless of is_active, because an inactive
+        # row means two different things here. OAuth onboarding deliberately
+        # creates a SHELL row with is_active=False (provision_identity /
+        # _ensure_jwt_user_shell) — an OAuth user has no usable password, and the
+        # shell exists only to supply a stable user_id claim. An active-only
+        # lookup therefore rejected every OAuth user: Globus/ORCID/GitHub logins
+        # could mint a refresh token and then never exchange it, which broke both
+        # the MCP/CLI flow and the UI's silent renew.
+        jwt_user = await jwt_user_repo.get_by_email_any_status(session, email)
         if not jwt_user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unknown account")
+        # For PASSWORD credentials is_active is the deactivation switch that
+        # POST /api/admin/users/deactivate flips, so it must still be enforced —
+        # dropping the check outright would make deactivation a no-op here.
+        # OAuth accounts are removed by BANNING (the documented mechanism, since
+        # deletion is disabled), which the is_banned check below enforces.
+        if not jwt_user.is_active and auth_source == "password":
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account inactive")
         scopes = await jwt_user_repo.get_user_scopes(session, jwt_user.id) or ["read"]
         profile = await user_profile_repo.get_by_email(session, email)
@@ -133,7 +148,7 @@ async def sso_exchange(
         profile_id=profile_id,
         roles=roles,
         scopes=scopes,
-        auth_source=payload.get("auth_source", "password"),
+        auth_source=auth_source,
         jwt_user_id=jwt_user.id,
     )
     return {
