@@ -144,7 +144,13 @@ async def get_current_user(
         ) from e
     except JWTError as e:
         raise credentials_exception from e
-    user = await get_user(email=email)
+    # An OAuth caller's credential row is a SHELL with is_active=False (they have
+    # no usable password), so an active-only lookup 401s every Globus/ORCID/GitHub
+    # user despite a perfectly valid token. The token records how it was issued, so
+    # relax the filter only for those — on the password path is_active IS the
+    # deactivation switch and must keep being enforced.
+    user = await get_user(email=email,
+                          include_inactive=payload.get("auth_source", "password") != "password")
     # get_user returns False (not None) when there is no active user row, so check
     # falsiness — otherwise `False` slips through as the "user" and downstream code
     # (_agent, role lookup) breaks, yielding a misleading 403 instead of a 401.
@@ -174,7 +180,14 @@ async def get_current_user_optional(request: Request):
             return None
         # get_user returns False when no active user row; normalize to None so
         # callers' truthiness/None checks behave (anonymous, not a bogus `False`).
-        return (await get_user(email=email)) or None
+        # include_inactive for OAuth callers, as in get_current_user — otherwise a
+        # signed-in Globus user silently reads these endpoints as ANONYMOUS (e.g.
+        # list_spaces returning an empty list instead of their own spaces), which
+        # looks like "you have no data" rather than an auth failure.
+        return (await get_user(
+            email=email,
+            include_inactive=payload.get("auth_source", "password") != "password",
+        )) or None
     except (ExpiredSignatureError, JWTError, Exception):
         return None
 
@@ -285,8 +298,10 @@ async def authenticate_websocket(websocket: WebSocket, required_scopes: Optional
                 logger.warning(f"Insufficient scopes. Required: {required_scopes}, Token has: {token_scopes}")
                 return None
         
-        # Get user from database (same as get_current_user)
-        user = await get_user(email=email)
+        # Get user from database (same as get_current_user, including the OAuth
+        # shell allowance — a websocket caller is the same identity as an HTTP one).
+        user = await get_user(email=email,
+                              include_inactive=payload.get("auth_source", "password") != "password")
         # get_user returns False (not None) when no active user row — check falsiness.
         if not user:
             logger.warning(f"User not found for email: {email}")
