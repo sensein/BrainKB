@@ -148,11 +148,15 @@ def create_refresh_token(
     roles: List[str],
     scopes: List[str],
     auth_source: str = "password",
+    expires_minutes: Optional[int] = None,
 ) -> str:
     """Mint the login/refresh token (aud=brainkb-auth). Not accepted by services;
-    only exchangeable at /api/auth/exchange for a per-service access token."""
+    only exchangeable at /api/auth/exchange for a per-service access token.
+    expires_minutes overrides the default refresh TTL (the web flow passes a longer
+    one so the browser session can silently refresh over several days)."""
     _load_or_generate()
     now = _now()
+    ttl = expires_minutes if (expires_minutes and expires_minutes > 0) else config.refresh_token_ttl_min
     claims = {
         "iss": config.jwt_issuer,
         "aud": REFRESH_AUDIENCE,
@@ -163,7 +167,7 @@ def create_refresh_token(
         "scopes": scopes,
         "auth_source": auth_source,
         "iat": now,
-        "exp": now + timedelta(minutes=config.refresh_token_ttl_min),
+        "exp": now + timedelta(minutes=ttl),
     }
     return jwt.encode(claims, _private_pem, algorithm=ALGORITHM, headers={"kid": _kid})
 

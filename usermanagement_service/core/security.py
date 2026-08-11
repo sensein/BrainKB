@@ -100,9 +100,14 @@ def create_access_token_v2(
     roles: List[str],
     scopes: List[str],
     auth_source: str = "password",
+    expires_minutes: Optional[int] = None,
 ) -> str:
     """Create a JWT carrying both JWT-level scopes and profile-level roles.
-    auth_source: 'password' | 'github' | 'orcid' | 'globus'."""
+    auth_source: 'password' | 'github' | 'orcid' | 'globus'.
+    expires_minutes overrides the default 30-min TTL — the OAuth callback passes a
+    longer web-session TTL so the browser session token doesn't lapse after 30 min
+    and break the UI (it is stored in the NextAuth session and not auto-refreshed)."""
+    ttl = expires_minutes if (expires_minutes and expires_minutes > 0) else ACCESS_TOKEN_EXPIRE_MINUTES
     to_encode = {
         "sub": email,
         "scopes": scopes,
@@ -110,7 +115,7 @@ def create_access_token_v2(
         "profile_id": profile_id,
         "roles": roles,
         "auth_source": auth_source,
-        "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+        "exp": datetime.utcnow() + timedelta(minutes=ttl),
     }
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
