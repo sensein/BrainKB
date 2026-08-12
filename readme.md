@@ -84,8 +84,10 @@ Once started, services are accessible at:
 
 BrainKB is moving to a single sign-on model — usermanagement is the sole token
 issuer and each service verifies audience-scoped RS256 tokens against its JWKS,
-while legacy per-service HS256 tokens remain accepted during migration. The full
-design, phases, and deployment env are in
+while legacy per-service HS256 tokens remain accepted during migration. Web
+sign-in returns both an access and a refresh token so the UI renews silently
+(`USERMANAGEMENT_WEB_SESSION_TTL_MIN` / `USERMANAGEMENT_WEB_REFRESH_TTL_MIN`).
+The full design, phases, and deployment env are in
 [query_service/AUTH_UNIFICATION.md](query_service/AUTH_UNIFICATION.md).
 
 

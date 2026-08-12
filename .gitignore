@@ -141,3 +141,4 @@ Temporary Items
 
 # Auto-generated SSO signing key (do not commit)
 secrets/
+env_copy
