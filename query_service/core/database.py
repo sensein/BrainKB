@@ -405,14 +405,23 @@ async def get_scopes_by_user(user_id: int, conn: Optional[asyncpg.Connection] = 
         raise HTTPException(status_code=400, detail=str(e))
 
 
-async def get_user(email: str, conn: Optional[asyncpg.Connection] = None):
+async def get_user(email: str, conn: Optional[asyncpg.Connection] = None,
+                   include_inactive: bool = False):
     """
     Get an active user by email.
     Returns the user row if found and active, False otherwise.
+
+    `include_inactive=True` drops the is_active filter. Needed for OAuth callers:
+    usermanagement provisions them a credential SHELL row with is_active=False
+    (they have no usable password; the row exists only to carry a stable user_id),
+    so an active-only lookup rejects every Globus/ORCID/GitHub user even though
+    their token verifies. Do NOT use it on the password path — there is_active is
+    the deactivation switch that POST /api/admin/users/deactivate flips.
     """
+    active_filter = "" if include_inactive else "AND is_active = True"
     query = f"""
-    SELECT * FROM \"{table_name_user}\" 
-    WHERE email = $1 AND is_active = True 
+    SELECT * FROM \"{table_name_user}\"
+    WHERE email = $1 {active_filter}
     LIMIT 1
     """
 

@@ -338,6 +338,10 @@ Deployment env (set before/at the fresh deploy):
   warning.) Plus `USERMANAGEMENT_JWT_ISSUER` (default `brainkb-usermanagement`),
   `USERMANAGEMENT_ACCESS_TOKEN_TTL_MIN` (15), `USERMANAGEMENT_REFRESH_TOKEN_TTL_MIN`
   (720), `USERMANAGEMENT_TOKEN_AUDIENCES` (`query_service,ml_service,chat_service`).
+  Web sign-in uses its own pair: `USERMANAGEMENT_WEB_SESSION_TTL_MIN` (720 — the
+  access JWT the UI gets as `?token=`) and `USERMANAGEMENT_WEB_REFRESH_TTL_MIN`
+  (10080 — the `?refresh=` token the UI exchanges for silent renew), so the overall
+  web session lasts 7 days without re-login.
 - query_service: `QUERY_SERVICE_SSO_JWKS_URL` (default
   `http://127.0.0.1:8004/.well-known/jwks.json`; in a split deployment point at
   the usermanagement service URL), `QUERY_SERVICE_SSO_ISSUER` (must match the
