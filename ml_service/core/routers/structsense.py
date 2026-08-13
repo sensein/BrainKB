@@ -23,7 +23,10 @@ from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes, authenticate_websocket
 from core.shared import parse_yaml_or_json, upsert_structured_resources
 from core.pydantic_models import AgentConfig, TaskConfig, EmbedderConfig, SearchKeyConfig
-from structsense import kickoff
+# NOTE: `kickoff` is deliberately NOT imported here. It was, and it was unused —
+# this module reaches structsense only through core.shared.run_kickoff_with_config,
+# which now imports it defensively. A hard import here defeated that guard and took
+# every endpoint in this router down with it, including the read-only /ner surface.
 import os
 from datetime import datetime, timezone
 from core.shared import upsert_ner_annotations

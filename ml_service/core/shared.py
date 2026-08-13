@@ -36,7 +36,30 @@ import fitz
 from io import BytesIO
 import asyncio
 from enum import Enum
-from structsense import kickoff
+# Guarded like the SynthScholar import in core/main.py, and for the same reason:
+# an unimportable extraction library must not take the whole service down.
+#
+# This was a hard import, and it is the only thing `structsense` is needed for.
+# When the package or one of its heavy dependencies (crewai, litellm) is missing,
+# the ImportError propagated through core.routers.structsense to core.main, so
+# every gunicorn worker died before the app object existed — gunicorn exit 3,
+# nothing bound to 8007, and supervisor eventually giving up. Endpoints that never
+# touch kickoff (GET /api/ner and the rest of the saved-annotation surface, the
+# whole /api/synth-scholar tree) were collateral damage.
+#
+# Now they keep working and only the extraction endpoints report the problem, via
+# run_kickoff_with_config below.
+try:
+    from structsense import kickoff
+    _STRUCTSENSE_IMPORT_ERROR = None
+except ImportError as _exc:  # pragma: no cover - depends on the deployed image
+    kickoff = None
+    _STRUCTSENSE_IMPORT_ERROR = _exc
+    logger.error(
+        "structsense is not importable (%s) — extraction endpoints will return 503. "
+        "Check that the structsense install in the image brought its dependencies.",
+        _exc,
+    )
 from pathlib import Path
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime, timezone
@@ -1198,6 +1221,18 @@ async def run_kickoff_with_config(
     api_key: str,
     chunking: bool,
 ):
+    # The one place that needs the structsense package. Fail here, per request,
+    # rather than at import time — see the guarded import at the top of this file.
+    if kickoff is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Extraction is unavailable: the structsense package failed to import "
+                f"on this server ({_STRUCTSENSE_IMPORT_ERROR}). Other endpoints are "
+                "unaffected."
+            ),
+        )
+
     # Load all sections from your config file
     all_config = await load_config(config_path, "all")
 
