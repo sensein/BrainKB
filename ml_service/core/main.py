@@ -22,12 +22,16 @@ from motor.motor_asyncio import AsyncIOMotorClient
 # SynthScholar (PRISMA literature review). Imports are lazy-guarded so a
 # missing `synthscholar` library doesn't crash the rest of ml_service —
 # the router simply won't mount and the /api/synth-scholar/* surface returns 404.
+# `except Exception`, not `except ImportError`: a transitive dependency conflict
+# surfaces as AttributeError/RuntimeError, not ImportError. The structsense chain
+# took every worker down that way (aiohttp.SocketTimeoutError missing under the
+# aiohttp==3.8.6 pin), and this guard would have let the same thing through.
 try:
     from core.synth_scholar.routes import router as synth_scholar_router
     from core.synth_scholar.database import init_db as init_synth_scholar_db, close_db as close_synth_scholar_db
     from core.synth_scholar.store import fix_stuck_reviews as fix_synth_scholar_stuck_reviews
     _SYNTH_SCHOLAR_AVAILABLE = True
-except ImportError as _exc:
+except Exception as _exc:  # noqa: BLE001 - see comment above
     _SYNTH_SCHOLAR_AVAILABLE = False
     _SYNTH_SCHOLAR_IMPORT_ERROR = _exc
 

@@ -49,16 +49,27 @@ from enum import Enum
 #
 # Now they keep working and only the extraction endpoints report the problem, via
 # run_kickoff_with_config below.
+# `except Exception`, not `except ImportError`, on purpose. The failure this was
+# written for is an AttributeError, not an ImportError:
+#
+#   openai/_vendor/httpx_aiohttp/transport.py: aiohttp.SocketTimeoutError
+#   AttributeError: module aiohttp has no attribute SocketTimeoutError
+#
+# A four-package import chain (structsense -> crewai -> litellm -> openai) can fail
+# in any number of ways, and every one of them must cost the extraction endpoints
+# rather than the process. Narrowing this to ImportError would re-open the exact
+# outage it exists to prevent.
 try:
     from structsense import kickoff
     _STRUCTSENSE_IMPORT_ERROR = None
-except ImportError as _exc:  # pragma: no cover - depends on the deployed image
+except Exception as _exc:  # noqa: BLE001 - see comment above
     kickoff = None
     _STRUCTSENSE_IMPORT_ERROR = _exc
     logger.error(
-        "structsense is not importable (%s) — extraction endpoints will return 503. "
-        "Check that the structsense install in the image brought its dependencies.",
-        _exc,
+        "structsense is not importable (%s: %s) — extraction endpoints will return "
+        "503. Usually a dependency version conflict in the image rather than a "
+        "missing package; check aiohttp/openai/litellm.",
+        type(_exc).__name__, _exc,
     )
 from pathlib import Path
 from motor.motor_asyncio import AsyncIOMotorClient
