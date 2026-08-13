@@ -59,10 +59,30 @@ WORKDIR /app/ml_service
 # The `--no-deps` fallback stays (the legacy resolver does genuinely fail on this
 # tree) but the import check now fails the BUILD rather than deferring the failure
 # to a deploy.
+# The legacy resolver is used ONLY for structsense, which genuinely needs it. It is
+# deliberately NOT used for requirements.txt — that difference is why ml_service
+# worked in the standalone ml_service/Dockerfile build and died on the unified one:
+#
+#   ml_service/Dockerfile : pip install -r requirements.txt                  (works)
+#   this file, previously  : pip install --use-deprecated=legacy-resolver -r ...
+#
+# The legacy resolver does not backtrack and does not verify consistency, so a later
+# requirement silently downgrades an earlier one. `aiohttp>=3.10` in requirements.txt
+# was therefore not enough: structsense==0.0.4 drags an old crewai/litellm that
+# tolerates aiohttp 3.8.x, that got installed last, and openai's vendored
+# httpx_aiohttp then failed on import with
+#   AttributeError: module aiohttp has no attribute SocketTimeoutError
+# taking out /api/synth-scholar entirely (and extraction, silently, behind its
+# guard). The modern resolver either produces a consistent set or fails the build.
+#
+# The explicit aiohttp upgrade is a safety net for that one regression, not the fix
+# — nothing in the tree wants aiohttp <3.10 (litellm requires >=3.14.2). Keep it
+# after the requirements install so nothing can pull it back down.
 RUN ( pip install --use-deprecated=legacy-resolver "structsense==0.0.4" \
       || pip install --use-deprecated=legacy-resolver --no-deps "structsense==0.0.4" ) \
-    && pip install --use-deprecated=legacy-resolver -r requirements.txt \
-    && python -c "import structsense; from structsense import kickoff; print('structsense import OK')"
+    && pip install -r requirements.txt \
+    && pip install --upgrade "aiohttp>=3.10,<4" \
+    && python scripts/verify_imports.py
 
 # Copy usermanagement_service
 COPY usermanagement_service/ /app/usermanagement_service/
