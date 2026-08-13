@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import traceback
 from pathlib import Path
 
 # Running this as `python scripts/verify_imports.py` puts scripts/ on sys.path, not the
@@ -49,6 +50,13 @@ if str(_SERVICE_ROOT) not in sys.path:
 # pip step in Dockerfile.unified.
 CHECKS = [
     ("synthscholar", "the whole /api/synth-scholar tree, incl. public reviews"),
+    # The package importing is not enough. core/main.py mounts the router inside a
+    # try/except, so a failure in THIS module disables every /api/synth-scholar route
+    # while the service still starts and /api/health still returns 200 — which is
+    # exactly how the outage stayed invisible. Checked separately, and fatally,
+    # because synthscholar is deliberately installed: if it is present but the router
+    # cannot import, that is a defect, not a configuration choice.
+    ("core.synth_scholar.routes", "every /api/synth-scholar route (the router itself)"),
 ]
 
 # Minimum aiohttp that provides SocketTimeoutError, which openai's vendored
@@ -141,10 +149,17 @@ def main() -> None:
             # Deliberately broad: this chain (structsense -> crewai -> litellm ->
             # openai, synthscholar -> pydantic-ai -> openai) raises AttributeError
             # and RuntimeError as readily as ImportError.
+            #
+            # Print the FULL traceback, not just the message. When core/main.py
+            # swallowed these, diagnosis meant a docker exec into a running container
+            # to reproduce the import by hand; the frame that actually fails is the
+            # only thing that identifies the bad dependency.
             problems.append(
                 f"{module} is unimportable - would disable {consequence}\n"
                 f"      {type(exc).__name__}: {exc}"
             )
+            print(f"  {module} FAILED - traceback follows:", flush=True)
+            traceback.print_exc()
         else:
             print(f"  {module} {getattr(mod, '__version__', '?')} OK")
 
