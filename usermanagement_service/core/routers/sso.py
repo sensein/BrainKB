@@ -49,6 +49,33 @@ def _scopes_for_roles(roles) -> list:
     return scopes
 
 
+def _merge_scopes(stored, roles) -> list:
+    """Scopes a token should carry: whatever is explicitly assigned, PLUS whatever
+    the user's roles imply.
+
+    Roles are authoritative — that is what `/api/auth/session-exchange` and the PAT
+    exchange already assume ("RBAC is authoritative" in their docstrings). The
+    refresh-token paths did not: they read `Web_jwtuser_scopes` alone, a legacy
+    Django table that is only populated for accounts created through the old admin.
+
+    An OAuth account has no rows there at all. Its `Web_jwtuser` row is the shell
+    created to supply a stable `user_id` claim, so a Globus SuperAdmin — including
+    one seeded by USERMANAGEMENT_BOOTSTRAP_SUPERADMIN_EMAILS, which assigns roles
+    and nothing else — got a token reading `roles: ["Admin", "SuperAdmin"]` and
+    `scopes: ["read"]`. query_service gates its admin routes on the scope claim
+    (`require_scopes(["admin"])`) and has no bootstrap allowlist of its own, so
+    every one of them answered 403 "Insufficient scopes" before reaching the role
+    check that would have passed. Meanwhile usermanagement's own admin routes
+    honour the env allowlist and worked — which is why the failure looked like a
+    missing audience rather than a scope derived from the wrong place.
+
+    The union, rather than replacing: a legacy password account may hold an
+    explicitly granted scope that no role implies, and dropping it would be a
+    silent downgrade.
+    """
+    return sorted(set(stored or []) | set(_scopes_for_roles(roles)))
+
+
 class ExchangeIn(BaseModel):
     audience: str
 
@@ -71,10 +98,14 @@ async def sso_login(body: LoginUserIn):
                 detail="Incorrect email or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        scopes = await jwt_user_repo.get_user_scopes(session, user_record.id) or ["read"]
         profile = await user_profile_repo.get_by_email(session, user_record.email)
         profile_id = profile.id if profile else None
         roles = await user_role_repo.get_user_role_names(session, profile.id) if profile else []
+        # Roles first, then scopes derived from them — see _merge_scopes. A password
+        # SuperAdmin whose account predates the legacy scope table (or was created by
+        # the bootstrap allowlist) otherwise gets a read-only token too.
+        scopes = _merge_scopes(
+            await jwt_user_repo.get_user_scopes(session, user_record.id), roles)
 
     refresh = tokens_rs256.create_refresh_token(
         email=user_record.email,
@@ -135,12 +166,17 @@ async def sso_exchange(
         # deletion is disabled), which the is_banned check below enforces.
         if not jwt_user.is_active and auth_source == "password":
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account inactive")
-        scopes = await jwt_user_repo.get_user_scopes(session, jwt_user.id) or ["read"]
         profile = await user_profile_repo.get_by_email(session, email)
         if profile and getattr(profile, "is_banned", False):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="account_suspended")
         profile_id = profile.id if profile else None
         roles = await user_role_repo.get_user_role_names(session, profile.id) if profile else []
+        # This is the MCP/CLI path: Globus login -> refresh token -> per-service
+        # access token. Reading the legacy scope table alone handed a Globus
+        # SuperAdmin `scopes: ["read"]` with `roles: ["Admin", "SuperAdmin"]`, and
+        # query_service's admin routes gate on the scope claim. See _merge_scopes.
+        scopes = _merge_scopes(
+            await jwt_user_repo.get_user_scopes(session, jwt_user.id), roles)
 
     access = tokens_rs256.create_access_token(
         audience=body.audience,
