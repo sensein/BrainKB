@@ -3,7 +3,17 @@ fastapi==0.115.3
 uvicorn==0.29.0
 gunicorn==21.2.0
 
-aiohttp==3.8.6
+# Was pinned to 3.8.6, which is what killed ml_service on boot. Dockerfile.unified
+# installs this file AFTER structsense, so the pin DOWNGRADED the aiohttp that
+# structsense -> crewai -> litellm -> openai had just pulled in. Recent openai
+# vendors httpx_aiohttp, which references aiohttp.SocketTimeoutError — added in
+# aiohttp 3.10 — so importing openai raised
+#   AttributeError: module aiohttp has no attribute SocketTimeoutError
+# and every gunicorn worker died before the app existed (exit 3, nothing on 8007).
+#
+# A floor rather than a pin, so pip can reconcile with whatever openai/litellm want.
+# The other services pin 3.9.1; they do not import openai, so they are unaffected.
+aiohttp>=3.10,<4
 async-timeout==4.0.3
 # Logging
 rich==13.9.4
