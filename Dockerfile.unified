@@ -30,20 +30,36 @@ RUN apt-get update && apt-get install -y \
 # Create directories for all services
 WORKDIR /app
 
+# DEPENDENCY LAYERING
+#
+# Each service copies ONLY requirements.txt, installs, and copies its source
+# afterwards. Previously every service did `COPY <service>/` before `pip install`,
+# so editing any .py file invalidated that service's pip layer and reinstalled
+# everything — for ml_service that means torch (via
+# synthscholar[semantic] -> sentence-transformers), which is 1-2.5 GB and the reason
+# a rebuild took ~8 minutes on that step alone.
+#
+# With this ordering the pip layers are keyed on requirements.txt alone: a code-only
+# change reuses them, and a dependency change invalidates them automatically. That
+# also means `--no-cache` is no longer needed to pick up a pin change.
+
 # Copy APItokenmanager
-COPY APItokenmanager/ /app/APItokenmanager/
+COPY APItokenmanager/requirements.txt /app/APItokenmanager/requirements.txt
 WORKDIR /app/APItokenmanager
 RUN pip install --upgrade pip && \
     pip install -r requirements.txt && \
     pip install python-decouple gunicorn
+COPY APItokenmanager/ /app/APItokenmanager/
 
 # Copy query_service
-COPY query_service/ /app/query_service/
+COPY query_service/requirements.txt /app/query_service/requirements.txt
 WORKDIR /app/query_service
 RUN pip install -r requirements.txt
+COPY query_service/ /app/query_service/
 
-# Copy ml_service
-COPY ml_service/ /app/ml_service/
+# Copy ml_service. requirements.txt first — see DEPENDENCY LAYERING above. This is
+# the layer that matters most: it installs torch.
+COPY ml_service/requirements.txt /app/ml_service/requirements.txt
 WORKDIR /app/ml_service
 # The bug here was NOT operator precedence — `A || B && C` already groups as
 # `(A || B) && C`, which is what was intended. The parentheses below are only to
@@ -97,14 +113,34 @@ WORKDIR /app/ml_service
 #   RUN ( pip install --use-deprecated=legacy-resolver "structsense==0.0.4" \
 #         || pip install --use-deprecated=legacy-resolver --no-deps "structsense==0.0.4" ) \
 #       && ...
+# Two pip solves, not one. Together on this empty base image, pip gives up:
+#
+#   error: resolution-too-deep
+#   × Dependency resolution exceeded maximum depth
+#
+# synthscholar drags pydantic-ai -> openai and sentence-transformers -> torch; added
+# to the exact `==` pins in requirements.txt, the graph exceeds what pip will search.
+# (The standalone ml_service/Dockerfile does it in one solve only because its tiangolo
+# base preinstalls fastapi/uvicorn/pydantic, which constrains the search. python:3.11-
+# slim starts empty, so pip explores everything — which is why this worked locally.)
+#
+# Order matters: requirements.txt first so its pins are established, then synthscholar
+# resolves against an already-populated environment.
 RUN pip install -r requirements.txt \
-    && pip install --upgrade "aiohttp>=3.10,<4" \
-    && python scripts/verify_imports.py
+    && pip install "synthscholar[fulltext,semantic]==0.0.11" \
+    && pip install --upgrade "aiohttp>=3.10,<4"
+COPY ml_service/ /app/ml_service/
+# Separate layer, deliberately: this needs the source (scripts/verify_imports.py) so
+# it cannot join the pip step, and it is seconds rather than minutes. It re-runs on
+# every code change, which is what you want — it is the gate that stops a build with
+# an unimportable synthscholar from shipping.
+RUN python scripts/verify_imports.py
 
 # Copy usermanagement_service
-COPY usermanagement_service/ /app/usermanagement_service/
+COPY usermanagement_service/requirements.txt /app/usermanagement_service/requirements.txt
 WORKDIR /app/usermanagement_service
 RUN pip install -r requirements.txt
+COPY usermanagement_service/ /app/usermanagement_service/
 
 
 # Create supervisor configuration
