@@ -31,6 +31,14 @@ from __future__ import annotations
 
 import importlib
 import sys
+from pathlib import Path
+
+# Running this as `python scripts/verify_imports.py` puts scripts/ on sys.path, not the
+# service root, so `import core.main` would fail with a misleading ModuleNotFoundError
+# regardless of what is installed. Add the service root explicitly.
+_SERVICE_ROOT = Path(__file__).resolve().parent.parent
+if str(_SERVICE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SERVICE_ROOT))
 
 # (module, what breaks if it is unimportable)
 #
@@ -85,6 +93,38 @@ def check_aiohttp() -> str | None:
     return None
 
 
+def check_app() -> str | None:
+    """Import the real ASGI app, the way gunicorn does.
+
+    This is the check that matters most, and it was missing. Verifying only the two
+    optional AI stacks let a build ship with a dependency the service's OWN code
+    imports directly: bs4 arrived transitively via structsense, dropping structsense
+    took it away, and ml_service died on boot with
+    `ModuleNotFoundError: No module named 'bs4'` — through core/shared.py, a module
+    this script never touched.
+
+    Only ModuleNotFoundError is fatal. Anything else here (missing env vars, no
+    database) is expected at build time and says nothing about the image: importing
+    core.main builds the app and mounts routers but opens no connections — that
+    happens in the lifespan, at runtime.
+    """
+    try:
+        importlib.import_module("core.main")
+    except ModuleNotFoundError as exc:
+        return (
+            f"core.main cannot be imported: {exc}\n"
+            "      A package the service imports directly is not installed. Add it to "
+            "requirements.txt rather than relying on another package to pull it in."
+        )
+    except Exception as exc:
+        # Not a dependency problem — report and continue.
+        print(f"  core.main imported with a non-import error ({type(exc).__name__}: "
+              f"{exc}) - expected at build time if it needs env/database")
+        return None
+    print("  core.main OK (the ASGI app gunicorn loads)")
+    return None
+
+
 def main() -> None:
     print("Verifying ml_service AI stack imports...")
 
@@ -107,6 +147,10 @@ def main() -> None:
             )
         else:
             print(f"  {module} {getattr(mod, '__version__', '?')} OK")
+
+    err = check_app()
+    if err:
+        problems.append(err)
 
     if problems:
         _fail(*(f"  * {p}" for p in problems))
