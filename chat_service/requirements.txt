@@ -4,7 +4,9 @@ uvicorn==0.29.0
 gunicorn==21.2.0
 
 # HTTP requests
-aiohttp==3.9.1
+# Shared site-packages with the other services — see the note in
+# usermanagement_service/requirements.txt. Must not pin below ml_service's >=3.10.
+aiohttp>=3.10,<4
 
 # Logging
 rich==13.9.4

@@ -127,20 +127,33 @@ WORKDIR /app/ml_service
 # Order matters: requirements.txt first so its pins are established, then synthscholar
 # resolves against an already-populated environment.
 RUN pip install -r requirements.txt \
-    && pip install "synthscholar[fulltext,semantic]==0.0.11" \
-    && pip install --upgrade "aiohttp>=3.10,<4"
+    && pip install "synthscholar[fulltext,semantic]==0.0.11"
 COPY ml_service/ /app/ml_service/
-# Separate layer, deliberately: this needs the source (scripts/verify_imports.py) so
-# it cannot join the pip step, and it is seconds rather than minutes. It re-runs on
-# every code change, which is what you want — it is the gate that stops a build with
-# an unimportable synthscholar from shipping.
-RUN python scripts/verify_imports.py
 
 # Copy usermanagement_service
 COPY usermanagement_service/requirements.txt /app/usermanagement_service/requirements.txt
 WORKDIR /app/usermanagement_service
 RUN pip install -r requirements.txt
 COPY usermanagement_service/ /app/usermanagement_service/
+
+# ---------------------------------------------------------------------------
+# FINAL dependency reconciliation + verification. Must stay LAST, after every
+# service's pip step.
+#
+# All four services share ONE site-packages in this image (supervisor runs them as
+# programs in a single container), so the last `pip install` wins. usermanagement's
+# `aiohttp==3.9.1` was silently downgrading the `aiohttp>=3.10` that ml_service needs
+# for aiohttp.SocketTimeoutError — which openai's vendored httpx_aiohttp imports —
+# and that disabled every /api/synth-scholar route at runtime.
+#
+# The pins are now compatible (see the notes in usermanagement/chat requirements), so
+# this upgrade should be a no-op. It stays as a backstop, and the verification is the
+# real point: it previously ran inside the ml_service block, i.e. BEFORE usermanagement
+# downgraded aiohttp, so the build passed while the runtime was broken. Verifying here
+# checks the environment the container actually runs.
+WORKDIR /app/ml_service
+RUN pip install --upgrade "aiohttp>=3.10,<4" \
+    && python scripts/verify_imports.py
 
 
 # Create supervisor configuration

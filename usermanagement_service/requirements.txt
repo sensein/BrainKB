@@ -4,7 +4,12 @@ uvicorn==0.29.0
 gunicorn==21.2.0
 
 # HTTP requests
-aiohttp==3.9.1
+# Shared site-packages: all four services install into ONE environment in
+# Dockerfile.unified, so an exact pin here overrides what another service needs.
+# ==3.9.1 downgraded the aiohttp ml_service requires (>=3.10, for
+# aiohttp.SocketTimeoutError, which openai's vendored httpx_aiohttp imports) and
+# silently disabled every /api/synth-scholar route.
+aiohttp>=3.10,<4
 
 # Logging
 rich==13.9.4
@@ -34,7 +39,8 @@ python-dotenv==1.0.0
 asyncpg==0.29.0
 
 # ORM Framework
-sqlalchemy==2.0.23
+# Was ==2.0.23, which violated ml_service's >=2.0.30 in the shared environment.
+sqlalchemy>=2.0.30
 alembic==1.13.1
 greenlet==3.0.3
 
