@@ -723,6 +723,37 @@ class ReviewStore:
             sessions.append(s)
         return sessions
 
+    async def list_public(self) -> list[ReviewSession]:
+        """List every review its author published — `is_public` and completed.
+
+        Read by the unauthenticated public routes, so the filter lives in SQL
+        rather than in the caller: a client-side filter over a full listing would
+        mean shipping other people's unpublished reviews to the browser first.
+        Runtime (in-flight) state is deliberately not merged in — a completed
+        review has none, and consulting it would only leak progress for rows that
+        are being re-run.
+        """
+        async with async_session() as db:
+            result = await db.execute(
+                select(ReviewRow)
+                .where(ReviewRow.is_public.is_(True))
+                .where(ReviewRow.status == ReviewStatus.COMPLETED.value)
+                .order_by(ReviewRow.created_at.desc())
+            )
+            rows = result.scalars().all()
+        return [_row_to_session(row) for row in rows]
+
+    async def get_public(self, review_id: str) -> Optional[ReviewSession]:
+        """Fetch a review only if its author published it. Returns None otherwise
+        — callers turn that into a 404 so an unpublished review's existence is not
+        disclosed by the status code."""
+        session = await self.get(review_id)
+        if not session:
+            return None
+        if not session.is_public or session.status != ReviewStatus.COMPLETED:
+            return None
+        return session
+
     async def delete(self, review_id: str) -> bool:
         self._runtime.pop(review_id, None)
         async with async_session() as db:

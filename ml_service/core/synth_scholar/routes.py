@@ -1247,18 +1247,29 @@ async def cancel_review(
     )
 
 
+_EXPORT_FORMAT_PATTERN = (
+    r"^(markdown|json|bibtex|ttl|jsonld|rubric_markdown|rubric_json|charting_markdown"
+    r"|charting_json|appraisal_markdown|appraisal_json|narrative_summary_markdown"
+    r"|narrative_summary_json)$"
+)
+
+
 @router.get("/synth-scholar/reviews/{review_id}/export", tags=["SynthScholar — export"])
 async def export_review(
     review_id: str,
     user: Annotated[dict, Depends(get_current_user)],
-    format: str = Query(
-        default="markdown",
-        pattern=r"^(markdown|json|bibtex|ttl|jsonld|rubric_markdown|rubric_json|charting_markdown|charting_json|appraisal_markdown|appraisal_json|narrative_summary_markdown|narrative_summary_json)$",
-    ),
+    format: str = Query(default="markdown", pattern=_EXPORT_FORMAT_PATTERN),
     model: Optional[str] = Query(default=None, description="Compare-mode only: export a single model's result by model_name"),
 ):
     """Export a completed review in the requested format."""
     session = await _session_or_404(review_id, user)
+    return await _export_session(session, format, model)
+
+
+# Everything past the access check is identical for the authenticated route above
+# and the public one further down, so it lives here once — otherwise the two
+# drift, and a format added for signed-in users silently 400s on public reviews.
+async def _export_session(session: ReviewSession, format: str, model: Optional[str]):
     if session.status != ReviewStatus.COMPLETED or not session.result:
         raise HTTPException(
             status_code=400,
@@ -1438,6 +1449,89 @@ async def get_pipeline_log(
         "log": log_entries,
         "log_events": log_events,
     }
+
+
+# ---------------------------------------------------------------------------
+# Public (unauthenticated) read surface
+#
+# Backs /knowledge-base/synth-scholar in the web UI, which is reachable without
+# signing in. Those pages previously called the authenticated routes above, which
+# cannot work for an anonymous visitor: the UI has no credential to present, so
+# the token exchange fails before any request is sent ("ML service requires a
+# signed-in session"). Nor could they work for a signed-in visitor, because
+# GET /reviews is owner-scoped — the "public listing" showed the viewer their own
+# reviews, and a public review's detail page 404'd for everyone but its author.
+#
+# So `is_public` had no reader. These routes are it. Three rules hold throughout:
+#   * no `Depends(get_current_user)` — that is the point;
+#   * every lookup goes through review_store.get_public / list_public, which
+#     require is_public AND completed, so an unpublished review is invisible;
+#   * a review that is not published answers 404, never 403 — a 403 would confirm
+#     the id exists.
+# Nothing here is owner-scoped, because published means published to everyone.
+# ---------------------------------------------------------------------------
+
+
+async def _public_session_or_404(review_id: str) -> ReviewSession:
+    session = await review_store.get_public(review_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Review '{review_id}' not found")
+    return session
+
+
+@router.get(
+    "/synth-scholar/public/reviews",
+    response_model=list[ReviewSummaryResponse],
+    tags=["SynthScholar — public"],
+)
+async def list_public_reviews():
+    """List every completed review its author marked Public. No auth."""
+    sessions = await review_store.list_public()
+    return [_to_summary_response(s) for s in sessions]
+
+
+@router.get(
+    "/synth-scholar/public/reviews/{review_id}",
+    response_model=ReviewDetailResponse,
+    tags=["SynthScholar — public"],
+)
+async def get_public_review(review_id: str):
+    """Full detail for one published review. 404 if it is not published."""
+    return _to_detail_response(await _public_session_or_404(review_id))
+
+
+@router.get("/synth-scholar/public/reviews/{review_id}/log", tags=["SynthScholar — public"])
+async def get_public_review_log(review_id: str):
+    """Pipeline log for a published review — the provenance timeline reads this.
+
+    Same content the author sees: the log records which pipeline step ran when,
+    which is exactly the provenance a published review is meant to carry.
+    """
+    session = await _public_session_or_404(review_id)
+    log_entries = list(session.pipeline_log)
+    return {
+        "review_id": review_id,
+        "status": session.status.value,
+        "step_count": session.progress_step,
+        "log": log_entries,
+        "log_events": [
+            {"step": i + 1, "message": msg, "timestamp": ts}
+            for i, (ts, msg) in enumerate(_parse_log_entry(e) for e in log_entries)
+        ],
+    }
+
+
+@router.get("/synth-scholar/public/reviews/{review_id}/export", tags=["SynthScholar — public"])
+async def export_public_review(
+    review_id: str,
+    format: str = Query(default="markdown", pattern=_EXPORT_FORMAT_PATTERN),
+    model: Optional[str] = Query(
+        default=None, description="Compare-mode only: export a single model's result by model_name"
+    ),
+):
+    """Export a published review. Same formats as the authenticated route."""
+    session = await _public_session_or_404(review_id)
+    return await _export_session(session, format, model)
 
 
 @router.patch(
