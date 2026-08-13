@@ -1,4 +1,5 @@
 import logging
+import os
 
 # logging
 from asgi_correlation_id import CorrelationIdMiddleware
@@ -23,7 +24,10 @@ from fastapi.middleware.cors import CORSMiddleware
 environment = load_environment()["ENV_STATE"]
 
 
-origins = [
+# Browser origins allowed to call this service. Kept identical across the four
+# BrainKB services, which each hold their own copy and had drifted apart.
+# CORS_ALLOWED_ORIGINS (comma-separated) adds to these without a code change.
+_DEFAULT_ORIGINS = [
     "https://brainkb.org",
     "https://www.brainkb.org",
     "https://beta.brainkb.org",
@@ -31,6 +35,10 @@ origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
+origins = sorted({
+    *_DEFAULT_ORIGINS,
+    *(o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()),
+})
 
 if environment == "prods":
     app = FastAPI(docs_url=None, redoc_url=None)

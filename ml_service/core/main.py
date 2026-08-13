@@ -170,17 +170,26 @@ env = load_environment()
 env_state = env.get("ENV_STATE", "production").lower()
 
 # CORS Configuration
-origins = [
+# Browser origins allowed to call this service. Kept identical across the four
+# BrainKB services, which each hold their own copy and had drifted apart.
+# CORS_ALLOWED_ORIGINS (comma-separated) adds to these without a code change.
+#
+# Worth knowing when a fetch to this service reports "No Access-Control-Allow-Origin":
+# check whether the service is actually up first. The ALB's own 502 page carries no
+# CORS headers, so an ml_service that failed to boot presents in the browser as a
+# CORS misconfiguration — which is exactly how the aiohttp 3.8.6 outage looked.
+_DEFAULT_ORIGINS = [
     "https://brainkb.org",
     "https://www.brainkb.org",
     "https://beta.brainkb.org",
     "https://sandbox.brainkb.org",
-    "http://localhost",
     "http://localhost:3000",
-    "http://localhost:3001",
     "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001",
 ]
+origins = sorted({
+    *_DEFAULT_ORIGINS,
+    *(o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()),
+})
 
 app.add_middleware(
     CORSMiddleware,

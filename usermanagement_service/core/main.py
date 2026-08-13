@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -123,15 +124,24 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 logger = logging.getLogger(__name__)
 
-origins = [
+# Browser origins allowed to call this service. Kept identical across the four
+# BrainKB services, which each hold their own copy and had drifted apart.
+# CORS_ALLOWED_ORIGINS (comma-separated) adds to these without a code change.
+#
+# Dropped the schemeless "localhost:3000": the browser's Origin header always
+# carries a scheme, so that entry could never match.
+_DEFAULT_ORIGINS = [
     "https://brainkb.org",
     "https://www.brainkb.org",
     "https://beta.brainkb.org",
     "https://sandbox.brainkb.org",
-    "localhost:3000",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
+origins = sorted({
+    *_DEFAULT_ORIGINS,
+    *(o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()),
+})
 
 app.add_middleware(
     CORSMiddleware,
