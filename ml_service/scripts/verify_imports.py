@@ -33,8 +33,13 @@ import importlib
 import sys
 
 # (module, what breaks if it is unimportable)
+#
+# structsense is deliberately absent: it is NOT installed by Dockerfile.unified,
+# because structsense==0.0.4 holds aiohttp below 3.10 via an old crewai/litellm and
+# that breaks openai's import for synthscholar too. Adding it back here without
+# restoring the install would fail every build. See the comment on the ml_service
+# pip step in Dockerfile.unified.
 CHECKS = [
-    ("structsense", "extraction endpoints + the /api/ner surface"),
     ("synthscholar", "the whole /api/synth-scholar tree, incl. public reviews"),
 ]
 

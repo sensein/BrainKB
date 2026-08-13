@@ -66,11 +66,16 @@ except Exception as _exc:  # noqa: BLE001 - see comment above
     kickoff = None
     _STRUCTSENSE_IMPORT_ERROR = _exc
     logger.error(
-        "structsense is not importable (%s: %s) — extraction endpoints will return "
-        "503. Usually a dependency version conflict in the image rather than a "
+        "structsense is not importable (%s: %s) — extraction endpoints are "
+        "disabled. Usually a dependency version conflict in the image rather than a "
         "missing package; check aiohttp/openai/litellm.",
         type(_exc).__name__, _exc,
     )
+
+# Read by core/routers/structsense.py to decide whether to register the extraction
+# WebSocket routes at all. Exported from here rather than recomputed there, so
+# there is one source of truth for "is the extraction stack usable".
+STRUCTSENSE_AVAILABLE = kickoff is not None
 from pathlib import Path
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime, timezone
