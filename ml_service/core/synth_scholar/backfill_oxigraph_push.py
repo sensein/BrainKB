@@ -1,6 +1,13 @@
 """One-shot backfill — push every completed review's RDF to Oxigraph.
 
-Use cases:
+LEGACY. This is the direct-to-Oxigraph path, which writes triples without an ingest
+job, without PROV-O provenance and without a search-index row — a named graph that
+belongs to no space and that only an Admin SPARQL query can see. Reviews now reach
+BrainKB by ingesting their TTL export through query_service (see the `brainkb` skill,
+"Ingest a SynthScholar review"), which attributes the write to a real user. This
+script refuses to run unless SYNTH_SCHOLAR_PUSH_TO_GRAPHDB is explicitly enabled.
+
+Use cases (all predate the ingest path):
 
 * You ran reviews **before** the auto-push (mark_completed → oxigraph_push)
   was wired in.  Their result_json is sitting in Postgres but no triples
@@ -35,6 +42,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from typing import Any, Optional
 
@@ -42,7 +50,7 @@ from sqlalchemy import select
 
 from .database import async_session
 from .db_models import ReviewRow
-from .oxigraph_push import push_review_to_oxigraph
+from .oxigraph_push import _truthy, push_review_to_oxigraph
 
 logger = logging.getLogger("backfill_oxigraph_push")
 
@@ -136,6 +144,23 @@ async def main_async(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+
+    # The direct push is off by default now (reviews go through the query_service
+    # ingest pipeline instead, so they get provenance). Without this guard the
+    # backfill would report "pushed N reviews" while _make_config returned None for
+    # every one of them and nothing left the process — a silent no-op is the worst
+    # possible outcome for a one-shot repair script.
+    if not _truthy(os.getenv("SYNTH_SCHOLAR_PUSH_TO_GRAPHDB"), default=False):
+        logger.error(
+            "SYNTH_SCHOLAR_PUSH_TO_GRAPHDB is not enabled, so every push would be "
+            "skipped. Reviews now reach BrainKB by ingesting their TTL export "
+            "through query_service, which is what records provenance — see the "
+            "`brainkb` skill, 'Ingest a SynthScholar review'. To run this legacy "
+            "direct push anyway, set SYNTH_SCHOLAR_PUSH_TO_GRAPHDB=true, and make "
+            "sure nothing else writes the same named graph (ingest is append-only "
+            "and the export's blank nodes do not de-duplicate)."
+        )
+        return 2
 
     rows = await _select_reviews(args.review_id or None)
     if args.limit is not None:
