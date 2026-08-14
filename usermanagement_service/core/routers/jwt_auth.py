@@ -11,7 +11,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/token")
+# Legacy password login (issues a v2 HS256 token). The SSO login is
+# /api/auth/login (refresh token); this stays as a deprecated compatibility path.
+# `/api/login` is the preferred name; `/api/token` remains as a deprecated alias.
+@router.post("/login")
+@router.post("/token", include_in_schema=False)
 async def login(user: LoginUserIn, request: Request):
     async with user_db_manager.get_async_session() as session:
         # Authenticate user

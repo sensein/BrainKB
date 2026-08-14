@@ -16,25 +16,28 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import os
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 
 from core.configuration import config
+from pydantic import BaseModel
+
+from core import tokens_rs256
 from core.database import (
-    user_db_manager, user_profile_repo, user_role_repo, jwt_user_repo,
-    oauth_identity_repo, oauth_state_repo, user_activity_repo,
+    user_db_manager, user_profile_repo, jwt_user_repo,
+    oauth_identity_repo, oauth_state_repo, oauth_cli_result_repo,
+    user_activity_repo, provision_identity,
 )
 from core.models.user import ActivityType, OAuthLoginStart, UserRoleEnum
-from core.models.database_models import UserProfile as UserProfileModel, JWTUser as JWTUserModel
+from core.models.database_models import UserProfile as UserProfileModel
 from core.oauth import get_provider
-from core.security import (
-    create_access_token_v2, encrypt_token, get_password_hash,
-)
+from core.security import create_access_token_v2, encrypt_token
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,51 @@ def _pkce_pair() -> tuple[str, str]:
 
 def _redirect_uri_for(provider_name: str) -> str:
     return f"{config.public_base_url.rstrip('/')}/api/auth/{provider_name}/callback"
+
+
+# Unambiguous alphabet (no I/L/O/0/1) for the paste-code shown to users.
+_CLI_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # 30 symbols
+# Paste-code length (raw chars, before dash grouping). The code is short-LIVED
+# (~10 min) and single-use, but we still make it HIGH-ENTROPY for defense in
+# depth: 20 chars over a 30-symbol alphabet ≈ 98 bits (~1e29 combinations),
+# infeasible to brute-force within the 10-minute window even without rate limits.
+# Clamped to 24 so the dash-grouped value still fits the
+# Web_oauth_cli_result.code column (String(32)); configurable via env.
+_CLI_CODE_LEN = min(24, max(8, int(os.getenv("USERMANAGEMENT_CLI_CODE_LEN", "20"))))
+
+
+def _gen_cli_code() -> str:
+    """A long, single-use, ~10-min paste-code, grouped in 4s for readability,
+    e.g. ``A3KM-7QRS-9WXY-2BCD-EFGH``. High entropy so it can't be guessed in the
+    short window; it is only a handle exchanged once for the real refresh token."""
+    raw = "".join(secrets.choice(_CLI_CODE_ALPHABET) for _ in range(_CLI_CODE_LEN))
+    return "-".join(raw[i:i + 4] for i in range(0, len(raw), 4))
+
+
+def _cli_success_page(code: str) -> str:
+    """Minimal self-contained page shown after a CLI/skill OAuth login. Displays the
+    one-time code the user pastes back into the skill. No SPA/frontend needed."""
+    safe = (code or "").replace("<", "").replace(">", "")
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>BrainKB login</title>"
+        "<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;"
+        "background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;"
+        "justify-content:center;margin:0}.card{background:#1e293b;padding:2.5rem;border-radius:14px;"
+        "max-width:420px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.4)}"
+        "h1{font-size:1.2rem;margin:0 0 .5rem}p{color:#94a3b8;font-size:.95rem;line-height:1.5}"
+        ".code{font-family:ui-monospace,Menlo,monospace;font-size:2rem;letter-spacing:.15em;"
+        "background:#0f172a;color:#38bdf8;padding:1rem;border-radius:10px;margin:1.2rem 0;"
+        "user-select:all}</style></head><body><div class='card'>"
+        "<h1>✅ Signed in to BrainKB</h1>"
+        "<p>Copy this one-time code and paste it back into your assistant "
+        "(<code>brainkb_finish_login</code>):</p>"
+        f"<div class='code'>{safe}</div>"
+        "<p>The code expires in ~10 minutes and can be used once. "
+        "You can close this tab afterward.</p>"
+        "</div></body></html>"
+    )
 
 
 async def _upsert_profile_for_oauth(session, userinfo) -> UserProfileModel:
@@ -95,25 +143,6 @@ async def _upsert_profile_for_oauth(session, userinfo) -> UserProfileModel:
     return new_profile
 
 
-async def _ensure_jwt_user_shell(session, email: str, full_name: str) -> JWTUserModel:
-    """Make sure a Web_jwtuser row exists for this email. OAuth users don't have
-    a usable password — we store a random high-entropy hash (can't be logged in
-    with, just exists so the JWT user_id claim is stable). The shell is created
-    with `is_active=False`, so the lookup must not filter by activation; using
-    `get_by_email` (active-only) here would re-INSERT on every sign-in and
-    collide with the unique-email constraint."""
-    existing = await jwt_user_repo.get_by_email_any_status(session, email)
-    if existing:
-        return existing
-    random_password = secrets.token_urlsafe(48)
-    return await jwt_user_repo.create_user(
-        session=session,
-        full_name=full_name,
-        email=email,
-        password=get_password_hash(random_password),
-    )
-
-
 # ---- routes -------------------------------------------------------------
 
 @router.get("/auth/providers")
@@ -129,17 +158,13 @@ async def list_providers():
     }
 
 
-@router.get("/auth/{provider_name}/login", response_model=OAuthLoginStart)
-async def oauth_login(
-    provider_name: str,
-    redirect_after_login: Optional[str] = Query(None, description="Relative path to send the user to after login completes"),
-):
-    """Start an OAuth flow. Returns the authorize URL; the UI redirects the browser there."""
+async def _begin_oauth(provider_name: str, redirect_after_login: Optional[str], mode: str):
+    """Mint + persist OAuth state (+PKCE) and return (authorize_url, state).
+    ``mode`` is 'web' (browser → SPA) or 'cli' (MCP/skill paste-code)."""
     try:
         provider = get_provider(provider_name)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider_name}")
-
     if not provider.is_configured():
         raise HTTPException(status_code=503, detail=f"{provider_name} OAuth is not configured on the server")
 
@@ -151,12 +176,8 @@ async def oauth_login(
 
     redirect_uri = _redirect_uri_for(provider.name)
     authorize_url = provider.authorize_url(
-        redirect_uri=redirect_uri,
-        state=state,
-        code_challenge=code_challenge,
+        redirect_uri=redirect_uri, state=state, code_challenge=code_challenge,
     )
-
-    # Persist state so the callback (on a different request) can validate it.
     async with user_db_manager.get_async_session() as session:
         await oauth_state_repo.create(
             session,
@@ -164,11 +185,65 @@ async def oauth_login(
             provider=provider.name,
             code_verifier=code_verifier,
             redirect_after_login=redirect_after_login,
+            mode=mode,
             expires_at=datetime.utcnow() + timedelta(minutes=10),
         )
         await session.commit()
+    return authorize_url, state
 
+
+@router.get("/auth/{provider_name}/login", response_model=OAuthLoginStart)
+async def oauth_login(
+    provider_name: str,
+    redirect_after_login: Optional[str] = Query(None, description="Relative path to send the user to after login completes"),
+):
+    """Start an OAuth flow (browser/SPA). Returns the authorize URL; the UI redirects the browser there."""
+    authorize_url, state = await _begin_oauth(provider_name, redirect_after_login, "web")
     return OAuthLoginStart(authorize_url=authorize_url, state=state)
+
+
+class _CliStartIn(BaseModel):
+    provider: str = "globus"
+
+
+@router.post("/auth/cli/start", tags=["SSO"])
+async def oauth_cli_start(body: _CliStartIn):
+    """Start an OAuth flow for the MCP/skill (paste-code). Returns an authorize URL;
+    open it in a browser, sign in with the provider, then paste the short code the
+    browser shows into `brainkb_finish_login`. No web UI required."""
+    authorize_url, state = await _begin_oauth(body.provider, None, "cli")
+    return {
+        "authorize_url": authorize_url,
+        "state": state,
+        "mode": "cli",
+        "instructions": ("Open authorize_url in a browser and sign in. When it "
+                         "shows a code, paste it into brainkb_finish_login(code)."),
+    }
+
+
+class _CliExchangeIn(BaseModel):
+    code: str
+
+
+@router.post("/auth/cli/exchange", tags=["SSO"])
+async def oauth_cli_exchange(body: _CliExchangeIn):
+    """Exchange the paste-code (shown after a CLI OAuth login) for an SSO refresh
+    token. Single-use and short-lived."""
+    code = (body.code or "").strip().upper()
+    async with user_db_manager.get_async_session() as session:
+        await oauth_cli_result_repo.purge_expired(session)
+        row = await oauth_cli_result_repo.consume(session, code)
+        # Read the token INSIDE the session — after commit the ORM attribute is
+        # expired and touching it would trigger async lazy-load (MissingGreenlet).
+        refresh_token = row.refresh_token if row is not None else None
+        await session.commit()
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Invalid, expired, or already-used code.")
+    return {
+        "refresh_token": refresh_token,
+        "token_type": "refresh",
+        "expires_in": tokens_rs256.refresh_token_ttl_seconds(),
+    }
 
 
 @router.get("/auth/{provider_name}/callback")
@@ -208,6 +283,7 @@ async def oauth_callback(
             raise HTTPException(status_code=400, detail="OAuth state expired")
         code_verifier = state_row.code_verifier
         redirect_after_login = state_row.redirect_after_login
+        login_mode = getattr(state_row, "mode", "web") or "web"
         await session.commit()
 
     redirect_uri = _redirect_uri_for(provider.name)
@@ -221,6 +297,7 @@ async def oauth_callback(
     if not userinfo.provider_user_id:
         return RedirectResponse(_frontend_error_redirect("provider returned no user id"), status_code=302)
 
+    cli_code = None
     async with user_db_manager.get_async_session() as session:
         try:
             profile = await _upsert_profile_for_oauth(session, userinfo)
@@ -237,22 +314,17 @@ async def oauth_callback(
                 profile.updated_at = datetime.utcnow()
                 await session.flush()
 
-            jwt_user = await _ensure_jwt_user_shell(
+            # Ensure a credential row linked to this profile, a default role,
+            # and bootstrap elevation — all via the single provisioning path.
+            # OAuth's own profile matching already ran above, so hand the
+            # resolved profile through as existing_profile.
+            profile, jwt_user, existing_roles = await provision_identity(
                 session,
                 email=profile.email,
                 full_name=profile.name or userinfo.name or profile.email,
+                default_role=UserRoleEnum.CURATOR.value,
+                existing_profile=profile,
             )
-
-            # Default role on first login = Curator.
-            existing_roles = await user_role_repo.get_user_role_names(session, profile.id)
-            if not existing_roles:
-                await user_role_repo.assign_role(
-                    session,
-                    profile_id=profile.id,
-                    role=UserRoleEnum.CURATOR.value,
-                    is_active=True,
-                )
-                existing_roles = [UserRoleEnum.CURATOR.value]
 
             # Upsert the oauth identity row (encrypt tokens at rest).
             token_expires_at = None
@@ -269,20 +341,6 @@ async def oauth_callback(
                 token_expires_at=token_expires_at,
                 raw_profile=userinfo.raw,
             )
-
-            # Bootstrap-superadmin allowlist: if configured, elevate on first sight.
-            # Seed both Admin (for permissions / page-access checks) and
-            # SuperAdmin (the immutable marker that protects the account).
-            if (profile.email or "").lower() in config.bootstrap_superadmin_emails:
-                for role_name in (UserRoleEnum.ADMIN.value, UserRoleEnum.SUPERADMIN.value):
-                    if role_name not in existing_roles:
-                        await user_role_repo.assign_role(
-                            session,
-                            profile_id=profile.id,
-                            role=role_name,
-                            is_active=True,
-                        )
-                        existing_roles.append(role_name)
 
             # Log activity.
             await user_activity_repo.log_activity(
@@ -302,7 +360,42 @@ async def oauth_callback(
                 roles=existing_roles,
                 scopes=scopes,
                 auth_source=provider.name,
+                # Web-session TTL (default 12h), not the 30-min default: this token
+                # lives in the NextAuth session and isn't auto-refreshed, so a short
+                # TTL made the UI 401 (/api/users/me) mid-session.
+                expires_minutes=config.web_session_ttl_min,
             )
+            # Web flow: also mint a longer-lived REFRESH token so the UI can renew
+            # its access token silently (no re-login) until this expires. Exchanged
+            # by the UI at /api/auth/exchange (audience=usermanagement).
+            web_refresh = None
+            if login_mode != "cli":
+                web_refresh = tokens_rs256.create_refresh_token(
+                    email=profile.email,
+                    profile_id=profile.id,
+                    roles=existing_roles,
+                    scopes=scopes,
+                    auth_source=provider.name,
+                    expires_minutes=config.web_refresh_ttl_min,
+                )
+            # CLI/skill (paste-code) flow: mint an SSO refresh token and stash it
+            # behind a short code the browser will display for the user to paste.
+            if login_mode == "cli":
+                refresh = tokens_rs256.create_refresh_token(
+                    email=profile.email,
+                    profile_id=profile.id,
+                    roles=existing_roles,
+                    scopes=scopes,
+                    auth_source=provider.name,
+                )
+                cli_code = _gen_cli_code()
+                await oauth_cli_result_repo.store(
+                    session,
+                    code=cli_code,
+                    refresh_token=refresh,
+                    email=profile.email,
+                    expires_at=datetime.utcnow() + timedelta(minutes=10),
+                )
             await session.commit()
         except HTTPException:
             await session.rollback()
@@ -312,7 +405,13 @@ async def oauth_callback(
             logger.exception("Error finalizing OAuth login")
             return RedirectResponse(_frontend_error_redirect(f"finalize_failed: {e}"), status_code=302)
 
+    # CLI/skill login: show the paste-code page instead of redirecting to the SPA.
+    if login_mode == "cli":
+        return HTMLResponse(_cli_success_page(cli_code))
+
     qs = {"token": token}
+    if web_refresh:
+        qs["refresh"] = web_refresh
     if redirect_after_login:
         qs["redirect"] = redirect_after_login
     return RedirectResponse(f"{config.frontend_callback_url}?{urlencode(qs)}", status_code=302)

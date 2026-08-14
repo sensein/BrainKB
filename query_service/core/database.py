@@ -39,6 +39,13 @@ table_name_user = load_environment()["JWT_POSTGRES_TABLE_USER"]
 table_name_scope = load_environment()["JWT_POSTGRES_TABLE_SCOPE"]
 table_relation = load_environment()["JWT_POSTGRES_TABLE_USER_SCOPE_REL"]
 
+# Identity unification (Phase 1): a password-registered user is a first-class
+# identity, not a role-less credential orphan. On registration we ensure a
+# canonical Web_user_profile, link the credential to it (Web_jwtuser.profile_id),
+# and assign this default role so rbac (which reads roles via the profile) has
+# something to work with. Kept in sync with usermanagement's OAuth default.
+DEFAULT_REGISTRATION_ROLE = "Curator"
+
 # Global connection pool
 pool = None
 
@@ -211,6 +218,45 @@ async def debug_pool_status():
 # Refactored Database Functions - Using Context Manager Pattern
 # ============================================================================
 
+async def _provision_profile_for_registration(connection, jwt_user_id: int, email: str, fullname: str) -> None:
+    """Ensure a canonical Web_user_profile + default role for a freshly
+    registered credential, and link them via Web_jwtuser.profile_id.
+
+    Mirrors usermanagement's provision_identity for the password path so both
+    onboarding routes converge on the same shape (profile + linked credential +
+    at least one role). Best-effort: any failure is logged and swallowed so
+    registration itself never fails on it. rbac reads roles via the profile, so
+    this is what makes a password user more than public/no-role."""
+    try:
+        async with connection.transaction():
+            profile_id = await connection.fetchval(
+                'SELECT id FROM "Web_user_profile" WHERE lower(email) = lower($1)', email
+            )
+            if profile_id is None:
+                profile_id = await connection.fetchval(
+                    '''INSERT INTO "Web_user_profile" (name, email, created_at, updated_at)
+                       VALUES ($1, $2, $3, $4) RETURNING id''',
+                    fullname or email.split("@")[0], email, datetime.utcnow(), datetime.utcnow(),
+                )
+            await connection.execute(
+                f'UPDATE "{table_name_user}" SET profile_id = $1, updated_at = $2 WHERE id = $3',
+                profile_id, datetime.utcnow(), jwt_user_id,
+            )
+            has_role = await connection.fetchval(
+                'SELECT 1 FROM "Web_user_role" WHERE profile_id = $1 AND is_active IS TRUE LIMIT 1',
+                profile_id,
+            )
+            if not has_role:
+                await connection.execute(
+                    '''INSERT INTO "Web_user_role" (profile_id, role, is_active, assigned_at, updated_at)
+                       VALUES ($1, $2, TRUE, $3, $4)
+                       ON CONFLICT (profile_id, role) DO NOTHING''',
+                    profile_id, DEFAULT_REGISTRATION_ROLE, datetime.utcnow(), datetime.utcnow(),
+                )
+    except Exception as e:
+        logger.warning(f"Profile/role provisioning skipped for {email}: {e}")
+
+
 async def insert_data(fullname: str, email: str, password: str, conn: Optional[asyncpg.Connection] = None):
     """
     Insert a new user with default 'read' scope.
@@ -218,64 +264,43 @@ async def insert_data(fullname: str, email: str, password: str, conn: Optional[a
     Otherwise, manages its own connection.
     """
     async def _insert_logic(connection):
-        # Use a transaction to ensure all operations succeed or fail together
+        # Credential + scope go in one transaction (all-or-nothing).
         async with connection.transaction():
-            scope_exist_id = await select_scope_id(connection)
-
-            if not scope_exist_id:
-                # First insert the default read access
-                scope_query = f"""
-                INSERT INTO \"{table_name_scope}\" (name, description, created_at, updated_at) 
-                VALUES ($1, $2, $3, $4) RETURNING id"""
-
-                new_scope_id = await connection.fetchval(
-                    scope_query,
+            scope_id = await select_scope_id(connection)
+            if not scope_id:
+                # Seed the default 'read' scope the first time anyone registers.
+                scope_id = await connection.fetchval(
+                    f"""INSERT INTO \"{table_name_scope}\" (name, description, created_at, updated_at)
+                        VALUES ($1, $2, $3, $4) RETURNING id""",
                     "read",
                     "This allows read access",
                     datetime.utcnow(),
                     datetime.utcnow(),
                 )
 
-                user_query = f"""
-                    INSERT INTO \"{table_name_user}\" (full_name, email, password, is_active, created_at, updated_at) 
-                    VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
-                """
-                jwt_user_id = await connection.fetchval(
-                    user_query,
-                    fullname,
-                    email,
-                    password,
-                    False,
-                    datetime.utcnow(),
-                    datetime.utcnow(),
-                )
+            jwt_user_id = await connection.fetchval(
+                f"""INSERT INTO \"{table_name_user}\" (full_name, email, password, is_active, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6) RETURNING id""",
+                fullname,
+                email,
+                password,
+                False,
+                datetime.utcnow(),
+                datetime.utcnow(),
+            )
 
-                # Connect with relationship
-                await connection.execute(
-                    f"""INSERT INTO \"{table_relation}\" (jwtuser_id, scope_id) VALUES ($1, $2)""",
-                    jwt_user_id,
-                    new_scope_id,
-                )
-            else:
-                user_query = f"""
-                    INSERT INTO \"{table_name_user}\" (full_name, email, password, is_active, created_at, updated_at) 
-                    VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
-                """
-                jwt_user_id = await connection.fetchval(
-                    user_query,
-                    fullname,
-                    email,
-                    password,
-                    False,
-                    datetime.utcnow(),
-                    datetime.utcnow(),
-                )
+            await connection.execute(
+                f"""INSERT INTO \"{table_relation}\" (jwtuser_id, scope_id) VALUES ($1, $2)""",
+                jwt_user_id,
+                scope_id,
+            )
 
-                await connection.execute(
-                    f"""INSERT INTO \"{table_relation}\" (jwtuser_id, scope_id) VALUES ($1, $2)""",
-                    jwt_user_id,
-                    scope_exist_id,
-                )
+        # Identity unification: ensure a canonical profile + default role and
+        # link this credential to it. Best-effort in its own transaction so a
+        # hiccup here (e.g. the profile_id column not migrated yet) never blocks
+        # account creation — the email backfill in usermanagement bootstrap can
+        # still repair the link later.
+        await _provision_profile_for_registration(connection, jwt_user_id, email, fullname)
 
         return {
             "detail": "Registration completed successfully! Admin will activate your account after verification."
@@ -380,14 +405,23 @@ async def get_scopes_by_user(user_id: int, conn: Optional[asyncpg.Connection] = 
         raise HTTPException(status_code=400, detail=str(e))
 
 
-async def get_user(email: str, conn: Optional[asyncpg.Connection] = None):
+async def get_user(email: str, conn: Optional[asyncpg.Connection] = None,
+                   include_inactive: bool = False):
     """
     Get an active user by email.
     Returns the user row if found and active, False otherwise.
+
+    `include_inactive=True` drops the is_active filter. Needed for OAuth callers:
+    usermanagement provisions them a credential SHELL row with is_active=False
+    (they have no usable password; the row exists only to carry a stable user_id),
+    so an active-only lookup rejects every Globus/ORCID/GitHub user even though
+    their token verifies. Do NOT use it on the password path — there is_active is
+    the deactivation switch that POST /api/admin/users/deactivate flips.
     """
+    active_filter = "" if include_inactive else "AND is_active = True"
     query = f"""
-    SELECT * FROM \"{table_name_user}\" 
-    WHERE email = $1 AND is_active = True 
+    SELECT * FROM \"{table_name_user}\"
+    WHERE email = $1 {active_filter}
     LIMIT 1
     """
 

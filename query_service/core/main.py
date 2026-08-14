@@ -1,4 +1,5 @@
 import logging
+import os
 
 # logging
 from asgi_correlation_id import CorrelationIdMiddleware
@@ -12,6 +13,8 @@ from core.routers.jwt_auth import router as jwt_router
 from core.routers.query import router as query_router
 from core.routers.rapid_release import router as rapid_release
 from core.routers.insert import router as insert_router
+from core.routers.spaces import router as spaces_router
+from core.routers.search import router as search_router
 from core.configuration import load_environment
 from core.database import init_db_pool
 from core.graph_database_connection_manager import initialize_metadata_graph
@@ -21,13 +24,21 @@ from fastapi.middleware.cors import CORSMiddleware
 environment = load_environment()["ENV_STATE"]
 
 
-origins = [  
+# Browser origins allowed to call this service. Kept identical across the four
+# BrainKB services, which each hold their own copy and had drifted apart.
+# CORS_ALLOWED_ORIGINS (comma-separated) adds to these without a code change.
+_DEFAULT_ORIGINS = [
+    "https://brainkb.org",
+    "https://www.brainkb.org",
     "https://beta.brainkb.org",
-"https://sandbox.brainkb.org",
-    "http://localhost:3000/",
+    "https://sandbox.brainkb.org",
     "http://localhost:3000",
-    "http://127.0.0.1:3000:"
+    "http://127.0.0.1:3000",
 ]
+origins = sorted({
+    *_DEFAULT_ORIGINS,
+    *(o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()),
+})
 
 if environment == "prods":
     app = FastAPI(docs_url=None, redoc_url=None)
@@ -50,6 +61,8 @@ app.include_router(index_router, prefix="/api")
 app.include_router(jwt_router, prefix="/api")
 app.include_router(query_router, prefix="/api")
 app.include_router(insert_router,prefix="/api")
+app.include_router(spaces_router, prefix="/api", tags=["Spaces"])
+app.include_router(search_router, prefix="/api", tags=["Search"])
 
 # rapid-release
 app.include_router(rapid_release, prefix="/api/rapid-release", tags=["Rapid release"])
@@ -153,6 +166,175 @@ async def startup_event():
                     except Exception:
                         pass  # Indexes may already exist
                     logger.info("Job tracking tables initialized")
+
+                    # Spaces: owner-controlled containers of named graphs with
+                    # private/public visibility and team membership (see spaces.py).
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS spaces (
+                            space_id TEXT PRIMARY KEY,
+                            slug TEXT UNIQUE NOT NULL,
+                            name TEXT NOT NULL,
+                            description TEXT,
+                            owner TEXT NOT NULL,
+                            visibility TEXT NOT NULL DEFAULT 'private',
+                            created_at DOUBLE PRECISION,
+                            updated_at DOUBLE PRECISION
+                        )
+                        """
+                    )
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS space_members (
+                            id SERIAL PRIMARY KEY,
+                            space_id TEXT NOT NULL REFERENCES spaces(space_id) ON DELETE CASCADE,
+                            member TEXT NOT NULL,
+                            role TEXT NOT NULL,
+                            added_at DOUBLE PRECISION,
+                            UNIQUE (space_id, member)
+                        )
+                        """
+                    )
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS space_graphs (
+                            id SERIAL PRIMARY KEY,
+                            space_id TEXT NOT NULL REFERENCES spaces(space_id) ON DELETE CASCADE,
+                            named_graph_iri TEXT NOT NULL UNIQUE,
+                            added_at DOUBLE PRECISION
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_space_members_space ON space_members(space_id)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_space_members_member ON space_members(member)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_space_graphs_space ON space_graphs(space_id)")
+                    except Exception:
+                        pass
+                    # Space type: 'individual' (personal) or 'team' (created by
+                    # Admin/SuperAdmin or a user granted create_team_space).
+                    try:
+                        await conn.execute("ALTER TABLE spaces ADD COLUMN IF NOT EXISTS space_type TEXT NOT NULL DEFAULT 'individual'")
+                    except Exception:
+                        pass
+                    logger.info("Spaces tables initialized")
+
+                    # RBAC: capabilities granted directly to a user (delegated
+                    # upgrades by Admin/SuperAdmin), on top of role-derived caps.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS user_capability_grants (
+                            id SERIAL PRIMARY KEY,
+                            member TEXT NOT NULL,
+                            capability TEXT NOT NULL,
+                            granted_by TEXT,
+                            created_at DOUBLE PRECISION,
+                            UNIQUE (member, capability)
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_capability_grants_member ON user_capability_grants(member)")
+                    except Exception:
+                        pass
+                    # Role/group-level capability grants: attach a delegatable KG
+                    # capability to a whole role/group (e.g. a custom "uk_collaborator"
+                    # group), so every member of that role gains it — without a
+                    # per-user grant.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS role_capability_grants (
+                            id SERIAL PRIMARY KEY,
+                            role TEXT NOT NULL,
+                            capability TEXT NOT NULL,
+                            granted_by TEXT,
+                            created_at DOUBLE PRECISION,
+                            UNIQUE (role, capability)
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_role_capability_grants_role ON role_capability_grants(role)")
+                    except Exception:
+                        pass
+                    logger.info("RBAC capability-grants tables initialized")
+
+                    # Fine-grained per-space access rules: restrict a space action
+                    # (read/write/manage) to a global role, a space role, or specific
+                    # members. Owner + global Admin/SuperAdmin always bypass.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS space_access_rules (
+                            id SERIAL PRIMARY KEY,
+                            space_id TEXT NOT NULL REFERENCES spaces(space_id) ON DELETE CASCADE,
+                            action TEXT NOT NULL,
+                            subject_type TEXT NOT NULL,
+                            subject_value TEXT NOT NULL,
+                            created_by TEXT,
+                            created_at DOUBLE PRECISION,
+                            UNIQUE (space_id, action, subject_type, subject_value)
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_space_access_rules_space ON space_access_rules(space_id, action)")
+                    except Exception:
+                        pass
+                    logger.info("Space access-rules table initialized")
+
+                    # Search locator index (hybrid search): Postgres full-text index that
+                    # locates subjects/subgraphs (carrying graph + workspace/space), then the
+                    # actual triples are fetched from Oxigraph. Access is filtered by space
+                    # visibility/membership at query time.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS graph_search_index (
+                            id BIGSERIAL PRIMARY KEY,
+                            named_graph_iri TEXT NOT NULL,
+                            space_id TEXT,
+                            subject TEXT NOT NULL,
+                            text TEXT NOT NULL,
+                            tsv tsvector,
+                            updated_at DOUBLE PRECISION,
+                            UNIQUE (named_graph_iri, subject)
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_gsi_tsv ON graph_search_index USING GIN(tsv)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_gsi_graph ON graph_search_index(named_graph_iri)")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_gsi_space ON graph_search_index(space_id)")
+                    except Exception:
+                        pass
+                    logger.info("Search index table initialized")
+
+                    # Async indexing task queue: search indexing runs in the
+                    # background (not inline with ingest) so large graphs don't
+                    # block jobs. Task status is durable here for observability
+                    # and cross-restart recovery.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS index_tasks (
+                            task_id TEXT PRIMARY KEY,
+                            kind TEXT NOT NULL,
+                            target TEXT,
+                            delta_graph TEXT,
+                            status TEXT NOT NULL,
+                            subjects_indexed INTEGER DEFAULT 0,
+                            graphs_total INTEGER,
+                            graphs_done INTEGER DEFAULT 0,
+                            message TEXT,
+                            created_at DOUBLE PRECISION,
+                            started_at DOUBLE PRECISION,
+                            ended_at DOUBLE PRECISION
+                        )
+                        """
+                    )
+                    try:
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_index_tasks_status ON index_tasks(status)")
+                    except Exception:
+                        pass
+                    logger.info("Index task table initialized")
                     break  # Success, exit retry loop
                 finally:
                     await pool.release(conn)
@@ -207,6 +389,14 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Failed to recover stuck jobs: {str(e)}. Continuing anyway...")
     
+    # Start the background search-indexing consumer and recover any pending tasks
+    logger.info("Starting background search-indexing worker...")
+    try:
+        from core.indexing import start_worker
+        await start_worker()
+    except Exception as e:
+        logger.warning(f"Failed to start indexing worker: {str(e)}. Continuing anyway...")
+
     logger.info("FastAPI startup completed successfully")
 
 

@@ -45,7 +45,19 @@ Once started, services are accessible at:
 - **API Token Manager (Django)**: `http://localhost:8000/`
   - Once you register JWT user you need to activate it using token manager. You can also assign permission.
 - **Query Service (FastAPI)**: `http://localhost:8010/`
-  - Now supports ingestion than just querying.
+  - Supports querying **and** ingestion of the knowledge graphs.
+  - Native W3C PROV-O provenance in the graph database, with triple-level delta
+    tracking (per-job delta graphs + query/compare endpoints).
+  - **Spaces**: team-owned, private/public containers of named graphs — keep data
+    private to members or publish it publicly (anonymous read). Per-endpoint JWT
+    scopes (`read`/`write`/`admin`); role-based authorization (see
+    `query_service/RBAC_MODEL.md`). Accepts both SSO (RS256/JWKS) and legacy
+    HS256 tokens.
+  - **Search**: hybrid full-text search — Postgres locator index (aware of
+    workspace + visibility) finds subjects, data is fetched from Oxigraph. Results
+    are access-filtered (anonymous sees public only).
+  - See `query_service/README.md`, `query_service/PROVENANCE_MODEL.md`, and
+    `query_service/SPACES_MODEL.md` for details.
 - **ML Service (FastAPI)**: `http://localhost:8007/`
   - Integrates StructSense (multi-agent NER + structured-resource extraction).
   - Hosts **SynthScholar** at `/api/synth-scholar/*` — PRISMA-guided literature
@@ -55,7 +67,26 @@ Once started, services are accessible at:
     optional API keys (OpenRouter, NCBI, Semantic Scholar, CORE).
 - **Oxigraph SPARQL**: `http://localhost:7878/` (password protected) graph database
 - **pgAdmin**: `http://localhost:5051/`
-- **User management service**: http://localhost:8004
+- **User management service (FastAPI)**: `http://localhost:8004`
+  - Canonical **identity** service: user profiles, roles/RBAC, and OAuth sign-in
+    (Globus / ORCID / GitHub). One canonical user; the credential row is linked to
+    the profile (identity unification).
+  - **Single sign-on** issuer (RS256 + JWKS): one login mints a refresh token,
+    exchanged for narrow per-service access tokens (`aud=<service>`) that each
+    service verifies via `/.well-known/jwks.json`. A token for one service can't
+    be replayed against another. Legacy per-service HS256 tokens still work.
+  - Admins can activate users and assign roles/groups. See
+    `query_service/AUTH_UNIFICATION.md` and `usermanagement_service/README.md`.
+
+## Authentication
+
+BrainKB is moving to a single sign-on model — usermanagement is the sole token
+issuer and each service verifies audience-scoped RS256 tokens against its JWKS,
+while legacy per-service HS256 tokens remain accepted during migration. Web
+sign-in returns both an access and a refresh token so the UI renews silently
+(`USERMANAGEMENT_WEB_SESSION_TTL_MIN` / `USERMANAGEMENT_WEB_REFRESH_TTL_MIN`).
+The full design, phases, and deployment env are in
+[query_service/AUTH_UNIFICATION.md](query_service/AUTH_UNIFICATION.md).
 
 **Please note:** for the Query Service and ML Service, you won’t see anything at their base URLs. To verify they are running, open their API docs at `http://localhost:8010/docs` and `http://localhost:8007/docs` respectively.
 

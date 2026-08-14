@@ -18,7 +18,7 @@
 
 
 from fastapi import APIRouter, Request, HTTPException, status, UploadFile, File, Form, BackgroundTasks, Query, Body
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from core.graph_database_connection_manager import insert_data_gdb, insert_data_gdb_async
 import logging
 from core.pydantic_schema import InputKGTripleSchema, NamedGraphSchema
@@ -48,6 +48,23 @@ from core.database import (
     batch_insert_job_results,
 )
 from core.configuration import load_environment
+from core import spaces as _spaces
+from core import rbac
+from core.provenance import (
+    build_ingestion_provenance,
+    build_recovery_provenance,
+    agent_ref,
+    write_provenance,
+    query_provenance_jsonld,
+    construct_for_job,
+    construct_for_named_graph,
+    delta_graph_for,
+    merge_delta_into_target,
+    count_graph_triples,
+    construct_delta_content,
+    delta_history_for_graph,
+    compare_deltas,
+)
 import datetime
 import uuid
 import asyncio
@@ -60,6 +77,14 @@ from pathlib import Path
 from rdflib import Graph
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _agent_email(user):
+    """Caller's identity string (email), used for space membership checks."""
+    try:
+        return user["email"]
+    except (KeyError, TypeError, IndexError):
+        return None
 
 # Global dictionary to track running background tasks
 # Maps job_id -> asyncio.Task for checking if job is actually running
@@ -76,6 +101,28 @@ DEFAULT_GRAPH = load_environment().get("DEFAULT_NAMED_GRAPH", "named_graph")
 
 # Supported file extensions
 SUPPORTED_EXTS = {"ttl", "turtle", "nt", "nq", "trig", "rdf", "owl", "jsonld", "json"}
+
+# Triple-level change tracking. When enabled, each job stages its triples in a
+# per-job delta graph (an exact, queryable record of what the job added) which is
+# then merged into the target graph. Costs extra storage (delta graphs persist);
+# set TRACK_TRIPLE_DELTAS=false to upload directly to the target instead.
+TRACK_TRIPLE_DELTAS = os.getenv("TRACK_TRIPLE_DELTAS", "true").strip().lower() in ("1", "true", "yes", "on")
+
+# Resource-safety cap: maximum ingest jobs PROCESSING concurrently per worker
+# process. Ingestion stays fire-and-forget (submit and forget) — this just bounds
+# how many jobs run at once so a burst of submissions can't exhaust memory, the DB
+# pool, or Oxigraph. Excess jobs return immediately and wait as 'pending' until a
+# slot frees (backpressure without a queue). Effective global cap ≈ this × workers.
+MAX_CONCURRENT_INGEST_JOBS = int(os.getenv("MAX_CONCURRENT_INGEST_JOBS", "3"))
+_ingest_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def _get_ingest_semaphore() -> asyncio.Semaphore:
+    """Lazily create the per-worker ingest concurrency limiter (binds to the loop)."""
+    global _ingest_semaphore
+    if _ingest_semaphore is None:
+        _ingest_semaphore = asyncio.Semaphore(MAX_CONCURRENT_INGEST_JOBS)
+    return _ingest_semaphore
 
 # Ensure job directory exists
 os.makedirs(JOB_BASE_DIR, exist_ok=True)
@@ -279,29 +326,13 @@ async def upload_single_file_path(
             total_files=total_files,
         )
     
-    # Process file (attach provenance if text-based RDF format)
-    if job_id and not skip_provenance:
-        from core.database import insert_processing_log
-        status_msg = f"Attaching provenance to {filename}"
-        await update_job_processing_state(
-            job_id=job_id,
-            current_stage="attaching_provenance",
-            status_message=status_msg
-        )
-        # Log to history
-        await insert_processing_log(
-            job_id=job_id,
-            file_name=filename,
-            stage="attaching_provenance",
-            status_message=status_msg,
-            file_index=file_index,
-            total_files=total_files,
-        )
-    
-    processed_filepath, provenance_success = await process_file_with_provenance(
-        filepath, user_id, ext, skip_provenance=skip_provenance
-    )
-    
+    # Provenance is tracked natively as PROV-O in Oxigraph's dedicated provenance
+    # graph (see core/provenance.py and PROVENANCE_MODEL.md), NOT embedded into the
+    # domain data. The uploaded file is therefore sent to Oxigraph unmodified.
+    # `skip_provenance` is retained on the API for backward compatibility but no
+    # longer controls domain-data embedding (which has been removed).
+    processed_filepath = filepath
+
     # Update processing state: Uploading file
     if job_id:
         from core.database import insert_processing_log
@@ -440,23 +471,6 @@ async def upload_single_file_path(
     if resp_text and len(resp_text) > max_len:
         resp_text = resp_text[:max_len] + "... [truncated]"
 
-    # Surface provenance-attachment failures. process_file_with_provenance returns
-    # success=False when it was asked to attach provenance but rdflib parsing failed;
-    # in that case the ORIGINAL (un-provenanced) file was uploaded. Previously this
-    # was silently swallowed and the job still reported success, hiding a data-integrity
-    # gap. We now flag it explicitly so the job result records it.
-    provenance_requested = not skip_provenance and ext in [
-        "ttl", "turtle", "nt", "nq", "jsonld", "json", "rdf", "owl"
-    ]
-    provenance_failed = provenance_requested and not provenance_success
-    if provenance_failed:
-        warning = (
-            f"WARNING: provenance could not be attached to {filename} "
-            f"(RDF parsing failed); the original file was uploaded WITHOUT provenance metadata. "
-        )
-        logger.warning(f"[upload_single_file_path] {warning.strip()}")
-        resp_text = warning + (resp_text or "")
-
     return {
         "file": filename,
         "ext": ext,
@@ -464,14 +478,33 @@ async def upload_single_file_path(
         "elapsed_s": elapsed,
         "http_status": resp.status_code,
         "success": success,
-        "provenance_attached": provenance_requested and provenance_success,
-        "provenance_requested": provenance_requested,
         "bps": bps,
         "response_body": resp_text,
     }
 
 
 async def run_ingest_job(
+    job_id: str,
+    max_concurrency: int,
+    user_id: str,
+    skip_provenance: bool = False,
+):
+    """Background ingest runner, gated by a per-worker concurrency limiter so a
+    burst of concurrent submissions cannot exhaust resources and crash the process.
+
+    While waiting for a slot the job stays 'pending' (accurate — it is queued). The
+    actual work runs in _run_ingest_job_body once a slot is acquired."""
+    sem = _get_ingest_semaphore()
+    if sem.locked():
+        logger.info(
+            f"[run_ingest_job] Job {job_id} is waiting for an ingest slot "
+            f"(max {MAX_CONCURRENT_INGEST_JOBS} concurrent/worker)"
+        )
+    async with sem:
+        await _run_ingest_job_body(job_id, max_concurrency, user_id, skip_provenance)
+
+
+async def _run_ingest_job_body(
     job_id: str,
     max_concurrency: int,
     user_id: str,
@@ -488,7 +521,58 @@ async def run_ingest_job(
     # This prevents jobs from running indefinitely
     MAX_JOB_TIMEOUT = 2 * 60 * 60  # 2 hours
     job_start_time = time.time()
-    
+
+    delta_graph = delta_graph_for(job_id)
+
+    async def _write_ingestion_prov(status_label: str, results):
+        """Best-effort finalizer: merge the per-job delta graph into the target,
+        then record this job as a PROV-O IngestionActivity (+ IngestionDelta) in
+        Oxigraph. Never raises — a provenance failure must not fail the job."""
+        try:
+            details = await get_job_details(job_id)
+            named_graph = details.get("graph") if details else None
+            if not named_graph:
+                return
+            results = results or []
+            succ = sum(1 for r in results if r.get("success"))
+            fail = len(results) - succ
+
+            added_count = None
+            effective_delta_graph = None
+            if TRACK_TRIPLE_DELTAS:
+                # Count what the job staged, then merge the delta into the target graph.
+                added_count = await count_graph_triples(delta_graph)
+                if added_count and added_count > 0:
+                    await merge_delta_into_target(delta_graph, named_graph)
+                    effective_delta_graph = delta_graph
+
+            prov_graph = build_ingestion_provenance(
+                job_id=job_id,
+                agent_id=user_id,
+                named_graph_iri=named_graph,
+                started_at=datetime.datetime.fromtimestamp(job_start_time, datetime.timezone.utc).isoformat(),
+                ended_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                status=status_label,
+                total_files=len(results),
+                success_count=succ,
+                fail_count=fail,
+                results=results,
+                agent_type="user",
+                delta_graph=effective_delta_graph,
+                added_triple_count=added_count,
+            )
+            await write_provenance(prov_graph)
+
+            # Queue search indexing to run in the BACKGROUND (do not block the job
+            # on it — indexing a large graph can be slow). Best-effort enqueue.
+            try:
+                from core.indexing import enqueue_ingest
+                await enqueue_ingest(named_graph, effective_delta_graph)
+            except Exception as _se:
+                logger.warning(f"[run_ingest_job] Failed to queue search indexing for {job_id}: {_se}")
+        except Exception as _pe:
+            logger.warning(f"[run_ingest_job] Provenance write failed for {job_id}: {_pe}")
+
     try:
         # Mark job as running (start_time was already set when job was created)
         from core.database import update_job_processing_state, insert_processing_log
@@ -513,7 +597,10 @@ async def run_ingest_job(
         
         job_dir = job_details["job_dir"]
         graph = job_details["graph"]
-        
+        # When delta tracking is on, stage uploads in the per-job delta graph;
+        # _write_ingestion_prov merges it into the target graph at the end.
+        upload_graph = delta_graph if TRACK_TRIPLE_DELTAS else graph
+
         # Collect files in job_dir (exclude .processed files)
         file_infos: List[Dict[str, Any]] = []
         for name in os.listdir(job_dir):
@@ -553,7 +640,7 @@ async def run_ingest_job(
                         client,
                         filepath,
                         size,
-                        graph,
+                        upload_graph,
                         user_id,
                         skip_provenance=skip_provenance,
                         job_id=job_id,
@@ -615,8 +702,13 @@ async def run_ingest_job(
             status_message=status_msg,
         )
         await update_job_status(job_id, "done", end_time=time.time())
+        # Record PROV-O ingestion provenance in Oxigraph (source of truth)
+        _succ = sum(1 for r in all_results if r.get("success"))
+        _fail = len(all_results) - _succ
+        _status_label = "done" if _fail == 0 else ("failed" if _succ == 0 else "partial")
+        await _write_ingestion_prov(_status_label, all_results)
         logger.info(f"[run_ingest_job] Job {job_id} completed successfully")
-        
+
     except asyncio.TimeoutError as e:
         # Mark job as errored due to timeout
         from core.database import update_job_processing_state, insert_processing_log
@@ -632,6 +724,7 @@ async def run_ingest_job(
             status_message=status_msg,
         )
         await update_job_status(job_id, "error", end_time=time.time())
+        await _write_ingestion_prov("error", [])
         logger.error(f"[run_ingest_job] Job {job_id} timed out: {e}", exc_info=True)
     except Exception as e:
         # Mark job as errored
@@ -648,6 +741,7 @@ async def run_ingest_job(
             status_message=status_msg,
         )
         await update_job_status(job_id, "error", end_time=time.time())
+        await _write_ingestion_prov("error", [])
         logger.error(f"[run_ingest_job] Job {job_id} failed: {e}", exc_info=True)
     finally:
         # Ensure job status is always updated, even if something goes wrong
@@ -980,7 +1074,15 @@ async def recover_stuck_jobs(
                             f"The job was marked as 'error' to prevent it from running indefinitely."
                         ),
                     )
-                
+
+                    # Record the automated recovery as a PROV-O RecoveryActivity (system agent)
+                    try:
+                        await write_provenance(
+                            build_recovery_provenance(job_id=job_id, cause=cause)
+                        )
+                    except Exception as _pe:
+                        logger.warning(f"[recover_stuck_jobs] Provenance write failed for {job_id}: {_pe}")
+
                 logger.info(f"[recover_stuck_jobs] Recovered {len(stuck_jobs)} stuck job(s) from server crash/restart")
                 return len(stuck_jobs)
             else:
@@ -1077,12 +1179,34 @@ async def insert_knowledge_graph_triples(
             },
             status_code=400,
         )
-    
+
+    # Role-based authorization: ingesting requires a write-capable role. JWT
+    # scope is only API access — it does not by itself grant permission to ingest.
+    if not await rbac.has_capability(_agent_email(user), rbac.INGEST):
+        return JSONResponse(
+            {"error": "Not authorized to ingest: a write-capable role is required."},
+            status_code=403,
+        )
+    # If the graph belongs to a space, enforce space write authorization: owner/
+    # editor membership, global admin, OR a space write access rule granting a
+    # group/role/member write (see spaces.can_write_space) — this is how an admin
+    # hands a whole group ingest access. Unmapped legacy graphs fall through to the
+    # endpoint scope check.
+    _graph_key = named_graph_iri if named_graph_iri.endswith("/") else named_graph_iri + "/"
+    _space_for_graph = await _spaces.get_space_for_graph(_graph_key)
+    if _space_for_graph is not None:
+        _allowed, _reason = await _spaces.can_write_space(_space_for_graph, _agent_email(user))
+        if not _allowed:
+            return JSONResponse(
+                {"error": f"Not authorized to ingest into this graph: {_reason}", "named_graph_iri": named_graph_iri},
+                status_code=403,
+            )
+
     job_id = uuid.uuid4().hex
-    
+
     # Get Oxigraph endpoint from configuration
     endpoint = get_oxigraph_endpoint()
-    
+
     raw_bytes = data.encode("utf-8")
     if len(raw_bytes) > MAX_RAW_SIZE_BYTES:
         return JSONResponse(
@@ -1189,7 +1313,29 @@ async def insert_file_knowledge_graph_triples(
             },
             status_code=400,
         )
-    
+
+    # Role-based authorization: ingesting requires a write-capable role. JWT
+    # scope is only API access — it does not by itself grant permission to ingest.
+    if not await rbac.has_capability(_agent_email(user), rbac.INGEST):
+        return JSONResponse(
+            {"error": "Not authorized to ingest: a write-capable role is required."},
+            status_code=403,
+        )
+    # If the graph belongs to a space, enforce space write authorization: owner/
+    # editor membership, global admin, OR a space write access rule granting a
+    # group/role/member write (see spaces.can_write_space) — this is how an admin
+    # hands a whole group ingest access. Unmapped legacy graphs fall through to the
+    # endpoint scope check.
+    _graph_key = named_graph_iri if named_graph_iri.endswith("/") else named_graph_iri + "/"
+    _space_for_graph = await _spaces.get_space_for_graph(_graph_key)
+    if _space_for_graph is not None:
+        _allowed, _reason = await _spaces.can_write_space(_space_for_graph, _agent_email(user))
+        if not _allowed:
+            return JSONResponse(
+                {"error": f"Not authorized to ingest into this graph: {_reason}", "named_graph_iri": named_graph_iri},
+                status_code=403,
+            )
+
     job_id = uuid.uuid4().hex  # generate for job tracking
     
     # Get Oxigraph endpoint from configuration
@@ -1336,7 +1482,8 @@ async def insert_file_knowledge_graph_triples(
     }
 
 @router.get("/insert/jobs",
-            include_in_schema=True
+            include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))],
             )
 async def list_jobs(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -1362,7 +1509,8 @@ async def list_jobs(
 
 
 @router.get("/insert/user/jobs/detail",
-            include_in_schema=True
+            include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))],
             )
 async def get_job_detail(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -1515,7 +1663,8 @@ async def get_job_detail(
 
 
 @router.get("/insert/jobs/check-recoverable",
-            include_in_schema=True
+            include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))],
             )
 async def check_job_recoverable_endpoint(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -1554,7 +1703,8 @@ async def check_job_recoverable_endpoint(
 
 
 @router.post("/insert/jobs/recover",
-            include_in_schema=True
+            include_in_schema=True,
+            dependencies=[Depends(require_scopes(["write"]))],
             )
 async def recover_stuck_jobs_endpoint(
     user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -1590,6 +1740,11 @@ async def recover_stuck_jobs_endpoint(
     Returns the number of jobs recovered and details about recovered jobs.
     """
     verify_user_access(user_id, user)
+    if not await rbac.has_capability(_agent_email(user), rbac.RECOVER):
+        return JSONResponse(
+            {"error": "Not authorized to recover jobs: a write-capable role is required."},
+            status_code=403,
+        )
     try:
         # For single job recovery, MUST check recoverability first (includes process check)
         if job_id:
@@ -1714,7 +1869,9 @@ async def recover_stuck_jobs_endpoint(
         )
 
 
-@router.post("/register-named-graph")
+@router.post("/register-named-graph",
+             dependencies=[Depends(require_scopes(["write"]))],
+             )
 async def create_named_graph(
         user: Annotated[LoginUserIn, Depends(get_current_user)],
         request: NamedGraphSchema
@@ -1743,10 +1900,20 @@ async def create_named_graph(
         """
         named_graph_exists = await fetch_data_gdb_async(query)
         if not named_graph_exists.get("message", {}).get("boolean", False):
+            # Attribute the registration to the authenticated user (PROV-O). This is
+            # recorded on the registry entry itself (see named_graph_metadata) rather
+            # than duplicated as a separate activity in the provenance graph.
+            try:
+                agent_id = user["email"] or user["id"]
+            except (KeyError, TypeError, IndexError):
+                agent_id = "unknown"
+            agent_uri = str(agent_ref(str(agent_id)))
+
             # Register the new named graph
             response = await insert_data_gdb_async(named_graph_metadata(
                 named_graph_url=named_graph_url,
                 description=description,
+                agent_uri=agent_uri,
                 )
             )
             return response
@@ -1764,4 +1931,144 @@ async def create_named_graph(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred processing the request {e}",
         )
+
+
+@router.get(
+    "/provenance/job",
+    include_in_schema=True,
+    dependencies=[Depends(require_scopes(["read"]))],
+    summary="PROV-O provenance bundle for one ingestion job",
+    description=(
+        "Returns the **W3C PROV-O bundle** (JSON-LD) for a single ingestion job: "
+        "the `IngestionActivity` (with agent, start/end time, status, file counts), "
+        "the generated bundle entity, each per-file entity (upload status, HTTP "
+        "status, size), the `IngestionDelta` entity, and any recovery activity that "
+        "acted on the job. Access-controlled — the `user_id` must match the "
+        "authenticated caller."
+    ),
+)
+async def get_job_provenance(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    user_id: Annotated[str, Query(..., description="User identifier (must match the authenticated user)")],
+    job_id: Annotated[str, Query(..., description="Job identifier to fetch provenance for")],
+):
+    """
+    Return the full PROV-O provenance bundle (JSON-LD) for a single ingestion job,
+    reconstructed from the dedicated provenance graph in Oxigraph.
+
+    Scope: everything about ONE job (activity + bundle + files + delta + recovery).
+    For a whole graph's history use /provenance/named-graph.
+    """
+    verify_user_access(user_id, user)
+    jsonld = await query_provenance_jsonld(construct_for_job(job_id))
+    if jsonld is None:
+        return JSONResponse(
+            {"error": "Failed to retrieve provenance from the graph database"},
+            status_code=502,
+        )
+    return Response(content=jsonld, media_type="application/ld+json")
+
+
+@router.get(
+    "/provenance/named-graph",
+    include_in_schema=True,
+    dependencies=[Depends(require_scopes(["read"]))],
+    summary="PROV-O activity history for a named graph",
+    description=(
+        "Returns the **W3C PROV-O provenance** (JSON-LD) describing how a named "
+        "graph's data came to be: every ingestion activity that targeted it, with "
+        "the agent, start/end times, per-file entities, and job status.\n\n"
+        "Difference from `GET /api/query/registered-named-graphs`:\n"
+        "- **registered-named-graphs** = the *registry/catalog* — which graphs "
+        "exist and their registration metadata (one row per graph).\n"
+        "- **provenance/named-graph** = the *activity history* — what was ingested "
+        "into a given graph, when, and by whom (a PROV-O bundle, potentially many "
+        "activities). Reads the provenance graph `https://brainkb.org/provenance/`."
+    ),
+)
+async def get_named_graph_provenance(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    iri: Annotated[str, Query(..., description="Named graph IRI to fetch the ingestion/activity provenance for")],
+):
+    """
+    Return the PROV-O provenance (JSON-LD) for every ingestion activity that
+    targeted the given named graph.
+
+    This is the *history of data mutations* on the graph, distinct from the
+    registry catalog returned by /api/query/registered-named-graphs. Registration
+    attribution lives on the registry entry (see that endpoint's `registered_by`).
+    """
+    jsonld = await query_provenance_jsonld(construct_for_named_graph(iri))
+    if jsonld is None:
+        return JSONResponse(
+            {"error": "Failed to retrieve provenance from the graph database"},
+            status_code=502,
+        )
+    return Response(content=jsonld, media_type="application/ld+json")
+
+
+@router.get("/provenance/delta", include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))])
+async def get_job_delta(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    user_id: Annotated[str, Query(..., description="User identifier (must match the authenticated user)")],
+    job_id: Annotated[str, Query(..., description="Job identifier whose added triples to return")],
+):
+    """
+    GET /provenance/delta
+    Return the exact set of triples a job added (its delta graph) as JSON-LD.
+    This is the incremental change that job contributed to the target graph.
+    """
+    verify_user_access(user_id, user)
+    jsonld = await query_provenance_jsonld(construct_delta_content(job_id))
+    if jsonld is None:
+        return JSONResponse(
+            {"error": "Failed to retrieve delta from the graph database"},
+            status_code=502,
+        )
+    return Response(content=jsonld, media_type="application/ld+json")
+
+
+@router.get("/provenance/delta/history", include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))])
+async def get_delta_history(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    iri: Annotated[str, Query(..., description="Named graph IRI to list the change history for")],
+):
+    """
+    GET /provenance/delta/history
+    Return the ordered change history of a named graph: one entry per ingestion
+    delta (job, added triple count, timestamp, status), newest first.
+    """
+    history = await delta_history_for_graph(iri)
+    if history is None:
+        return JSONResponse(
+            {"error": "Failed to retrieve delta history from the graph database"},
+            status_code=502,
+        )
+    return {"named_graph_iri": iri, "changes": history, "total": len(history)}
+
+
+@router.get("/provenance/delta/compare", include_in_schema=True,
+            dependencies=[Depends(require_scopes(["read"]))])
+async def compare_job_deltas(
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    user_id: Annotated[str, Query(..., description="User identifier (must match the authenticated user)")],
+    job_id_a: Annotated[str, Query(..., description="First job identifier")],
+    job_id_b: Annotated[str, Query(..., description="Second job identifier")],
+):
+    """
+    GET /provenance/delta/compare
+    Compare the triples added by two jobs. Returns counts (A-only, B-only,
+    shared) and the differing triples as JSON-LD, so users can see exactly how
+    two ingestion changes differ.
+    """
+    verify_user_access(user_id, user)
+    result = await compare_deltas(job_id_a, job_id_b)
+    if result is None:
+        return JSONResponse(
+            {"error": "Failed to compare deltas (one or both delta graphs unavailable)"},
+            status_code=502,
+        )
+    return result
 
