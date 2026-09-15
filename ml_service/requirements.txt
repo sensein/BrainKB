@@ -3,7 +3,17 @@ fastapi==0.115.3
 uvicorn==0.29.0
 gunicorn==21.2.0
 
-aiohttp==3.8.6
+# Was pinned to 3.8.6, which is what killed ml_service on boot. Dockerfile.unified
+# installs this file AFTER structsense, so the pin DOWNGRADED the aiohttp that
+# structsense -> crewai -> litellm -> openai had just pulled in. Recent openai
+# vendors httpx_aiohttp, which references aiohttp.SocketTimeoutError — added in
+# aiohttp 3.10 — so importing openai raised
+#   AttributeError: module aiohttp has no attribute SocketTimeoutError
+# and every gunicorn worker died before the app existed (exit 3, nothing on 8007).
+#
+# A floor rather than a pin, so pip can reconcile with whatever openai/litellm want.
+# The other services pin 3.9.1; they do not import openai, so they are unaffected.
+aiohttp>=3.10,<4
 async-timeout==4.0.3
 # Logging
 rich==13.9.4
@@ -47,9 +57,41 @@ grpcio-health-checking==1.60.2
 PyMuPDF==1.26.5
 ollama==0.6.0
 
-# SynthScholar (PRISMA literature review). The `synthscholar` package owns
-# the AI pipeline; the local module under core/synth_scholar/ is just the
-# orchestration layer (sessions, SSE, exports). SQLAlchemy 2.0 async backs
-# the review tables, separate from ml_service's raw-asyncpg pool.
-synthscholar[fulltext,semantic]==0.0.11
+# Imported DIRECTLY by core/shared.py and core/configuration.py, but never declared —
+# they arrived as transitive dependencies of structsense. Dropping structsense took
+# them with it, and ml_service died on boot with
+#   ModuleNotFoundError: No module named 'bs4'
+# (gunicorn exit 3, nothing bound to 8007). Declared explicitly so what this service
+# imports no longer depends on what another package happens to pull in.
+#
+# Found by parsing every import in core/ and diffing against this file, not one crash
+# at a time. Deliberately NOT added: pydantic and starlette (guaranteed by the fastapi
+# pin, and adding unbounded entries risks the resolution-too-deep problem again),
+# pytest (test-only), structsense (guarded, intentionally absent), synthscholar
+# (installed in its own pip step — see the note below).
+beautifulsoup4>=4.12
+python-dotenv>=1.0
+rdflib>=6.0
+PyYAML>=6.0
+
+# SynthScholar (PRISMA literature review). The `synthscholar` package owns the AI
+# pipeline; the local module under core/synth_scholar/ is just the orchestration layer
+# (sessions, SSE, exports). SQLAlchemy 2.0 async backs the review tables, separate
+# from ml_service's raw-asyncpg pool.
+#
+# synthscholar itself is NOT listed here — it is installed as a separate pip step in
+# Dockerfile.unified. Solved together with this file on an empty base image, pip gives
+# up:
+#
+#   error: resolution-too-deep
+#   × Dependency resolution exceeded maximum depth
+#
+# It drags pydantic-ai -> openai plus sentence-transformers -> torch, and combined
+# with the exact `==` pins here the graph is too large for one solve. Two smaller
+# solves succeed where one large one does not. (The standalone ml_service/Dockerfile
+# gets away with one solve only because its tiangolo base image preinstalls
+# fastapi/uvicorn/pydantic, which constrains the search.)
+#
+# Keep sqlalchemy here: core/synth_scholar/ imports it directly, independently of the
+# synthscholar package.
 sqlalchemy[asyncio]>=2.0.30

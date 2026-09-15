@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 # logging
@@ -44,13 +45,29 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 logger = logging.getLogger(__name__)
 
-origins = [
+# Browser origins allowed to call this service.
+#
+# This list was missing https://brainkb.org and https://www.brainkb.org entirely —
+# so the production UI was blocked from the chat service, on the main domain, while
+# beta and sandbox worked. It also had "http://127.0.0.1:300" (a typo for :3000) and
+# a schemeless "localhost:3000", which can never match: the browser's Origin header
+# always carries a scheme.
+#
+# The four BrainKB services each keep their own copy of this list and they had
+# drifted apart. CORS_ALLOWED_ORIGINS (comma-separated) adds to the defaults so a
+# new domain does not need a code change in four places.
+_DEFAULT_ORIGINS = [
+    "https://brainkb.org",
+    "https://www.brainkb.org",
     "https://beta.brainkb.org",
     "https://sandbox.brainkb.org",
-    "localhost:3000",
     "http://localhost:3000",
-    "http://127.0.0.1:300",
+    "http://127.0.0.1:3000",
 ]
+origins = sorted({
+    *_DEFAULT_ORIGINS,
+    *(o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()),
+})
 
 app.add_middleware(
     CORSMiddleware,

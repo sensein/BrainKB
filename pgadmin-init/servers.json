@@ -1,0 +1,15 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "BrainKB PostgreSQL",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "brainkb",
+      "Username": "postgres",
+      "Password": "postgres",
+      "SSLMode": "prefer",
+      "Comment": "BrainKB PostgreSQL Database"
+    }
+  }
+}

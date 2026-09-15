@@ -15,7 +15,7 @@
 # @File    : structsense.py
 # @Software: PyCharm
 from fastapi import Request
-from fastapi import APIRouter, File, UploadFile, HTTPException, Form, Depends, WebSocket
+from fastapi import APIRouter, File, UploadFile, HTTPException, Form, Depends, WebSocket, Query
 from fastapi.responses import JSONResponse
 import logging
 from typing import Annotated
@@ -23,12 +23,16 @@ from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes, authenticate_websocket
 from core.shared import parse_yaml_or_json, upsert_structured_resources
 from core.pydantic_models import AgentConfig, TaskConfig, EmbedderConfig, SearchKeyConfig
-from structsense import kickoff
+# NOTE: `kickoff` is deliberately NOT imported here. It was, and it was unused —
+# this module reaches structsense only through core.shared.run_kickoff_with_config,
+# which now imports it defensively. A hard import here defeated that guard and took
+# every endpoint in this router down with it, including the read-only /ner surface.
 import os
 from datetime import datetime, timezone
 from core.shared import upsert_ner_annotations
 from core.shared import (_is_safe_path, run_kickoff_with_config, JobStatus, _job_storage,
-                         _handle_websocket_connection, _get_job)
+                         _handle_websocket_connection, _get_job,
+                         STRUCTSENSE_AVAILABLE, _STRUCTSENSE_IMPORT_ERROR)
 from core.configuration import load_environment
 from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Optional
@@ -71,10 +75,52 @@ def serialize_mongo_document(doc):
 router = APIRouter(tags=["Multi-agent Systems"])
 
 
+# The three extraction WebSocket endpoints below are the only routes in this module
+# that need the structsense package (via core.shared.run_kickoff_with_config).
+# Everything else — GET /ner, GET /structured-resource, the save endpoints,
+# GET /job/{task_id} — only reads and writes stored data, and must keep working:
+# /knowledge-base/ner in the web UI depends on GET /ner.
+#
+# So registration is conditional. When structsense is unimportable (or deliberately
+# not installed — see Dockerfile.unified) those paths do not exist at all, which is
+# a better contract than accepting a WebSocket upgrade and then failing mid-session
+# once the client has already uploaded a PDF.
+def _extraction_ws(path: str):
+    """Register a WebSocket route only if the extraction stack is usable."""
+    def _decorator(fn):
+        if STRUCTSENSE_AVAILABLE:
+            return router.websocket(path)(fn)
+        logger.warning(
+            "Extraction endpoint %s NOT registered — structsense unavailable (%s)",
+            path, _STRUCTSENSE_IMPORT_ERROR,
+        )
+        return fn
+    return _decorator
+
+
 
 @router.get("/ws-info")
 async def ws_info():
+    # Report availability first: the extraction WebSocket routes are not registered
+    # when structsense is unavailable, so a client that trusts this document would
+    # otherwise be told to connect to paths that 404.
+    if not STRUCTSENSE_AVAILABLE:
+        return JSONResponse({
+            "extraction_available": False,
+            "reason": (
+                "The structsense extraction stack is not installed on this server, "
+                "so /ws/ner, /ws/extract-resources and /ws/pdf2reproschema are not "
+                "registered. Stored annotations remain readable via GET /api/ner and "
+                "GET /api/structured-resource."
+            ),
+            "disabled_endpoints": [
+                "/ws/ner/{client_id}",
+                "/ws/extract-resources/{client_id}",
+                "/ws/pdf2reproschema/{client_id}",
+            ],
+        })
     return JSONResponse({
+        "extraction_available": True,
         "connect_to": "/ws/{client_id}/ner or /ws/{client_id}/resource",
         "protocol": [
             {"type": "message", "text": "string (required, non-empty)"},
@@ -111,7 +157,7 @@ async def ws_info():
     })
 
 
-@router.websocket("/ws/ner/{client_id}")
+@_extraction_ws("/ws/ner/{client_id}")
 async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
     """WebSocket endpoint for NER processing with JWT authentication."""
     try:
@@ -149,7 +195,7 @@ async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
         except Exception:
             pass
 
-@router.websocket("/ws/extract-resources/{client_id}")
+@_extraction_ws("/ws/extract-resources/{client_id}")
 async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
     """WebSocket endpoint for NER processing with JWT authentication."""
     try:
@@ -187,7 +233,7 @@ async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
         except Exception:
             pass
 
-@router.websocket("/ws/pdf2reproschema/{client_id}")
+@_extraction_ws("/ws/pdf2reproschema/{client_id}")
 async def websocket_endpoint_ner(websocket: WebSocket, client_id: str):
     """WebSocket endpoint for NER processing with JWT authentication."""
     try:
@@ -556,3 +602,72 @@ async def get_structured_resources(
     except Exception as e:
         logger.error(f"Error retrieving structured resources: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to retrieve structured resources: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# Public (unauthenticated) read surface
+#
+# Backs https://brainkb.org/knowledge-base/ner and .../knowledge-base/resources,
+# which are public pages. They were reading the authenticated endpoints above, so an
+# anonymous visitor got 403 {"detail":"Not authenticated"} — get_current_user rejects
+# for having no credential at all, before require_scopes(["read"]) is ever consulted.
+#
+# These serve the same documents as the authenticated routes. That is deliberate and
+# safe here: saved annotations carry documentName, processedAt, sourceType,
+# sourceContent and the extracted entities, with no submitter identity in the write
+# path (see upsert_ner_annotations / upsert_structured_resources) — so there is
+# nothing per-user to leak and no visibility flag to honour. If per-record visibility
+# is ever added, filter it HERE first.
+#
+# `limit` is capped lower than the authenticated routes: these are open to the
+# internet and the payload includes sourceContent, which can be a whole paper.
+# ---------------------------------------------------------------------------
+
+PUBLIC_MAX_LIMIT = 200
+
+
+@router.get("/public/ner",
+            summary="Get saved NER annotations (public, no auth)",
+            description="Unauthenticated read of saved NER annotations. Backs the "
+                        "public /knowledge-base/ner page.")
+async def get_public_ner_annotations(
+    client: AsyncIOMotorClient = Depends(get_mongo_client),
+    document_name: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=PUBLIC_MAX_LIMIT),
+    skip: int = Query(default=0, ge=0),
+):
+    env = load_environment()
+    db_name = env.get("NER_DATABASE")
+    collection_name = env.get("NER_COLLECTION")
+    if not db_name or not collection_name:
+        raise HTTPException(status_code=500, detail="MongoDB configuration not found")
+    return await _get_documents_from_collection(
+        client=client, db_name=db_name, collection_name=collection_name,
+        document_name=document_name, start_date=start_date, end_date=end_date,
+        limit=limit, skip=skip,
+    )
+
+
+@router.get("/public/structured-resource",
+            summary="Get saved structured resources (public, no auth)",
+            description="Unauthenticated read of saved structured resources. Backs "
+                        "the public /knowledge-base/resources page.")
+async def get_public_structured_resources(
+    client: AsyncIOMotorClient = Depends(get_mongo_client),
+    document_name: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=PUBLIC_MAX_LIMIT),
+    skip: int = Query(default=0, ge=0),
+):
+    env = load_environment()
+    db_name = env.get("NER_DATABASE")
+    if not db_name:
+        raise HTTPException(status_code=500, detail="MongoDB configuration not found")
+    return await _get_documents_from_collection(
+        client=client, db_name=db_name, collection_name="structured_resource",
+        document_name=document_name, start_date=start_date, end_date=end_date,
+        limit=limit, skip=skip,
+    )

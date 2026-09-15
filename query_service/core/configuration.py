@@ -78,6 +78,13 @@ def load_environment(env_name="production"):
         "JWT_POSTGRES_DATABASE_NAME": os.getenv("JWT_POSTGRES_DATABASE_NAME"),
         "JWT_ALGORITHM": os.getenv("JWT_ALGORITHM", "HS256"),
         "JWT_SECRET_KEY": os.getenv("QUERY_SERVICE_JWT_SECRET_KEY"),
+        # Phase 2 SSO: verify RS256 access tokens minted by usermanagement.
+        # Signature is checked against the issuer's published JWKS; the token's
+        # `aud` must equal SSO_AUDIENCE (this service) — a token minted for
+        # another service is rejected. Legacy HS256 tokens still validate too.
+        "SSO_JWKS_URL": os.getenv("QUERY_SERVICE_SSO_JWKS_URL", "http://127.0.0.1:8004/.well-known/jwks.json"),
+        "SSO_ISSUER": os.getenv("QUERY_SERVICE_SSO_ISSUER", "brainkb-usermanagement"),
+        "SSO_AUDIENCE": os.getenv("QUERY_SERVICE_SSO_AUDIENCE", "query_service"),
         # service specific
         "GRAPHDATABASE_USERNAME": os.getenv("GRAPHDATABASE_USERNAME"),
         "GRAPHDATABASE_PASSWORD": os.getenv("GRAPHDATABASE_PASSWORD"),

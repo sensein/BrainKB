@@ -16,13 +16,14 @@
 # @File    : query.py
 # @Software: PyCharm
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from core.graph_database_connection_manager import fetch_data_gdb_async, check_named_graph_exists
 import logging
 from typing import Annotated
 from core.models.user import LoginUserIn
 from core.security import get_current_user, require_scopes
 from core.shared import taxonomy_postprocessing
+from core import rbac
 from fastapi import Depends
 from pydantic import BaseModel, root_validator
 from typing import List
@@ -30,17 +31,42 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.get("/query/registered-named-graphs")
-async def get_named_graphs():
+@router.get(
+    "/query/registered-named-graphs",
+    dependencies=[Depends(require_scopes(["read"]))],
+    summary="List registered named graphs (the registry/catalog)",
+    description=(
+        "Returns the **catalog of named graphs** that have been registered in "
+        "BrainKB — i.e. *which* graphs exist and may be ingested into. Each entry "
+        "carries its `description`, `registered_at` timestamp, and `registered_by` "
+        "(the user who registered it). Data is read from the registry graph "
+        "`https://brainkb.org/metadata/named-graph`.\n\n"
+        "Visibility-filtered: graphs that belong to a **private space** the caller "
+        "is not a member of are omitted (so private graph existence is not leaked). "
+        "Public-space graphs and legacy (unmapped) graphs are always listed.\n\n"
+        "This answers *\"what graphs are available?\"*. It is NOT a history of what "
+        "was ingested — for the ingestion/activity history of a specific graph, use "
+        "`GET /api/provenance/named-graph?iri=…`."
+    ),
+)
+async def get_named_graphs(user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    """List every registered named graph with its registration metadata,
+    filtered so private-space graphs the caller can't access are hidden.
+
+    Registry (catalog) view: one row per graph with description, when it was
+    registered, and by whom. Contrast with /api/provenance/named-graph, which
+    returns the PROV-O activity history (ingestions) that targeted a graph.
+    """
     query_named_graph = """
           PREFIX prov: <http://www.w3.org/ns/prov#>
         PREFIX dcterms: <http://purl.org/dc/terms/>
-        Select distinct ?graph ?description ?registered_at
+        Select distinct ?graph ?description ?registered_at ?registered_by
         WHERE  {
           GRAPH <https://brainkb.org/metadata/named-graph> {
             ?graph dcterms:description ?description;
                prov:generatedAtTime ?registered_at.
-          } 
+            OPTIONAL { ?graph prov:wasAttributedTo ?registered_by. }
+          }
         }
     """
     response = await fetch_data_gdb_async(query_named_graph)
@@ -54,17 +80,45 @@ async def get_named_graphs():
         response_graph[graphs_info["graph"]["value"]] = {
             "graph": graphs_info["graph"]["value"],
             "description": graphs_info["description"]["value"],
-            "registered_at": graphs_info["registered_at"]["value"]
+            "registered_at": graphs_info["registered_at"]["value"],
+            "registered_by": graphs_info.get("registered_by", {}).get("value"),
         }
+
+    # Hide graphs belonging to private spaces the caller is not a member of, so
+    # private graph existence is not leaked via the registry listing.
+    from core.spaces import hidden_graphs_for
+    try:
+        member = user["email"]
+    except (KeyError, TypeError, IndexError):
+        member = None
+    hidden = await hidden_graphs_for(member)
+    if hidden:
+        response_graph = {k: v for k, v in response_graph.items() if k not in hidden}
     return response_graph
 
 
 @router.get("/query/sparql/",
-            dependencies=[Depends(require_scopes(["write","admin"]))],
+            dependencies=[Depends(require_scopes(["admin"]))],
+            summary="Run an arbitrary SPARQL query (admin only)",
+            description=(
+                "Executes a caller-supplied SPARQL query against the graph database. "
+                "This is a powerful, unrestricted capability, so it is gated to the "
+                "**admin** scope only — deliberately NOT the default 'read' scope that "
+                "the fixed-shape read endpoints (e.g. /query/taxonomy, /query/"
+                "registered-named-graphs) use."
+            ),
             )
 async def sparql_query(
     user: Annotated[LoginUserIn, Depends(get_current_user)], sparql_query: str
 ):
+    # Authorization is role-based: arbitrary SPARQL requires the sparql_admin
+    # capability (Admin/SuperAdmin). The JWT scope only gates API access.
+    try:
+        email = user["email"]
+    except (KeyError, TypeError, IndexError):
+        email = None
+    if not await rbac.has_capability(email, rbac.SPARQL_ADMIN):
+        raise HTTPException(status_code=403, detail="Arbitrary SPARQL requires an Admin/SuperAdmin role.")
     response = await fetch_data_gdb_async(sparql_query)
     return response
 

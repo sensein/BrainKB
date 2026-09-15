@@ -26,8 +26,8 @@ from core.configuration import config
 from core.models.database_models import (
     Base, JWTUser, UserProfile, UserActivity, UserContribution, UserRole,
     UserCountry, UserOrganization, UserEducation, UserExpertise, AvailableRole, AvailableCountry,
-    OAuthIdentity, OAuthState, Permission, RolePermission, PageAccess, PageAccessRole, PageAccessUser,
-    AdminSetting,
+    OAuthIdentity, OAuthState, OAuthCliResult, Permission, RolePermission, PageAccess, PageAccessRole, PageAccessUser,
+    AdminSetting, PersonalAccessToken,
 )
 from core.models.user import ActivityType, ContributionStatus
 
@@ -1409,6 +1409,102 @@ class OAuthStateRepository(UserBaseRepository):
             logger.error(f"Error purging expired oauth states: {str(e)}")
 
 
+class OAuthCliResultRepository(UserBaseRepository):
+    """CLI/skill paste-code OAuth results: code -> refresh token, single-use."""
+
+    def __init__(self):
+        super().__init__(OAuthCliResult)
+
+    async def store(self, session: AsyncSession, *, code: str, refresh_token: str,
+                    email: Optional[str], expires_at: datetime) -> OAuthCliResult:
+        row = OAuthCliResult(code=code, refresh_token=refresh_token, email=email,
+                             expires_at=expires_at, consumed=False)
+        session.add(row)
+        await session.flush()
+        return row
+
+    async def consume(self, session: AsyncSession, code: str) -> Optional[OAuthCliResult]:
+        """Return the result for a code if valid (exists, unexpired, unconsumed),
+        marking it consumed. Returns None otherwise."""
+        result = await session.execute(select(OAuthCliResult).where(OAuthCliResult.code == code))
+        row = result.scalar_one_or_none()
+        if row is None or row.consumed or row.expires_at < datetime.utcnow():
+            return None
+        row.consumed = True
+        await session.flush()
+        return row
+
+    async def purge_expired(self, session: AsyncSession) -> None:
+        try:
+            await session.execute(
+                text('DELETE FROM "Web_oauth_cli_result" WHERE expires_at < :now OR consumed = true'),
+                {"now": datetime.utcnow()},
+            )
+            await session.flush()
+        except SQLAlchemyError as e:
+            logger.error(f"Error purging oauth cli results: {str(e)}")
+
+
+class PersonalAccessTokenRepository(UserBaseRepository):
+    """Personal Access Tokens (opaque, hashed at rest). Used by the CLI/MCP to
+    authenticate without a browser after a one-time mint. Only the SHA-256 hash
+    is stored; the plaintext is returned to the user once at creation."""
+
+    def __init__(self):
+        super().__init__(PersonalAccessToken)
+
+    async def create(self, session: AsyncSession, *, token_hash: str, prefix: str,
+                     name: str, profile_id: Optional[int], jwt_user_id: Optional[int],
+                     email: str, expires_at: datetime) -> PersonalAccessToken:
+        row = PersonalAccessToken(
+            token_hash=token_hash, prefix=prefix, name=name or "", profile_id=profile_id,
+            jwt_user_id=jwt_user_id, email=email, expires_at=expires_at, revoked=False,
+        )
+        session.add(row)
+        await session.flush()
+        return row
+
+    async def get_valid_by_hash(self, session: AsyncSession, token_hash: str) -> Optional[PersonalAccessToken]:
+        """Return the PAT for a hash if it is usable (exists, not revoked, not
+        expired), else None. Touches last_used_at as a side effect."""
+        result = await session.execute(
+            select(PersonalAccessToken).where(PersonalAccessToken.token_hash == token_hash)
+        )
+        row = result.scalar_one_or_none()
+        if row is None or row.revoked or row.expires_at < datetime.utcnow():
+            return None
+        row.last_used_at = datetime.utcnow()
+        await session.flush()
+        return row
+
+    async def list_for_profile(self, session: AsyncSession, profile_id: int) -> List[PersonalAccessToken]:
+        result = await session.execute(
+            select(PersonalAccessToken)
+            .where(PersonalAccessToken.profile_id == profile_id)
+            .order_by(PersonalAccessToken.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def get_owned(self, session: AsyncSession, pat_id: int,
+                        profile_id: int) -> Optional[PersonalAccessToken]:
+        result = await session.execute(
+            select(PersonalAccessToken).where(
+                PersonalAccessToken.id == pat_id,
+                PersonalAccessToken.profile_id == profile_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def revoke(self, session: AsyncSession, pat_id: int, profile_id: int) -> bool:
+        """Revoke a PAT the caller owns. Returns True if a row was revoked."""
+        row = await self.get_owned(session, pat_id, profile_id)
+        if row is None or row.revoked:
+            return False
+        row.revoked = True
+        await session.flush()
+        return True
+
+
 class PermissionRepository(UserBaseRepository):
     def __init__(self):
         super().__init__(Permission)
@@ -1590,6 +1686,8 @@ available_role_repo = AvailableRoleRepository()
 available_country_repo = AvailableCountryRepository()
 oauth_identity_repo = OAuthIdentityRepository()
 oauth_state_repo = OAuthStateRepository()
+oauth_cli_result_repo = OAuthCliResultRepository()
+personal_access_token_repo = PersonalAccessTokenRepository()
 permission_repo = PermissionRepository()
 role_permission_repo = RolePermissionRepository()
 page_access_repo = PageAccessRepository() 
@@ -1652,3 +1750,85 @@ class AdminSettingRepository:
 
 
 admin_setting_repo = AdminSettingRepository()
+
+
+# ---------------------------------------------------------------------------
+# Identity provisioning (Phase 1 unification)
+# ---------------------------------------------------------------------------
+
+async def provision_identity(
+    session: AsyncSession,
+    *,
+    email: str,
+    full_name: Optional[str] = None,
+    password_hash: Optional[str] = None,
+    default_role: str = "Curator",
+    existing_profile: Optional[UserProfile] = None,
+) -> tuple:
+    """Single source of truth for creating/linking a BrainKB identity.
+
+    Idempotently guarantees that, for ``email``, there is:
+      * a canonical ``Web_user_profile`` (the user of record),
+      * a ``Web_jwtuser`` credential row linked to it via ``profile_id``,
+      * at least one role (``default_role``) on the profile,
+      * ``Admin`` + ``SuperAdmin`` if the email is in the bootstrap allowlist.
+
+    The caller owns the session/transaction (this does NOT commit). OAuth's rich
+    profile matching (by oauth-identity / orcid) stays in the router, which
+    passes the already-resolved profile via ``existing_profile``; password
+    onboarding passes just ``email`` + ``password_hash``. A pre-existing
+    credential's password is never overwritten here (login stays deterministic).
+
+    Returns ``(profile, jwt_user, role_names)``.
+    """
+    import secrets as _secrets
+    from core.security import get_password_hash  # lazy: avoid import cycle
+    from core.models.user import UserRoleEnum
+
+    email = (email or "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required to provision an identity")
+    display_name = full_name or email.split("@")[0]
+
+    # 1) Canonical profile — reuse the resolved one, else find/create by email.
+    profile = existing_profile or await user_profile_repo.get_by_email(session, email)
+    if profile is None:
+        profile = await user_profile_repo.create_profile(session, name=display_name, email=email)
+
+    # 2) Credential row (get-or-create). get_by_email_any_status avoids
+    #    re-inserting (and colliding on the unique email) for inactive shells.
+    jwt_user = await jwt_user_repo.get_by_email_any_status(session, email)
+    if jwt_user is None:
+        # OAuth/no-password onboarding gets an unusable random secret; a real
+        # hash is used only when the caller set a password (registration).
+        secret = password_hash or get_password_hash(_secrets.token_urlsafe(48))
+        jwt_user = await jwt_user_repo.create_user(
+            session=session, full_name=display_name, email=email, password=secret,
+        )
+
+    # 3) Link credential -> profile (the whole point of Phase 1). Set only when
+    #    unset/stale so we never thrash an already-correct link.
+    if getattr(jwt_user, "profile_id", None) != profile.id:
+        jwt_user.profile_id = profile.id
+        jwt_user.updated_at = datetime.utcnow()
+        await session.flush()
+
+    # 4) Default role if the profile has none yet.
+    role_names = await user_role_repo.get_user_role_names(session, profile.id)
+    if not role_names and default_role:
+        await user_role_repo.assign_role(
+            session, profile_id=profile.id, role=default_role, is_active=True,
+        )
+        role_names = [default_role]
+
+    # 5) Bootstrap-superadmin allowlist: elevate on first sight. Seed both Admin
+    #    (permissions / page access) and SuperAdmin (the protected marker).
+    if (profile.email or "").lower() in config.bootstrap_superadmin_emails:
+        for role_name in (UserRoleEnum.ADMIN.value, UserRoleEnum.SUPERADMIN.value):
+            if role_name not in role_names:
+                await user_role_repo.assign_role(
+                    session, profile_id=profile.id, role=role_name, is_active=True,
+                )
+                role_names.append(role_name)
+
+    return profile, jwt_user, role_names

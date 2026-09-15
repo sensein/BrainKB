@@ -22,8 +22,11 @@ Environment variables consumed
 ``GRAPHDATABASE_TYPE``                        Informational; only ``OXIGRAPH`` triggers
                                               the GSP path. Default ``OXIGRAPH``.
 ``SYNTH_SCHOLAR_PUSH_TO_GRAPHDB``             Feature flag (``true``/``false``).
-                                              Default ``true`` — set to ``false`` to
-                                              disable the push without unsetting creds.
+                                              **Default ``false``** — reviews now
+                                              reach BrainKB through the query_service
+                                              ingest pipeline instead, which is what
+                                              gives them provenance. See the note in
+                                              ``_make_config`` before enabling.
 ``SYNTH_SCHOLAR_GRAPHDB_PATH``                Endpoint path (default ``/store`` for GSP,
                                               use ``/update`` for SPARQL Update).
 ``SYNTH_SCHOLAR_GRAPHDB_NAMED_GRAPH_PREFIX``  IRI prefix for review-specific named graphs.
@@ -93,7 +96,23 @@ def _make_config():
     optional ``synthscholar`` import fails, or when no usable endpoint can
     be composed.
     """
-    if not _truthy(os.getenv("SYNTH_SCHOLAR_PUSH_TO_GRAPHDB"), default=True):
+    # Default OFF. This path writes to Oxigraph directly, which means it produces no
+    # ingest job, no PROV-O provenance and no search-index row — the triples land in
+    # a named graph that belongs to no space, so nothing except an Admin SPARQL query
+    # can see them. Reviews now reach BrainKB the same way all other RDF does: the
+    # TTL export is ingested through query_service (see the `brainkb` skill,
+    # "Ingest a SynthScholar review"), which attributes the write to a real user.
+    #
+    # Leaving this on alongside that ingest gives every review TWO graphs, not one.
+    # Review ids are unique, so reviews never collide with each other — the problem
+    # is that the two writers disagree about the IRI by one character.
+    # _named_graph_for below returns prefix + review_id with no trailing slash, while
+    # the ingest path registers and writes .../<review_id>/ (query_service normalises
+    # the registry lookup but writes the IRI verbatim). The result is a governed graph
+    # plus an unregistered shadow copy that only an Admin SPARQL query can see, which
+    # is worse than either outcome alone: search and provenance describe one of them
+    # and the store holds both.
+    if not _truthy(os.getenv("SYNTH_SCHOLAR_PUSH_TO_GRAPHDB"), default=False):
         return None
 
     try:
