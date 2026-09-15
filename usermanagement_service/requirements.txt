@@ -4,7 +4,11 @@ uvicorn==0.29.0
 gunicorn==21.2.0
 
 # HTTP requests
-aiohttp==3.9.1
+# Bumped from 3.9.1 to match ml_service's pin — this file installs LAST in
+# Dockerfile.unified's shared Python environment, so a lower pin here was
+# silently downgrading aiohttp after ml_service's install, reintroducing the
+# aiohttp.SocketTimeoutError crash (see ml_service/requirements.txt).
+aiohttp==3.14.3
 
 # Logging
 rich==13.9.4
