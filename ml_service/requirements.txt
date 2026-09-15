@@ -3,7 +3,10 @@ fastapi==0.115.3
 uvicorn==0.29.0
 gunicorn==21.2.0
 
-aiohttp==3.8.6
+# Bumped from 3.8.6 — too old for a compatibility shim in newer `openai`
+# (pulled in transitively via synthscholar -> crewai -> litellm -> openai),
+# which references aiohttp.SocketTimeoutError (added in a later aiohttp release).
+aiohttp==3.14.3
 async-timeout==4.0.3
 # Logging
 rich==13.9.4
@@ -38,11 +41,16 @@ sse-starlette==1.8.2
 cffi==1.17.1
 
 # Weaviate and gRPC dependencies
+# protobuf/grpcio* bumped from 4.25.3/1.60.2 — the old pins conflicted with
+# synthscholar's transitive deps (crewai -> chromadb -> opentelemetry-exporter-otlp-proto-grpc),
+# which need a protobuf runtime new enough to satisfy their generated pb2 code
+# ("google.protobuf.runtime_version" gencode/runtime check). Verified
+# weaviate-client==4.16.3 still imports fine against these newer versions.
 weaviate-client==4.16.3
-protobuf==4.25.3
-grpcio==1.60.2
-grpcio-tools==1.60.2
-grpcio-health-checking==1.60.2
+protobuf==7.36.1
+grpcio==1.84.0
+grpcio-tools==1.84.0
+grpcio-health-checking==1.84.0
 
 PyMuPDF==1.26.5
 ollama==0.6.0
