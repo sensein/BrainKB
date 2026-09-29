@@ -204,14 +204,25 @@ async def oauth_login(
 
 class _CliStartIn(BaseModel):
     provider: str = "globus"
+    # Optional: send the browser here with ?code=<paste-code> instead of showing
+    # the code. Must exactly match an entry of USERMANAGEMENT_CLI_RETURN_URLS —
+    # the code is a bearer handle for a refresh token, so an open redirect here
+    # would hand it to whoever chose the URL.
+    return_to: Optional[str] = None
 
 
 @router.post("/auth/cli/start", tags=["SSO"])
 async def oauth_cli_start(body: _CliStartIn):
     """Start an OAuth flow for the MCP/skill (paste-code). Returns an authorize URL;
     open it in a browser, sign in with the provider, then paste the short code the
-    browser shows into `brainkb_finish_login`. No web UI required."""
-    authorize_url, state = await _begin_oauth(body.provider, None, "cli")
+    browser shows into `brainkb_finish_login`. No web UI required.
+
+    With an allowlisted `return_to`, the browser is redirected there with the code
+    instead (used by the MCP server's OAuth flow for connector apps)."""
+    return_to = (body.return_to or "").strip() or None
+    if return_to is not None and return_to not in config.cli_return_urls:
+        raise HTTPException(status_code=400, detail="return_to is not an allowed URL")
+    authorize_url, state = await _begin_oauth(body.provider, return_to, "cli")
     return {
         "authorize_url": authorize_url,
         "state": state,
@@ -407,6 +418,11 @@ async def oauth_callback(
 
     # CLI/skill login: show the paste-code page instead of redirecting to the SPA.
     if login_mode == "cli":
+        # Re-checked here, not just at start: the allowlist may have changed in
+        # the ten minutes the state row lived.
+        if redirect_after_login and redirect_after_login in config.cli_return_urls:
+            return RedirectResponse(
+                f"{redirect_after_login}?{urlencode({'code': cli_code})}", status_code=303)
         return HTMLResponse(_cli_success_page(cli_code))
 
     qs = {"token": token}

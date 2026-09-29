@@ -91,6 +91,9 @@ def load_environment(env_name="env"):
         # OAuth / Admin Bootstrap
         "USERMANAGEMENT_PUBLIC_BASE_URL": os.getenv("USERMANAGEMENT_PUBLIC_BASE_URL", "http://localhost:8004"),
         "USERMANAGEMENT_FRONTEND_CALLBACK_URL": os.getenv("USERMANAGEMENT_FRONTEND_CALLBACK_URL", "http://localhost:3000/auth/callback"),
+        # Where a CLI login may send the browser back with ?code= (the MCP server's
+        # OAuth callback). None here = the default in Configuration.cli_return_urls.
+        "USERMANAGEMENT_CLI_RETURN_URLS": os.getenv("USERMANAGEMENT_CLI_RETURN_URLS"),
         "USERMANAGEMENT_OAUTH_TOKEN_ENC_KEY": os.getenv("USERMANAGEMENT_OAUTH_TOKEN_ENC_KEY"),
         # SuperAdmin bootstrap allowlist. Comma-separated emails. Seeded users
         # get the SuperAdmin + Admin roles on first sight; the SuperAdmin role
@@ -254,6 +257,15 @@ class Configuration:
     @property
     def frontend_callback_url(self) -> str:
         return self._env_vars.get("USERMANAGEMENT_FRONTEND_CALLBACK_URL", "http://localhost:3000/auth/callback")
+
+    @property
+    def cli_return_urls(self) -> list:
+        """Exact URLs a CLI (paste-code) login may redirect to with ?code=... instead
+        of showing the code. The MCP server's OAuth callback uses this so apps like
+        Perplexity or claude.ai finish sign-in without a copy-paste step."""
+        raw = self._env_vars.get("USERMANAGEMENT_CLI_RETURN_URLS") or (
+            "https://mcp.brainkb.org/oauth/callback,https://mcp.sandbox.brainkb.org/oauth/callback")
+        return [u.strip() for u in raw.split(",") if u.strip()]
 
     @property
     def oauth_token_enc_key(self) -> Optional[str]:
