@@ -231,6 +231,20 @@ atomic cross-worker claim, restart recovery) and the job completes immediately. 
   graphs, and a mirror of each space manifest — the graph database is the source of
   truth for graph data and provenance.
 
+## Query-service tests
+
+From `query_service/`, install `requirements.txt` plus `pytest`, `PyYAML`,
+`requests`, and `python-dotenv`, then run `python -m pytest core/tests -q`.
+The same command runs on pull requests in GitHub Actions. The ingestion/query API
+tests use a synthetic RDF fixture and replace Postgres, Oxigraph, and identity
+lookups with local test doubles. They check that submission saves the exact
+payload and creates a pending job, rejects unregistered graphs and identity
+impersonation, and does not list a private graph to a non-member.
+
+These tests do **not** prove that a background job writes RDF to Oxigraph or
+that provenance survives a database round trip. A separate integration suite
+with disposable Postgres and Oxigraph services is still needed for that.
+
 ### Acknowledgements
 Special thanks to the authors of the resources below who helped with some best practices.
 - Building Python Microservices with FastAPI

@@ -1,0 +1,27 @@
+name: Query service tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  query-service:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: query_service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install query service and test dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pytest PyYAML requests python-dotenv
+      - name: Test ingestion and query API
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          QUERY_SERVICE_JWT_SECRET_KEY: brainkb-local-test-secret
+        run: python -m pytest core/tests -q
