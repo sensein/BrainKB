@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import mock_open, patch
 import yaml
-from ..shared import read_yaml_config, yaml_config_to_query_dict
+from ..shared import read_yaml_config, yaml_config_list_to_query_dict
 
 
 class TestYamlConfigFunctions(unittest.TestCase):
@@ -41,14 +41,14 @@ class TestYamlConfigFunctions(unittest.TestCase):
                 {"name": "Query2", "value": 200},
             ]
         }
-        result = yaml_config_to_query_dict(yaml_data, "rapid_release", "name", "value")
+        result = yaml_config_list_to_query_dict(yaml_data, "rapid_release", "name", "value")
         expected = [{"Query1": 100}, {"Query2": 200}]
         self.assertEqual(result, expected)
 
     def test_yaml_config_to_query_dict_missing_key(self):
         # Test that a missing key returns an empty list
         yaml_data = {"not_rapid_release": [{"name": "Query1", "value": 100}]}
-        result = yaml_config_to_query_dict(yaml_data, "rapid_release", "name", "value")
+        result = yaml_config_list_to_query_dict(yaml_data, "rapid_release", "name", "value")
         self.assertEqual(result, [])
 
     def test_yaml_config_to_query_dict_key_not_in_item(self):
@@ -59,14 +59,14 @@ class TestYamlConfigFunctions(unittest.TestCase):
                 {"name": "Query2"},  # Missing value
             ]
         }
-        result = yaml_config_to_query_dict(yaml_data, "rapid_release", "name", "value")
+        result = yaml_config_list_to_query_dict(yaml_data, "rapid_release", "name", "value")
         expected = [{"Query1": 100}]
         self.assertEqual(result, expected)
 
     def test_yaml_config_to_query_dict_empty(self):
         # Test an empty list in YAML data
         yaml_data = {"rapid_release": []}
-        result = yaml_config_to_query_dict(yaml_data, "rapid_release", "name", "value")
+        result = yaml_config_list_to_query_dict(yaml_data, "rapid_release", "name", "value")
         self.assertEqual(result, [])
 
 
