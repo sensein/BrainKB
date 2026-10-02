@@ -3,7 +3,6 @@ name: Query service tests
 on:
   pull_request:
   push:
-    branches: [main]
 
 jobs:
   query-service:
