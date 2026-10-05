@@ -18,6 +18,16 @@ from core.oauth.base import OAuthProvider, TokenResponse, OAuthUserInfo
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+# Retry only failed *connections* (DNS lookup, TCP connect). Those never send the
+# request, so a retry can't double-spend the one-time authorization code. Guards
+# against transient resolver failures in the container ("[Errno -3] Temporary
+# failure in name resolution"), which otherwise fail the whole sign-in.
+_CONNECT_RETRIES = 3
+
+
+def _client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=_TIMEOUT, transport=httpx.AsyncHTTPTransport(retries=_CONNECT_RETRIES))
 
 
 class GitHubProvider(OAuthProvider):
@@ -48,7 +58,7 @@ class GitHubProvider(OAuthProvider):
             "redirect_uri": redirect_uri,
         }
         headers = {"Accept": "application/json"}
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with _client() as client:
             resp = await client.post(self.TOKEN, data=data, headers=headers)
             resp.raise_for_status()
             payload = resp.json()
@@ -64,7 +74,7 @@ class GitHubProvider(OAuthProvider):
 
     async def fetch_userinfo(self, *, access_token: str, token_response: TokenResponse) -> OAuthUserInfo:
         headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github+json"}
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with _client() as client:
             u = await client.get(self.USER, headers=headers)
             u.raise_for_status()
             user = u.json()
@@ -134,7 +144,7 @@ class ORCIDProvider(OAuthProvider):
         if code_verifier:
             data["code_verifier"] = code_verifier
         headers = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with _client() as client:
             resp = await client.post(self.token_endpoint, data=data, headers=headers)
             resp.raise_for_status()
             payload = resp.json()
@@ -151,7 +161,7 @@ class ORCIDProvider(OAuthProvider):
 
     async def fetch_userinfo(self, *, access_token: str, token_response: TokenResponse) -> OAuthUserInfo:
         headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with _client() as client:
             resp = await client.get(self.userinfo_endpoint, headers=headers)
             resp.raise_for_status()
             user = resp.json()
@@ -204,7 +214,7 @@ class GlobusProvider(OAuthProvider):
         if code_verifier:
             data["code_verifier"] = code_verifier
         auth = (self.client_id, self.client_secret)
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with _client() as client:
             resp = await client.post(self.TOKEN, data=data, auth=auth)
             resp.raise_for_status()
             payload = resp.json()
@@ -221,7 +231,7 @@ class GlobusProvider(OAuthProvider):
 
     async def fetch_userinfo(self, *, access_token: str, token_response: TokenResponse) -> OAuthUserInfo:
         headers = {"Authorization": f"Bearer {access_token}"}
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with _client() as client:
             resp = await client.get(self.USERINFO, headers=headers)
             resp.raise_for_status()
             user = resp.json()
