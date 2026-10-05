@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlencode
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
 
@@ -301,6 +302,14 @@ async def oauth_callback(
     try:
         token_resp = await provider.exchange_code(code=code, redirect_uri=redirect_uri, code_verifier=code_verifier)
         userinfo = await provider.fetch_userinfo(access_token=token_resp.access_token, token_response=token_resp)
+    except httpx.TransportError as e:
+        # Network-level failure reaching the provider (DNS, connect, timeout), after
+        # the client's own connect retries. Not the user's fault; say so plainly
+        # instead of surfacing a raw errno.
+        logger.exception(f"OAuth callback could not reach {provider_name}")
+        return RedirectResponse(_frontend_error_redirect(
+            f"Could not reach {provider.name} to finish sign-in ({type(e).__name__}). "
+            "Please try again in a moment."), status_code=302)
     except Exception as e:
         logger.exception(f"OAuth callback failed for {provider_name}")
         return RedirectResponse(_frontend_error_redirect(str(e)), status_code=302)
