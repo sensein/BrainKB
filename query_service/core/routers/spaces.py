@@ -140,15 +140,18 @@ async def get_space(slug: str, user: Annotated[Optional[object], Depends(get_cur
     if not space:
         return JSONResponse({"error": "space not found"}, status_code=404)
     member = _agent(user) if user else None
+    role = await sp.member_role(space["space_id"], member)
     if space["visibility"] != "public":
         # Private: needs membership AND a role that grants read_private
         # (a JWT user with no role gets public content only).
-        role = await sp.member_role(space["space_id"], member)
         if role is None or not await rbac.has_capability(member, rbac.READ_PRIVATE):
             raise HTTPException(403, "private space — membership and a role are required")
     # Fine-grained per-space read rules (if any) further restrict who can read.
     if not await sp.space_action_permitted(space, "read", member):
         raise HTTPException(403, "restricted by a space access rule (read)")
+    # Owner/member emails are for members and admins only, not public readers.
+    if role is None and not await rbac.is_admin(member):
+        return sp.redact_people(space)
     return space
 
 
