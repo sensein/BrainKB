@@ -118,6 +118,15 @@ async def get_space(slug: str) -> Optional[Dict[str, Any]]:
         }
 
 
+def redact_people(space: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy of a space manifest without owner/member emails, for callers who can
+    read a public space but aren't its members (anonymous included)."""
+    out = dict(space)
+    out["owner"] = None
+    out["members"] = []
+    return out
+
+
 async def get_space_for_graph(named_graph_iri: str) -> Optional[Dict[str, Any]]:
     """Return the space that owns a named graph, or None if the graph is unmapped."""
     async with get_db_connection() as conn:
@@ -211,7 +220,9 @@ async def list_visible_spaces(member: Optional[str]) -> List[Dict[str, Any]]:
             access = "owner" if is_owner else ("member" if your_role else "public")
             out.append({
                 "slug": r["slug"], "name": r["name"], "description": r["description"],
-                "owner": r["owner"], "visibility": r["visibility"],
+                # Emails are personal data: only the space's own members see who
+                # owns it. Public visibility opens the CONTENT, not the people.
+                "owner": r["owner"] if your_role else None, "visibility": r["visibility"],
                 "space_type": r["space_type"], "iri": space_iri(r["slug"]),
                 "created_at": r["created_at"],
                 "your_role": your_role,
