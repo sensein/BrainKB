@@ -79,6 +79,11 @@ jobs:
               echo "Expected a failed round-trip assertion for $fault"
               exit 1
             fi
+            if [ "$fault" = skip-provenance ]; then
+              grep -q 'Missing provenance for job' "fault-$fault.log"
+            else
+              grep -q 'Stored domain graph differs from fixture' "fault-$fault.log"
+            fi
           done
       - name: Capture service logs
         if: failure()

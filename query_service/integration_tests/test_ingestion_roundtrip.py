@@ -27,16 +27,21 @@ from rdflib.compare import isomorphic
 
 from core import database, security, spaces
 from core.provenance import (
-    BRAINKB, PROV, PROVENANCE_GRAPH, activity_ref, agent_ref, delta_graph_for,
+    BRAINKB,
+    PROV,
+    PROVENANCE_GRAPH,
+    activity_ref,
+    agent_ref,
+    delta_graph_for,
 )
 from core.routers import insert, query
 from core.shared import get_oxigraph_endpoint
 
-FIXTURE = '''@prefix ex: <https://example.org/brainkb-test/> .
+FIXTURE = """@prefix ex: <https://example.org/brainkb-test/> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 ex:region a ex:BrainRegion ; ex:label "Synthetic region"@en .
 ex:cell a ex:CellType ; ex:locatedIn ex:region ; ex:count "2"^^xsd:integer .
-'''
+"""
 
 
 def job_schema_statements():
@@ -47,10 +52,17 @@ def job_schema_statements():
     """
     source = Path(__file__).parents[1] / "core" / "main.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
-    startup = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef)
-                   and n.name == "startup_event")
-    tables = {"jobs", "job_results", "job_processing_log", "spaces",
-              "space_members", "space_graphs"}
+    startup = next(
+        n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "startup_event"
+    )
+    tables = {
+        "jobs",
+        "job_results",
+        "job_processing_log",
+        "spaces",
+        "space_members",
+        "space_graphs",
+    }
     statements = []
     for node in ast.walk(startup):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
@@ -73,8 +85,10 @@ class IngestionRoundTripTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.assertIn(database.DB_SETTINGS["host"], ("127.0.0.1", "localhost"))
         self.assertEqual(database.DB_SETTINGS["database"], "brainkb_integration")
-        self.assertIn(get_oxigraph_endpoint(), ("http://127.0.0.1:17878/store",
-                                              "http://localhost:17878/store"))
+        self.assertIn(
+            get_oxigraph_endpoint(),
+            ("http://127.0.0.1:17878/store", "http://localhost:17878/store"),
+        )
         # Dedicated schema confines relational cleanup to this run.
         self.schema = "integration_" + uuid.uuid4().hex
         self.graph = "https://example.org/brainkb-test/graphs/" + uuid.uuid4().hex + "/"
@@ -82,7 +96,9 @@ class IngestionRoundTripTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.pool = await asyncpg.create_pool(
-            min_size=1, max_size=4, **database.DB_SETTINGS,
+            min_size=1,
+            max_size=4,
+            **database.DB_SETTINGS,
             server_settings={"search_path": self.schema},
         )
         self.addAsyncCleanup(self.cleanup_services)
@@ -99,12 +115,14 @@ class IngestionRoundTripTests(unittest.IsolatedAsyncioTestCase):
         # JWT parsing/scope enforcement stays real. User lookup and global-role
         # lookup stand in for the separate Django identity service.
         self.user = {"id": 7, "email": "researcher@example.org"}
-        self.identity = patch.object(security, "get_user", new_callable=AsyncMock,
-                                     return_value=self.user)
+        self.identity = patch.object(
+            security, "get_user", new_callable=AsyncMock, return_value=self.user
+        )
         self.identity.start()
         self.addCleanup(self.identity.stop)
-        self.role = patch.object(insert.rbac, "has_capability", new_callable=AsyncMock,
-                                 return_value=True)
+        self.role = patch.object(
+            insert.rbac, "has_capability", new_callable=AsyncMock, return_value=True
+        )
         self.role.start()
         self.addCleanup(self.role.stop)
         # Search indexing is outside this test's persistence/provenance scope.
@@ -120,8 +138,10 @@ class IngestionRoundTripTests(unittest.IsolatedAsyncioTestCase):
             fault_patch = patch.object(insert, "write_provenance", new_callable=AsyncMock)
         elif fault == "wrong-graph":
             merge = insert.merge_delta_into_target
+
             async def wrong_graph(delta, target):
                 return await merge(delta, target + "wrong/")
+
             fault_patch = patch.object(insert, "merge_delta_into_target", side_effect=wrong_graph)
         elif fault:
             raise ValueError(f"Unknown test fault: {fault}")
@@ -134,18 +154,27 @@ class IngestionRoundTripTests(unittest.IsolatedAsyncioTestCase):
         self.app = FastAPI()
         self.app.include_router(insert.router, prefix="/api")
         self.app.include_router(query.router, prefix="/api")
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app),
-                                        base_url="http://test", timeout=10)
+        self.client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=self.app), base_url="http://test", timeout=10
+        )
         self.addAsyncCleanup(self.client.aclose)
-        token = jwt.encode({"sub": self.user["email"], "scopes": ["read", "write", "admin"]},
-                           security.SECRET_KEY, algorithm=security.ALGORITHM)
+        token = jwt.encode(
+            {"sub": self.user["email"], "scopes": ["read", "write", "admin"]},
+            security.SECRET_KEY,
+            algorithm=security.ALGORITHM,
+        )
         self.headers = {"Authorization": f"Bearer {token}"}
         async with httpx.AsyncClient(timeout=10) as client:
-            ready = await client.get(get_oxigraph_endpoint().replace("/store", "/query"),
-                                     params={"query": "ASK {}"})
+            ready = await client.get(
+                get_oxigraph_endpoint().replace("/store", "/query"), params={"query": "ASK {}"}
+            )
             ready.raise_for_status()
-        response = await self.client.post("/api/register-named-graph", headers=self.headers,
-            json={"named_graph_url": self.graph, "description": "Synthetic integration fixture"})
+        response = await self.api_request(
+            "POST",
+            "/api/register-named-graph",
+            headers=self.headers,
+            json={"named_graph_url": self.graph, "description": "Synthetic integration fixture"},
+        )
         self.assertEqual(response.status_code, 200, response.text)
 
     async def cleanup_services(self):
@@ -156,28 +185,43 @@ class IngestionRoundTripTests(unittest.IsolatedAsyncioTestCase):
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
         async with httpx.AsyncClient(timeout=10) as client:
-            for graph in [self.graph, self.graph + "wrong/"] + [delta_graph_for(job) for job in self.jobs]:
+            for graph in [self.graph, self.graph + "wrong/"] + [
+                delta_graph_for(job) for job in self.jobs
+            ]:
                 response = await client.delete(get_oxigraph_endpoint(), params={"graph": graph})
                 if response.status_code not in (200, 204, 404):
                     response.raise_for_status()
             # Delete only the registry entry and provenance minted for this run.
-            prefixes = [f"https://brainkb.org/prov/{kind}/{job}"
-                        for job in self.jobs for kind in ("activity", "bundle", "file", "delta")]
+            prefixes = [
+                f"https://brainkb.org/prov/{kind}/{job}"
+                for job in self.jobs
+                for kind in ("activity", "bundle", "file", "delta")
+            ]
             update = f"DELETE WHERE {{ GRAPH <https://brainkb.org/metadata/named-graph> {{ <{self.graph}> ?p ?o }} }};"
             for prefix in prefixes:
-                update += f'''DELETE {{ GRAPH <{PROVENANCE_GRAPH}> {{ ?s ?p ?o }} }}
-WHERE {{ GRAPH <{PROVENANCE_GRAPH}> {{ ?s ?p ?o FILTER(STRSTARTS(STR(?s), "{prefix}")) }} }};'''
-            response = await client.post(get_oxigraph_endpoint().replace("/store", "/update"),
-                content=update, headers={"Content-Type": "application/sparql-update"})
+                update += f"""DELETE {{ GRAPH <{PROVENANCE_GRAPH}> {{ ?s ?p ?o }} }}
+WHERE {{ GRAPH <{PROVENANCE_GRAPH}> {{ ?s ?p ?o FILTER(STRSTARTS(STR(?s), "{prefix}")) }} }};"""
+            response = await client.post(
+                get_oxigraph_endpoint().replace("/store", "/update"),
+                content=update,
+                headers={"Content-Type": "application/sparql-update"},
+            )
             response.raise_for_status()
         async with self.pool.acquire() as conn:
             await conn.execute(f'DROP SCHEMA IF EXISTS "{self.schema}" CASCADE')
         await self.pool.close()
 
+    async def api_request(self, method, path, **kwargs):
+        return await asyncio.wait_for(self.client.request(method, path, **kwargs), timeout=10)
+
     async def submit(self, payload=FIXTURE, graph=None, user_id="7"):
-        response = await self.client.post("/api/insert/raw/knowledge-graph-triples",
+        response = await self.api_request(
+            "POST",
+            "/api/insert/raw/knowledge-graph-triples",
             params={"user_id": user_id, "named_graph_iri": graph or self.graph},
-            content=payload, headers={**self.headers, "Content-Type": "text/plain"})
+            content=payload,
+            headers={**self.headers, "Content-Type": "text/plain"},
+        )
         if response.status_code == 200:
             self.jobs.append(response.json()["job_id"])
         return response
@@ -186,8 +230,12 @@ WHERE {{ GRAPH <{PROVENANCE_GRAPH}> {{ ?s ?p ?o FILTER(STRSTARTS(STR(?s), "{pref
         deadline = time.monotonic() + 30
         last = None
         while time.monotonic() < deadline:
-            response = await self.client.get("/api/insert/user/jobs/detail",
-                params={"job_id": job_id, "user_id": "7"}, headers=self.headers)
+            response = await self.api_request(
+                "GET",
+                "/api/insert/user/jobs/detail",
+                params={"job_id": job_id, "user_id": "7"},
+                headers=self.headers,
+            )
             self.assertEqual(response.status_code, 200, response.text)
             last = response.json()
             if last["status"] in ("done", "failed", "partial", "error"):
@@ -197,8 +245,12 @@ WHERE {{ GRAPH <{PROVENANCE_GRAPH}> {{ ?s ?p ?o FILTER(STRSTARTS(STR(?s), "{pref
 
     async def stored_graph(self, graph):
         # Retrieval passes through the real query route and SPARQL client.
-        response = await self.client.get("/api/query/sparql/", headers=self.headers,
-            params={"sparql_query": f"SELECT ?s ?p ?o WHERE {{ GRAPH <{graph}> {{ ?s ?p ?o }} }}"})
+        response = await self.api_request(
+            "GET",
+            "/api/query/sparql/",
+            headers=self.headers,
+            params={"sparql_query": f"SELECT ?s ?p ?o WHERE {{ GRAPH <{graph}> {{ ?s ?p ?o }} }}"},
+        )
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertEqual(body["status"], "success", body)
@@ -210,8 +262,11 @@ WHERE {{ GRAPH <{PROVENANCE_GRAPH}> {{ ?s ?p ?o FILTER(STRSTARTS(STR(?s), "{pref
                 if item["type"] == "uri":
                     terms.append(URIRef(item["value"]))
                 else:
-                    terms.append(Literal(item["value"], lang=item.get("xml:lang"),
-                                         datatype=item.get("datatype")))
+                    terms.append(
+                        Literal(
+                            item["value"], lang=item.get("xml:lang"), datatype=item.get("datatype")
+                        )
+                    )
             result.add(tuple(terms))
         return result
 
@@ -232,7 +287,10 @@ WHERE {{ GRAPH <{PROVENANCE_GRAPH}> {{ ?s ?p ?o FILTER(STRSTARTS(STR(?s), "{pref
             if time.monotonic() >= deadline:
                 self.fail(f"Missing provenance for job {job}, graph {self.graph}")
             await asyncio.sleep(0.1)
-        self.assertTrue(isomorphic(actual, expected), actual.serialize(format="turtle"))
+        self.assertTrue(
+            isomorphic(actual, expected),
+            "Stored domain graph differs from fixture: " + actual.serialize(format="turtle"),
+        )
         self.assertIn((activity_ref(job), RDF.type, BRAINKB.IngestionActivity), provenance)
         self.assertIn((activity_ref(job), BRAINKB.targetGraph, URIRef(self.graph)), provenance)
         self.assertIn((activity_ref(job), BRAINKB.jobStatus, Literal("done")), provenance)
@@ -255,15 +313,30 @@ WHERE {{ GRAPH <{PROVENANCE_GRAPH}> {{ ?s ?p ?o FILTER(STRSTARTS(STR(?s), "{pref
             self.assertEqual(await conn.fetchval("SELECT count(*) FROM jobs"), 0)
 
     async def test_private_graph_is_hidden_with_real_space_membership(self):
-        space = await spaces.create_space(slug=self.schema, name="Synthetic private space",
-                                          description="Synthetic fixture", owner=self.user["email"])
+        space = await spaces.create_space(
+            slug=self.schema,
+            name="Synthetic private space",
+            description="Synthetic fixture",
+            owner=self.user["email"],
+        )
         async with self.pool.acquire() as conn:
-            await conn.execute("INSERT INTO space_graphs(space_id,named_graph_iri) VALUES($1,$2)",
-                               space["space_id"], self.graph)
-        response = await self.client.get("/api/query/registered-named-graphs", headers=self.headers)
+            await conn.execute(
+                "INSERT INTO space_graphs(space_id,named_graph_iri) VALUES($1,$2)",
+                space["space_id"],
+                self.graph,
+            )
+        response = await self.api_request(
+            "GET", "/api/query/registered-named-graphs", headers=self.headers
+        )
         self.assertIn(self.graph, response.json())
-        with patch.object(security, "get_user", new_callable=AsyncMock,
-                          return_value={"id": 8, "email": "other@example.org"}):
-            response = await self.client.get("/api/query/registered-named-graphs", headers=self.headers)
+        with patch.object(
+            security,
+            "get_user",
+            new_callable=AsyncMock,
+            return_value={"id": 8, "email": "other@example.org"},
+        ):
+            response = await self.api_request(
+                "GET", "/api/query/registered-named-graphs", headers=self.headers
+            )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertNotIn(self.graph, response.json())
