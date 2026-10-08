@@ -111,6 +111,25 @@ class IngestionRoundTripTests(unittest.IsolatedAsyncioTestCase):
         self.index = patch("core.indexing.enqueue_ingest", new_callable=AsyncMock)
         self.index.start()
         self.addCleanup(self.index.stop)
+        # Opt-in fault experiments prove the round-trip assertions detect missing
+        # writes. These overrides affect only this test process.
+        fault = os.getenv("BRAINKB_INTEGRATION_FAULT")
+        if fault == "skip-merge":
+            fault_patch = patch.object(insert, "merge_delta_into_target", new_callable=AsyncMock)
+        elif fault == "skip-provenance":
+            fault_patch = patch.object(insert, "write_provenance", new_callable=AsyncMock)
+        elif fault == "wrong-graph":
+            merge = insert.merge_delta_into_target
+            async def wrong_graph(delta, target):
+                return await merge(delta, target + "wrong/")
+            fault_patch = patch.object(insert, "merge_delta_into_target", side_effect=wrong_graph)
+        elif fault:
+            raise ValueError(f"Unknown test fault: {fault}")
+        else:
+            fault_patch = None
+        if fault_patch:
+            fault_patch.start()
+            self.addCleanup(fault_patch.stop)
         insert._ingest_semaphore = None
         self.app = FastAPI()
         self.app.include_router(insert.router, prefix="/api")
@@ -137,7 +156,7 @@ class IngestionRoundTripTests(unittest.IsolatedAsyncioTestCase):
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
         async with httpx.AsyncClient(timeout=10) as client:
-            for graph in [self.graph] + [delta_graph_for(job) for job in self.jobs]:
+            for graph in [self.graph, self.graph + "wrong/"] + [delta_graph_for(job) for job in self.jobs]:
                 response = await client.delete(get_oxigraph_endpoint(), params={"graph": graph})
                 if response.status_code not in (200, 204, 404):
                     response.raise_for_status()

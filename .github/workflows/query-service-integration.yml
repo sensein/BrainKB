@@ -67,6 +67,19 @@ jobs:
         run: |
           python -m pytest integration_tests -q --junitxml=integration-results.xml
           python -m pytest integration_tests -q
+      - name: Verify assertions detect missing and misdirected writes
+        run: |
+          for fault in skip-merge wrong-graph skip-provenance; do
+            set +e
+            BRAINKB_INTEGRATION_FAULT="$fault" python -m pytest integration_tests -q -k round_trip > "fault-$fault.log" 2>&1
+            result=$?
+            set -e
+            cat "fault-$fault.log"
+            if [ "$result" -ne 1 ] || ! grep -q '1 failed' "fault-$fault.log"; then
+              echo "Expected a failed round-trip assertion for $fault"
+              exit 1
+            fi
+          done
       - name: Capture service logs
         if: failure()
         run: |
@@ -80,3 +93,4 @@ jobs:
             query_service/integration-results.xml
             query_service/postgres.log
             query_service/oxigraph.log
+            query_service/fault-*.log
