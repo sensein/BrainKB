@@ -14,10 +14,8 @@ from starlette.websockets import WebSocket as StarletteWebSocket
 from core.configure_logging import configure_logging
 from core.routers.index import router as index_router
 from core.routers.jwt_auth import router as jwt_router
-from core.routers.structsense import router as structsense_router
 from core.database import init_db_pool, get_db_pool, debug_pool_status
 from core.configuration import load_environment
-from motor.motor_asyncio import AsyncIOMotorClient
 
 # SynthScholar (PRISMA literature review). Imports are lazy-guarded so a
 # missing `synthscholar` library doesn't crash the rest of ml_service —
@@ -79,25 +77,6 @@ async def lifespan(app: FastAPI):
             _SYNTH_SCHOLAR_IMPORT_ERROR,
         )
 
-    # Initialize MongoDB client (reused across all requests)
-    try:
-        env = load_environment()
-        mongo_url = env.get("MONGO_DB_URL")
-        if mongo_url:
-            app.state.mongo_client = AsyncIOMotorClient(
-                mongo_url,
-                serverSelectionTimeoutMS=5000,
-                connectTimeoutMS=5000,
-                maxPoolSize=50,  # Connection pool size
-                minPoolSize=5    # Minimum connections to maintain
-            )
-            logger.info("MongoDB client initialized successfully")
-        else:
-            app.state.mongo_client = None
-    except Exception as e:
-        logger.warning(f"Failed to initialize MongoDB client: {e}")
-        app.state.mongo_client = None
-
     yield
 
     # Shutdown
@@ -138,15 +117,6 @@ async def lifespan(app: FastAPI):
         print("=" * 80)
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
-
-    # Close MongoDB client
-    try:
-        if hasattr(app.state, 'mongo_client') and app.state.mongo_client:
-            print(f"[APP SHUTDOWN] Closing MongoDB client...")
-            app.state.mongo_client.close()
-            logger.info("MongoDB client closed successfully")
-    except Exception as e:
-        logger.error(f"Error closing MongoDB client: {e}")
 
     # Dispose the SynthScholar SQLAlchemy engine.
     if _SYNTH_SCHOLAR_AVAILABLE:
@@ -204,7 +174,6 @@ app.add_middleware(CorrelationIdMiddleware)
 # Include routers
 app.include_router(index_router, prefix="/api")
 app.include_router(jwt_router, prefix="/api", tags=["Security"])
-app.include_router(structsense_router, prefix="/api", tags=["Multi-agent Systems"])
 if _SYNTH_SCHOLAR_AVAILABLE:
     app.include_router(synth_scholar_router, prefix="/api")
 

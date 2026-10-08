@@ -15,7 +15,6 @@ aiohttp>=3.10,<4
 rich==13.9.4
 python-json-logger==2.0.7
 asgi-correlation-id==4.3.4
-logtail-python==0.2.10
 
 # Config & Settings
 pydantic-settings==2.5.2

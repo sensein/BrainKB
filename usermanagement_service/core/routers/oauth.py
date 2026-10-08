@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlencode
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
 
@@ -204,14 +205,25 @@ async def oauth_login(
 
 class _CliStartIn(BaseModel):
     provider: str = "globus"
+    # Optional: send the browser here with ?code=<paste-code> instead of showing
+    # the code. Must exactly match an entry of USERMANAGEMENT_CLI_RETURN_URLS —
+    # the code is a bearer handle for a refresh token, so an open redirect here
+    # would hand it to whoever chose the URL.
+    return_to: Optional[str] = None
 
 
 @router.post("/auth/cli/start", tags=["SSO"])
 async def oauth_cli_start(body: _CliStartIn):
     """Start an OAuth flow for the MCP/skill (paste-code). Returns an authorize URL;
     open it in a browser, sign in with the provider, then paste the short code the
-    browser shows into `brainkb_finish_login`. No web UI required."""
-    authorize_url, state = await _begin_oauth(body.provider, None, "cli")
+    browser shows into `brainkb_finish_login`. No web UI required.
+
+    With an allowlisted `return_to`, the browser is redirected there with the code
+    instead (used by the MCP server's OAuth flow for connector apps)."""
+    return_to = (body.return_to or "").strip() or None
+    if return_to is not None and return_to not in config.cli_return_urls:
+        raise HTTPException(status_code=400, detail="return_to is not an allowed URL")
+    authorize_url, state = await _begin_oauth(body.provider, return_to, "cli")
     return {
         "authorize_url": authorize_url,
         "state": state,
@@ -290,6 +302,14 @@ async def oauth_callback(
     try:
         token_resp = await provider.exchange_code(code=code, redirect_uri=redirect_uri, code_verifier=code_verifier)
         userinfo = await provider.fetch_userinfo(access_token=token_resp.access_token, token_response=token_resp)
+    except httpx.TransportError as e:
+        # Network-level failure reaching the provider (DNS, connect, timeout), after
+        # the client's own connect retries. Not the user's fault; say so plainly
+        # instead of surfacing a raw errno.
+        logger.exception(f"OAuth callback could not reach {provider_name}")
+        return RedirectResponse(_frontend_error_redirect(
+            f"Could not reach {provider.name} to finish sign-in ({type(e).__name__}). "
+            "Please try again in a moment."), status_code=302)
     except Exception as e:
         logger.exception(f"OAuth callback failed for {provider_name}")
         return RedirectResponse(_frontend_error_redirect(str(e)), status_code=302)
@@ -407,6 +427,11 @@ async def oauth_callback(
 
     # CLI/skill login: show the paste-code page instead of redirecting to the SPA.
     if login_mode == "cli":
+        # Re-checked here, not just at start: the allowlist may have changed in
+        # the ten minutes the state row lived.
+        if redirect_after_login and redirect_after_login in config.cli_return_urls:
+            return RedirectResponse(
+                f"{redirect_after_login}?{urlencode({'code': cli_code})}", status_code=303)
         return HTMLResponse(_cli_success_page(cli_code))
 
     qs = {"token": token}
