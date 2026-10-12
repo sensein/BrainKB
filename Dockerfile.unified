@@ -101,15 +101,13 @@ WORKDIR /app/ml_service
 # /api/synth-scholar route, including the public reviews the UI reads) as collateral
 # damage, because both stacks import openai.
 #
-# Dropping it is safe: core/shared.py guards the import and
-# core/routers/structsense.py registers the three extraction WebSocket routes only
-# when the package is present. Everything else in that router — GET /ner,
-# GET /structured-resource, the save endpoints, GET /job/{task_id} — reads stored
-# data and keeps working, which is what /knowledge-base/ner needs.
-#
-# To re-enable, restore the install below and add "structsense" back to CHECKS in
-# scripts/verify_imports.py. It will need a structsense release whose crewai/litellm
-# accept aiohttp>=3.10, or the two stacks will keep fighting over it.
+# Update: the NER/structured-resource extraction-and-storage feature this guarded
+# (core/routers/structsense.py, the MongoDB-backed save/read endpoints, and
+# /knowledge-base/ner in the UI) has since been removed entirely — that data now
+# belongs in the graph database, not Mongo. There is no router left to re-enable;
+# resurrecting extraction-via-structsense would mean rebuilding that feature against
+# the graph DB from scratch, not just reinstalling this package. Kept this section's
+# history above for the aiohttp/legacy-resolver lessons, which are still real.
 #   RUN ( pip install --use-deprecated=legacy-resolver "structsense==0.0.4" \
 #         || pip install --use-deprecated=legacy-resolver --no-deps "structsense==0.0.4" ) \
 #       && ...

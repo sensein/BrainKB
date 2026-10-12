@@ -52,8 +52,7 @@ def load_environment(env_name="env"):
     # Return a dictionary containing the loaded environment variables
     return {
         "ENV_STATE": os.getenv("ENV_STATE"),
-        "LOGTAIL_API_KEY": os.getenv("LOGTAIL_API_KEY"),
-        
+
         # PostgreSQL Database Configuration
         "JWT_POSTGRES_DATABASE_HOST_URL": os.getenv("JWT_POSTGRES_DATABASE_HOST_URL"),
         "JWT_POSTGRES_DATABASE_PORT": os.getenv("JWT_POSTGRES_DATABASE_PORT"),
@@ -241,11 +240,6 @@ class Configuration:
     def log_format(self) -> str:
         """Get the log format."""
         return self._env_vars.get("LOG_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    
-    @property
-    def logtail_api_key(self) -> Optional[str]:
-        """Get the Logtail API key."""
-        return self._env_vars.get("LOGTAIL_API_KEY")
     
     @property
     def public_base_url(self) -> str:

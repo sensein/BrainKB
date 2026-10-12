@@ -21,12 +21,6 @@ from logging.config import dictConfig
 from core.configuration import load_environment
 
 handlers = ["default", "rotating_file"]
-if load_environment()["ENV_STATE"] == "prod":
-    handlers = [
-        "default",
-        "rotating_file",
-        "logtail",
-    ]  # if we don't want to store logs in logtail then it can be removed
 
 
 def configure_logging() -> None:
@@ -62,13 +56,6 @@ def configure_logging() -> None:
                     "formatter": "console",
                     "filters": ["correlation_id"],
                 },
-                "logtail": {
-                    "class": "logtail.LogtailHandler",
-                    "level": "DEBUG",
-                    "formatter": "console",
-                    "filters": ["correlation_id"],
-                    "source_token": load_environment()["LOGTAIL_API_KEY"],
-                },
                 "rotating_file": {
                     "class": "logging.handlers.RotatingFileHandler",
                     "level": "DEBUG",
@@ -82,7 +69,7 @@ def configure_logging() -> None:
             },
             "loggers": {
                 "uvicorn": {
-                    "handlers": ["default", "rotating_file", "logtail"],
+                    "handlers": ["default", "rotating_file"],
                     "level": "INFO",
                 },
                 "apiinfo": {
