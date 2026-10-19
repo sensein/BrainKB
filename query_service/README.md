@@ -195,16 +195,26 @@ then queued separately in the background.
 
 See [PROVENANCE_MODEL.md](PROVENANCE_MODEL.md).
 
-### Spaces (private/public)
-- `POST /spaces`, `GET /spaces`, `GET /spaces/{slug}`
+### Spaces (private/public, nested)
+- `POST /spaces`, `GET /spaces`, `GET /spaces/{slug}` — `parent_slug` creates a
+  **subspace** (any depth; needs manage rights on the parent)
+- `GET /spaces/{slug}/tree` — the space and its visible subspaces, nested
 - `PATCH /spaces/{slug}/visibility` — flip private/public (owner)
 - `POST/DELETE /spaces/{slug}/members[/{member}]` — membership (owner)
+- `GET/POST/DELETE /spaces/{slug}/access-rules[/{id}]` — who may read / write /
+  manage the space by global role, member or space role (managers)
 - `POST /spaces/{slug}/graphs` — register + bind a graph to a space (owner/editor)
 - `GET /spaces/{slug}/data` — read space RDF (public = anonymous)
+- `DELETE /spaces/{slug}?confirm={slug}` — **SuperAdmin only**, irreversible: drops
+  the space's graphs and their ingestion deltas, registry entries, members, rules and
+  search entries; recorded in provenance. Refused while it has subspaces.
+- `GET/POST/DELETE /admin/reserved-graphs[/{id}]` — **Admin/SuperAdmin**: reserve a
+  graph IRI or prefix (optionally for one space) so others can't register or bind it
 
 **public** = readable by anyone, including unauthenticated clients; **private** =
-members only; **write/ingest** = space owner/editor only. See
-[SPACES_MODEL.md](SPACES_MODEL.md).
+members only; **write/ingest** = space owner/editor only. Roles **inherit into
+subspaces** (a member of a space has the same role in every subspace below it).
+See [SPACES_MODEL.md](SPACES_MODEL.md).
 
 ### Search
 - `GET /search?q=…[&space={slug}][&limit&offset]` — full-text search, access-filtered.
