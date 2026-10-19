@@ -26,6 +26,7 @@ from core.provenance import agent_ref, query_provenance_jsonld
 from core.graph_database_connection_manager import insert_data_gdb_async, check_named_graph_exists
 from core import spaces as sp
 from core import rbac
+from core import reserved_graphs as reserved
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -256,6 +257,10 @@ async def add_graph(slug: str, body: SpaceGraphIn, user: Annotated[LoginUserIn, 
     if not named_graph_url.endswith("/"):
         named_graph_url += "/"
 
+    allowed, why = await reserved.check_allowed(named_graph_url, _agent(user), space["space_id"])
+    if not allowed:
+        raise HTTPException(403, why)
+
     # Bind first: a graph is globally unique to one space, so if another space
     # already holds it this must fail with a conflict rather than register registry
     # metadata for a graph we cannot attach.
@@ -368,6 +373,60 @@ async def delete_access_rule(slug: str, rule_id: int, user: Annotated[LoginUserI
         raise HTTPException(403, "not authorized to manage this space's access rules")
     await sp.remove_access_rule(space["space_id"], rule_id)
     return {"slug": slug, "rules": await sp.list_access_rules(space["space_id"])}
+
+
+class ReservedGraphIn(BaseModel):
+    iri: HttpUrl
+    match_type: str = "exact"
+    reason: Optional[str] = None
+    space_slug: Optional[str] = None
+
+
+@router.get("/admin/reserved-graphs",
+            dependencies=[Depends(require_scopes(["admin"]))],
+            summary="List reserved named graphs (Admin/SuperAdmin)",
+            description="System reservations (BrainKB's own metadata/provenance graphs, "
+                        "always reserved) and admin-managed ones: an exact IRI or every IRI "
+                        "under a prefix that only an Admin/SuperAdmin — or, when reserved "
+                        "for a space, that space's managers — may register or bind.")
+async def list_reserved_graphs(user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required")
+    return {"reserved": await reserved.list_all()}
+
+
+@router.post("/admin/reserved-graphs", status_code=201,
+             dependencies=[Depends(require_scopes(["admin"]))],
+             summary="Reserve a named graph IRI or prefix (Admin/SuperAdmin)",
+             description="match_type 'exact' reserves one graph IRI; 'prefix' reserves every "
+                         "IRI that starts with it. Optional space_slug reserves it for that "
+                         "space. Graphs already bound stay bound; the response lists them.")
+async def add_reserved_graph(body: ReservedGraphIn, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required")
+    space_id = None
+    if body.space_slug:
+        space = await sp.get_space(body.space_slug)
+        if not space:
+            raise HTTPException(404, f"space '{body.space_slug}' not found")
+        space_id = space["space_id"]
+    try:
+        return await reserved.add(str(body.iri), body.match_type, body.reason, _agent(user), space_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except reserved.ReservationConflict as e:
+        raise HTTPException(409, str(e))
+
+
+@router.delete("/admin/reserved-graphs/{reservation_id}",
+               dependencies=[Depends(require_scopes(["admin"]))],
+               summary="Remove a graph reservation (Admin/SuperAdmin)")
+async def remove_reserved_graph(reservation_id: int, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required")
+    if not await reserved.remove(reservation_id):
+        raise HTTPException(404, "reservation not found (system reservations cannot be removed)")
+    return {"removed": reservation_id}
 
 
 @router.get("/admin/capabilities",

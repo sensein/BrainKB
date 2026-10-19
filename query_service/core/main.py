@@ -282,6 +282,25 @@ async def startup_event():
                         pass
                     logger.info("Space access-rules table initialized")
 
+                    # Reserved named graphs (core/reserved_graphs.py): IRIs or prefixes
+                    # only an Admin/SuperAdmin (or, if reserved for a space, that
+                    # space's managers) may register or bind.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS reserved_graphs (
+                            id SERIAL PRIMARY KEY,
+                            iri TEXT NOT NULL,
+                            match_type TEXT NOT NULL CHECK (match_type IN ('exact', 'prefix')),
+                            reason TEXT,
+                            space_id TEXT REFERENCES spaces(space_id) ON DELETE SET NULL,
+                            created_by TEXT,
+                            created_at DOUBLE PRECISION,
+                            UNIQUE (iri, match_type)
+                        )
+                        """
+                    )
+                    logger.info("Reserved-graphs table initialized")
+
                     # Search locator index (hybrid search): Postgres full-text index that
                     # locates subjects/subgraphs (carrying graph + workspace/space), then the
                     # actual triples are fetched from Oxigraph. Access is filtered by space
