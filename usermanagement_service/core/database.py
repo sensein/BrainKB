@@ -1644,14 +1644,13 @@ class PageAccessRepository(UserBaseRepository):
         is *not* bypassed: admins can grant themselves access through
         /admin/page-access if they want it, the same as any other role.
         """
-        # Fresh roles from the DB — supersede the JWT claim when both are
-        # available. Falls back to the supplied `role_names` for code paths
-        # that don't carry a profile_id (e.g. unauthenticated public pages).
+        # Fresh roles from the DB are authoritative whenever we know the profile —
+        # including an EMPTY result: falling back to the token's claim there let a
+        # user whose roles were all revoked keep them until the token expired.
+        # `role_names` is used only for callers without a profile_id.
         effective_roles = list(role_names)
         if profile_id is not None:
-            db_roles = await user_role_repo.get_user_role_names(session, profile_id)
-            if db_roles:
-                effective_roles = db_roles
+            effective_roles = list(await user_role_repo.get_user_role_names(session, profile_id) or [])
 
         # SuperAdmin bypass only — see docstring.
         if "SuperAdmin" in effective_roles:
