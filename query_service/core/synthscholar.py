@@ -515,3 +515,167 @@ async def get_file(review_id: str, path: str) -> Optional[dict]:
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# ── querying a review (from its stored review.json) ────────────────────────
+# Answers the questions a review is asked after the fact — which studies were
+# read in full, by which route; what each screening decision was judged on and
+# why studies were excluded; what evidence supports a claim; which reviews include
+# a study — from the review.json kept with it, so every ingested review can be
+# queried without re-ingesting. Read access is the caller's (router).
+
+_REASON_CODE = re.compile(r"^\s*\[([A-Za-z]{1,6}\d{0,3}[a-z]?)\]")
+MAX_PAGE = 200
+
+
+def _norm(s: Any) -> str:
+    return str(s or "").strip().lower()
+
+
+def _doi(s: Any) -> str:
+    return re.sub(r"^(https?://(dx\.)?doi\.org/|doi:)", "", _norm(s))
+
+
+def _page(items: list, limit: int, offset: int) -> dict:
+    limit = max(1, min(int(limit or 50), MAX_PAGE))
+    offset = max(0, int(offset or 0))
+    return {"total": len(items), "offset": offset, "limit": limit, "items": items[offset:offset + limit]}
+
+
+def _match(q: str, *fields: Any) -> bool:
+    return not q or any(q in _norm(f) for f in fields)
+
+
+def query_studies(review: dict, *, q: str = "", full_text: Optional[bool] = None, source: str = "",
+                  rob: str = "", year_from: Optional[int] = None, year_to: Optional[int] = None,
+                  with_abstract: bool = False, limit: int = 50, offset: int = 0) -> dict:
+    """Included studies, filtered: text (title/authors/journal/doi/pmid/keywords),
+    read in full or abstract only, full-text route, risk-of-bias rating, year range."""
+    q, source, rob = _norm(q), _norm(source), _norm(rob)
+    out = []
+    for a in review.get("included_articles") or []:
+        if not isinstance(a, dict):
+            continue
+        has_ft = bool(a.get("full_text"))
+        if full_text is not None and has_ft != full_text:
+            continue
+        if source and source not in _norm(a.get("full_text_source")):
+            continue
+        rating = _rob_overall(a.get("risk_of_bias"))
+        if rob and rob not in rating.lower():
+            continue
+        try:
+            year = int(str(a.get("year") or "")[:4])
+        except ValueError:
+            year = None
+        if (year_from and (year is None or year < year_from)) or (year_to and (year is None or year > year_to)):
+            continue
+        if not _match(q, a.get("title"), a.get("authors"), a.get("journal"), a.get("doi"), a.get("pmid"), a.get("keywords")):
+            continue
+        row = {"pmid": _s(a.get("pmid")), "doi": _s(a.get("doi")), "title": _s(a.get("title")),
+               "authors": _s(a.get("authors")), "year": str(a.get("year") or ""), "journal": _s(a.get("journal")),
+               "read": "full text" if has_ft else "abstract only", "full_text_source": _s(a.get("full_text_source")),
+               "rob_overall": rating, "quality_score": a.get("quality_score")}
+        if with_abstract:
+            row["abstract"] = _s(a.get("abstract"))[:3000]
+        out.append(row)
+    return _page(out, limit, offset)
+
+
+def query_screening(review: dict, *, stage: str = "", decision: str = "", assessed_on: str = "",
+                    reason: str = "", q: str = "", pmid: str = "", limit: int = 50, offset: int = 0) -> dict:
+    """The screening audit trail, filtered, with counts: per stage and decision, what
+    the decisions were judged on, and exclusion reasons by criterion code ([EC2] …)."""
+    stage, decision, assessed_on, reason, q = map(_norm, (stage, decision, assessed_on, reason, q))
+    rows = []
+    by_stage: dict = defaultdict(Counter)
+    basis: dict = defaultdict(Counter)
+    reasons: Counter = Counter()
+    for e in review.get("screening_log") or []:
+        if not isinstance(e, dict):
+            continue
+        if stage and _norm(e.get("stage")) != stage:
+            continue
+        if decision and _norm(e.get("decision")) != decision:
+            continue
+        if assessed_on and _norm(e.get("assessed_on")) != assessed_on:
+            continue
+        if pmid and _norm(e.get("pmid")) != _norm(pmid):
+            continue
+        if reason and reason not in _norm(e.get("reason")):
+            continue
+        if not _match(q, e.get("title"), e.get("reason"), e.get("pmid")):
+            continue
+        st, dec = str(e.get("stage") or ""), str(e.get("decision") or "")
+        by_stage[st][dec] += 1
+        basis[st][str(e.get("assessed_on") or "")] += 1
+        if dec.lower() == "exclude":
+            m = _REASON_CODE.match(str(e.get("reason") or ""))
+            reasons[m.group(1) if m else (str(e.get("reason") or "")[:80] or "(no reason)")] += 1
+        rows.append({"pmid": _s(e.get("pmid")), "title": _s(e.get("title")), "stage": st, "decision": dec,
+                     "assessed_on": _s(e.get("assessed_on")), "full_text_source": _s(e.get("full_text_source")),
+                     "reason": _s(e.get("reason"))[:1000]})
+    return {**_page(rows, limit, offset),
+            "counts": {"by_stage": {k: dict(v) for k, v in by_stage.items()},
+                       "assessed_on": {k: dict(v) for k, v in basis.items()},
+                       "exclusion_reasons": dict(reasons.most_common())}}
+
+
+def query_evidence(review: dict, *, q: str = "", claim: str = "", pmid: str = "", grounded: Optional[bool] = None,
+                   limit: int = 50, offset: int = 0) -> dict:
+    """Evidence spans: the quoted text a review's claims rest on, with the study,
+    section, relevance and whether the quote was matched in the source text."""
+    q, claim = _norm(q), _norm(claim)
+    out = []
+    for e in review.get("evidence_spans") or []:
+        if not isinstance(e, dict):
+            continue
+        if claim and claim not in _norm(e.get("claim")):
+            continue
+        if pmid and _norm(e.get("paper_pmid")) != _norm(pmid):
+            continue
+        g = str(e.get("grounded")).lower() in ("true", "1", "yes")
+        if grounded is not None and g != grounded:
+            continue
+        if not _match(q, e.get("text"), e.get("claim"), e.get("paper_title")):
+            continue
+        out.append({"text": _s(e.get("text"))[:2000], "claim": _s(e.get("claim")), "paper_pmid": _s(e.get("paper_pmid")),
+                    "paper_title": _s(e.get("paper_title")), "doi": _s(e.get("doi")), "section": _s(e.get("section")),
+                    "relevance_score": e.get("relevance_score"), "grounded": g})
+    return _page(out, limit, offset)
+
+
+def study_in_review(review: dict, *, doi: str = "", pmid: str = "", title: str = "") -> list[dict]:
+    """Where a study appears in one review: included, and/or each screening decision."""
+    d, p, t = _doi(doi), _norm(pmid), _norm(title)
+
+    def hit(rec_doi, rec_pmid, rec_title):
+        return (d and _doi(rec_doi) == d) or (p and _norm(rec_pmid) == p) or (t and t in _norm(rec_title))
+    found = []
+    for a in review.get("included_articles") or []:
+        if isinstance(a, dict) and hit(a.get("doi"), a.get("pmid"), a.get("title")):
+            found.append({"as": "included", "pmid": _s(a.get("pmid")), "doi": _s(a.get("doi")), "title": _s(a.get("title")),
+                          "read": "full text" if a.get("full_text") else "abstract only"})
+    for e in review.get("screening_log") or []:
+        if isinstance(e, dict) and hit("", e.get("pmid"), e.get("title")):
+            found.append({"as": "screened", "pmid": _s(e.get("pmid")), "title": _s(e.get("title")), "stage": _s(e.get("stage")),
+                          "decision": _s(e.get("decision")), "reason": _s(e.get("reason"))[:300]})
+    return found
+
+
+async def load_review_json(review_id: str) -> Optional[dict]:
+    """The review's own review.json (kept with it), parsed — cached per worker by
+    content hash, since one can run to tens of MB."""
+    f = await get_file(review_id, "review.json")
+    if f is None:
+        return None
+    key = f["sha256"]
+    if key not in _REVIEW_CACHE:
+        if len(_REVIEW_CACHE) >= _REVIEW_CACHE_SIZE:
+            _REVIEW_CACHE.pop(next(iter(_REVIEW_CACHE)))
+        _REVIEW_CACHE[key] = json.loads(bytes(f["content"]).decode("utf-8"))
+    return _REVIEW_CACHE[key]
+
+
+_REVIEW_CACHE: dict = {}
+_REVIEW_CACHE_SIZE = int(os.getenv("SYNTHSCHOLAR_REVIEW_CACHE", "4"))

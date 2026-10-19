@@ -4,6 +4,10 @@ POST   /synthscholar/reviews                      ingest an output directory int
 GET    /synthscholar/reviews                      reviews the caller can read
 GET    /synthscholar/reviews/{review_id}          one review: summary, content, provenance, files
 GET    /synthscholar/reviews/{review_id}/files/{path}   one of its files
+GET    /synthscholar/reviews/{review_id}/studies    included studies (filters: text, full text/abstract, route, RoB, years)
+GET    /synthscholar/reviews/{review_id}/screening  screening audit trail with counts and exclusion reasons
+GET    /synthscholar/reviews/{review_id}/evidence   evidence spans behind the review's claims
+GET    /synthscholar/studies                        which readable reviews include or screened a study (doi/pmid/title)
 
 Permissions are the space's, the same as any ingest: ingesting needs the ingest
 role and owner/editor (or manage) rights on the space; reading a review or its
@@ -180,14 +184,15 @@ async def ingest_review(
             "status_url": f"/api/insert/jobs?job_id={job_id}&user_id={job_user}"}
 
 
-@router.get("/synthscholar/reviews", summary="SynthScholar reviews you can read")
-async def list_reviews(user: Annotated[Optional[object], Depends(get_current_user_optional)],
-                       space: Optional[str] = Query(default=None, description="Only this space")):
+async def _readable_summaries(user, space: Optional[str] = None, q: str = "") -> list[dict]:
     member = _agent(user) if user else None
     cache: dict = {}
     out = []
+    ql = q.strip().lower()
     for r in await ss.list_reviews():
         if space and r["space_slug"] != space:
+            continue
+        if ql and ql not in f"{r.get('title', '')} {r.get('research_question', '')} {r['review_id']}".lower():
             continue
         slug = r["space_slug"]
         if slug not in cache:
@@ -199,7 +204,14 @@ async def list_reviews(user: Annotated[Optional[object], Depends(get_current_use
         if member is None:
             r.pop("owner_email", None)
         out.append({**r, "space_visibility": visibility})
-    return {"reviews": out}
+    return out
+
+
+@router.get("/synthscholar/reviews", summary="SynthScholar reviews you can read")
+async def list_reviews(user: Annotated[Optional[object], Depends(get_current_user_optional)],
+                       space: Optional[str] = Query(default=None, description="Only this space"),
+                       q: str = Query(default="", description="Text in the title or research question")):
+    return {"reviews": await _readable_summaries(user, space, q)}
 
 
 async def _readable_review(review_id: str, user) -> dict:
@@ -239,3 +251,60 @@ async def get_file(review_id: str, path: str, user: Annotated[Optional[object], 
         "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
         "X-Content-Type-Options": "nosniff",
     })
+
+
+async def _review_json(review_id: str, user) -> dict:
+    await _readable_review(review_id, user)            # 404 unless the caller can read the space
+    data = await ss.load_review_json(review_id)
+    if data is None:
+        raise HTTPException(404, "this review has no review.json")
+    return data
+
+
+@router.get("/synthscholar/reviews/{review_id}/studies", summary="Included studies of a review")
+async def review_studies(review_id: str, user: Annotated[Optional[object], Depends(get_current_user_optional)],
+                         q: str = "", full_text: Optional[bool] = Query(default=None, description="true: read in full; false: abstract only"),
+                         source: str = Query(default="", description="Full-text route, e.g. europe_pmc, unpaywall, ezproxy"),
+                         rob: str = Query(default="", description="Risk-of-bias rating, e.g. low, high, some concerns"),
+                         year_from: Optional[int] = None, year_to: Optional[int] = None,
+                         with_abstract: bool = False, limit: int = 50, offset: int = 0):
+    return ss.query_studies(await _review_json(review_id, user), q=q, full_text=full_text, source=source, rob=rob,
+                            year_from=year_from, year_to=year_to, with_abstract=with_abstract, limit=limit, offset=offset)
+
+
+@router.get("/synthscholar/reviews/{review_id}/screening", summary="Screening audit trail of a review")
+async def review_screening(review_id: str, user: Annotated[Optional[object], Depends(get_current_user_optional)],
+                           stage: str = Query(default="", description="title_abstract | full_text"),
+                           decision: str = Query(default="", description="include | exclude"),
+                           assessed_on: str = Query(default="", description="title_abstract | full_text | abstract_only"),
+                           reason: str = Query(default="", description="Text or criterion code in the reason, e.g. EC2"),
+                           q: str = "", pmid: str = "", limit: int = 50, offset: int = 0):
+    return ss.query_screening(await _review_json(review_id, user), stage=stage, decision=decision,
+                              assessed_on=assessed_on, reason=reason, q=q, pmid=pmid, limit=limit, offset=offset)
+
+
+@router.get("/synthscholar/reviews/{review_id}/evidence", summary="Evidence spans of a review")
+async def review_evidence(review_id: str, user: Annotated[Optional[object], Depends(get_current_user_optional)],
+                          q: str = "", claim: str = "", pmid: str = "", grounded: Optional[bool] = None,
+                          limit: int = 50, offset: int = 0):
+    return ss.query_evidence(await _review_json(review_id, user), q=q, claim=claim, pmid=pmid, grounded=grounded,
+                             limit=limit, offset=offset)
+
+
+@router.get("/synthscholar/studies", summary="Which reviews include or screened a study")
+async def find_study(user: Annotated[Optional[object], Depends(get_current_user_optional)],
+                     doi: str = "", pmid: str = "", title: str = Query(default="", description="Part of the title")):
+    if not (doi or pmid or title.strip()):
+        raise HTTPException(400, "give doi, pmid or title")
+    if title.strip() and len(title.strip()) < 6:
+        raise HTTPException(400, "title must be at least 6 characters")
+    out = []
+    for r in await _readable_summaries(user):
+        data = await ss.load_review_json(r["review_id"])
+        if not data:
+            continue
+        hits = ss.study_in_review(data, doi=doi, pmid=pmid, title=title)
+        if hits:
+            out.append({"review_id": r["review_id"], "title": r.get("title"), "space_slug": r["space_slug"],
+                        "matches": hits[:20]})
+    return {"reviews": out}

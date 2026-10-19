@@ -190,5 +190,53 @@ class IngestEndpointTests(unittest.TestCase):
         self.assertEqual(e.exception.status_code, 400)
 
 
+Q = {
+    "included_articles": [
+        {"pmid": "1", "doi": "10.1/A", "title": "Graph of neurons", "year": "2006", "full_text": "t",
+         "full_text_source": "europe_pmc_oa", "risk_of_bias": {"overall": "Low"}, "abstract": "abs"},
+        {"pmid": "2", "doi": "", "title": "Ontology study", "year": "2021", "full_text": "", "risk_of_bias": "{'overall': 'High'}"},
+    ],
+    "screening_log": [
+        {"pmid": "1", "title": "Graph of neurons", "stage": "title_abstract", "decision": "include", "assessed_on": "title_abstract"},
+        {"pmid": "3", "title": "Unrelated", "stage": "title_abstract", "decision": "exclude", "assessed_on": "title_abstract",
+         "reason": "[EC2] Automated rule: no KG term"},
+        {"pmid": "4", "title": "Also unrelated", "stage": "full_text", "decision": "exclude", "assessed_on": "abstract_only",
+         "reason": "[EC1] not neuroscience"},
+    ],
+    "evidence_spans": [
+        {"text": "D2RQ was used", "claim": "construction", "paper_pmid": "1", "grounded": "True"},
+        {"text": "a guess", "claim": "evaluation", "paper_pmid": "2", "grounded": "False"},
+    ],
+}
+
+
+class QueryTests(unittest.TestCase):
+    def test_studies_filters(self):
+        self.assertEqual([r["pmid"] for r in ss.query_studies(Q, full_text=False)["items"]], ["2"])
+        self.assertEqual([r["pmid"] for r in ss.query_studies(Q, rob="high")["items"]], ["2"])
+        self.assertEqual([r["pmid"] for r in ss.query_studies(Q, year_from=2010)["items"]], ["2"])
+        self.assertEqual(ss.query_studies(Q, q="neurons", source="europe")["items"][0]["read"], "full text")
+        self.assertNotIn("abstract", ss.query_studies(Q)["items"][0])
+        self.assertEqual(ss.query_studies(Q, with_abstract=True)["items"][0]["abstract"], "abs")
+
+    def test_screening_counts_and_reason_codes(self):
+        out = ss.query_screening(Q, decision="exclude")
+        self.assertEqual(out["total"], 2)
+        self.assertEqual(out["counts"]["exclusion_reasons"], {"EC2": 1, "EC1": 1})
+        self.assertEqual(ss.query_screening(Q, assessed_on="abstract_only")["items"][0]["pmid"], "4")
+        self.assertEqual(ss.query_screening(Q, reason="ec2")["total"], 1)
+
+    def test_evidence_and_paging(self):
+        self.assertEqual([e["claim"] for e in ss.query_evidence(Q, grounded=False)["items"]], ["evaluation"])
+        page = ss.query_evidence(Q, limit=1, offset=1)
+        self.assertEqual((page["total"], len(page["items"])), (2, 1))
+        self.assertEqual(ss.query_evidence(Q, limit=10_000)["limit"], ss.MAX_PAGE)
+
+    def test_find_a_study(self):
+        self.assertEqual([h["as"] for h in ss.study_in_review(Q, doi="https://doi.org/10.1/a")], ["included"])
+        self.assertEqual([h["as"] for h in ss.study_in_review(Q, pmid="1")], ["included", "screened"])
+        self.assertEqual(ss.study_in_review(Q, pmid="999"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
