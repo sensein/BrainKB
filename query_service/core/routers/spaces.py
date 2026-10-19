@@ -32,6 +32,8 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
+# path segments under /spaces/ that are routes, not spaces
+_RESERVED_SLUGS = {"writable"}
 
 
 def _agent(user) -> str:
@@ -98,6 +100,8 @@ class SpaceGraphIn(BaseModel):
 async def create_space(body: SpaceCreate, user: Annotated[LoginUserIn, Depends(get_current_user)]):
     if not _SLUG_RE.match(body.slug):
         raise HTTPException(400, "slug must be lowercase alphanumeric/hyphen, 3-64 chars")
+    if body.slug in _RESERVED_SLUGS:
+        raise HTTPException(400, f"'{body.slug}' is reserved; choose another slug")
     if body.visibility not in ("private", "public"):
         raise HTTPException(400, "visibility must be 'private' or 'public'")
     if body.space_type not in ("individual", "team"):
@@ -144,6 +148,47 @@ async def create_space(body: SpaceCreate, user: Annotated[LoginUserIn, Depends(g
 async def list_spaces(user: Annotated[Optional[object], Depends(get_current_user_optional)]):
     member = _agent(user) if user else None
     return {"spaces": await sp.list_visible_spaces(member)}
+
+
+@router.get("/spaces/writable",
+            summary="Spaces (and graphs) the caller may ingest into",
+            description="Every space the caller may write to — owner/editor membership, a "
+                        "role inherited from a parent space, a space write access rule, or "
+                        "Admin/SuperAdmin — with its graphs and their descriptions, plus "
+                        "parent_slug to show subspaces as a tree. `can_ingest` is false "
+                        "without a write-capable role (then nothing can be ingested anywhere). "
+                        "`unmapped_graphs` are registered graphs in no space, which any caller "
+                        "with `can_ingest` may still write to. Uses the same checks as ingestion.")
+async def writable_spaces(user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    email = _agent(user)
+    can_ingest = await rbac.has_capability(email, rbac.INGEST)
+    if not can_ingest:
+        return {"can_ingest": False, "spaces": [], "unmapped_graphs": [],
+                "reason": "ingesting needs a write-capable role; ask an admin"}
+    slugs = (await sp.all_space_slugs() if await rbac.is_admin(email)
+             else [x["slug"] for x in await sp.list_visible_spaces(email)])
+    descriptions = await sp.graph_descriptions() or {}
+    spaces = []
+    for slug in slugs:
+        space = await sp.get_space(slug)
+        if not space:
+            continue
+        allowed, how = await sp.can_write_space(space, email)
+        if not allowed:
+            continue
+        spaces.append({
+            "slug": space["slug"], "name": space["name"], "visibility": space["visibility"],
+            "parent_slug": space["ancestors"][-1]["slug"] if space.get("ancestors") else None,
+            "access": how,
+            "graphs": [{"iri": g, "description": descriptions.get(g, "")} for g in space["graphs"]],
+        })
+    writable = {s["slug"] for s in spaces}
+    for s in spaces:   # a parent the caller can't write to is not shown; the subspace becomes a root
+        if s["parent_slug"] not in writable:
+            s["parent_slug"] = None
+    bound = await sp.bound_graphs()
+    unmapped = [{"iri": g, "description": d} for g, d in sorted(descriptions.items()) if g not in bound]
+    return {"can_ingest": True, "spaces": spaces, "unmapped_graphs": unmapped}
 
 
 @router.get("/spaces/{slug}",

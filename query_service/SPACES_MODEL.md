@@ -63,6 +63,7 @@ is used if present, but its absence is not an error for public spaces.
 | GET  | `/spaces` | optional | List visible spaces (public + own; anon → public only) |
 | GET  | `/spaces/{slug}` | optional | Space manifest (public to anyone, private to members): graphs, direct and inherited members, visible ancestors and subspaces, your role |
 | GET  | `/spaces/{slug}/tree` | optional | The space and all visible subspaces, nested, with your role in each |
+| GET  | `/spaces/writable` | read | Spaces the caller can ingest into (the same checks ingestion applies), with their graphs and descriptions, plus graphs in no space; `writable` is a reserved slug |
 | DELETE | `/spaces/{slug}?confirm={slug}` | SuperAdmin | Delete the space and everything in it (see below) |
 | PATCH | `/spaces/{slug}/visibility` | owner | Flip private/public |
 | POST | `/spaces/{slug}/members` | owner | Add/update a member (role) |

@@ -319,6 +319,33 @@ async def list_visible_spaces(member: Optional[str]) -> List[Dict[str, Any]]:
         return out
 
 
+async def all_space_slugs() -> List[str]:
+    async with get_db_connection() as conn:
+        rows = await conn.fetch("SELECT slug FROM spaces ORDER BY name")
+    return [r["slug"] for r in rows]
+
+
+async def bound_graphs() -> set:
+    """Every named graph bound to some space."""
+    async with get_db_connection() as conn:
+        rows = await conn.fetch("SELECT named_graph_iri FROM space_graphs")
+    return {r["named_graph_iri"] for r in rows}
+
+
+async def graph_descriptions() -> Optional[Dict[str, str]]:
+    """Registered graph IRI -> description, from the graph registry. None if the
+    registry could not be read."""
+    from core.graph_database_connection_manager import fetch_data_gdb_async
+    res = await fetch_data_gdb_async(
+        "PREFIX dcterms: <http://purl.org/dc/terms/> SELECT ?g (SAMPLE(?d) AS ?desc) WHERE { "
+        "GRAPH <https://brainkb.org/metadata/named-graph> { ?g a <http://www.w3.org/ns/prov#Entity> "
+        "OPTIONAL { ?g dcterms:description ?d } } } GROUP BY ?g")
+    if res.get("status") != "success":
+        return None
+    rows = ((res.get("message") or {}).get("results") or {}).get("bindings") or []
+    return {r["g"]["value"]: (r.get("desc") or {}).get("value", "") for r in rows if "g" in r}
+
+
 async def add_member(space_id: str, member: str, role: str) -> None:
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}")
