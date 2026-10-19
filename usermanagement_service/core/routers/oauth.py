@@ -397,6 +397,7 @@ async def oauth_callback(
                     scopes=scopes,
                     auth_source=provider.name,
                     expires_minutes=config.web_refresh_ttl_min,
+                    web=True,
                 )
             # CLI/skill (paste-code) flow: mint an SSO refresh token and stash it
             # behind a short code the browser will display for the user to paste.
