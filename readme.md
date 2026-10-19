@@ -56,6 +56,14 @@ Once started, services are accessible at:
   - **Search**: hybrid full-text search — Postgres locator index (aware of
     workspace + visibility) finds subjects, data is fetched from Oxigraph. Results
     are access-filtered (anonymous sees public only).
+  - **SynthScholar review ingest** (`/api/synthscholar/reviews`): upload the output
+    directory of a SynthScholar run (the synthscholar skill) into a space. Its graph,
+    `https://brainkb.org/synthscholar/reviews/<protocol.review_id>/`, is registered in
+    the space; `review.ttl` plus an import record (PROV-O: who, when, every kept file
+    with media type, size and sha256, what was left out) are ingested as an ordinary
+    job. The files — all but intermediate `work/` — are kept in Postgres
+    (`synthscholar_files`) and served under the space's read rules. `review.json` is
+    read as plain JSON, not through the synthscholar package. Once per review.
   - See `query_service/README.md`, `query_service/PROVENANCE_MODEL.md`, and
     `query_service/SPACES_MODEL.md` for details.
 - **ML Service (FastAPI)**: `http://localhost:8007/`
@@ -65,15 +73,7 @@ Once started, services are accessible at:
     with SSE progress streaming and markdown / JSON / RDF exports). Reuses
     the unified `brainkb` Postgres database. See `env.template` for the
     optional API keys (OpenRouter, NCBI, Semantic Scholar, CORE).
-  - **Imports a locally-run review** (`POST /api/synth-scholar/reviews/import`):
-    the run's output directory is uploaded as-is; everything but intermediate
-    `work/` is kept with the review (manuscript, PDF, figures, tables, RDF,
-    search log, verification reports — table `review_artifacts`), the review is
-    private to the importer, and its provenance records the import, what was left
-    out, the run's searches and checks. `format=pdf` export serves the run's own
-    PDF, or renders one from the review (pandoc + Typst, in the image). A review's
-    RDF goes into a space's graph `https://brainkb.org/synthscholar/reviews/<review's own id>/`
-    through query_service as the user (UI or MCP), once, and is recorded on the review.
+  - `format=pdf` export renders a review's Markdown to PDF (pandoc + Typst).
 - **Oxigraph SPARQL**: `http://localhost:7878/` (password protected) graph database
 - **pgAdmin**: `http://localhost:5051/`
 - **User management service (FastAPI)**: `http://localhost:8004`

@@ -171,35 +171,6 @@ class ScreeningLogResponse(BaseModel):
     decision: str
     reason: str
     stage: str
-    # what the decision was judged on (title_abstract | full_text | abstract_only)
-    # and, for full_text, the retrieval route (pmc_oa, ezproxy_pdf, user_supplied_pdf…)
-    assessed_on: str = ""
-    full_text_source: str = ""
-
-
-class ArtifactResponse(BaseModel):
-    """One file of a review (an imported run's PDF, manuscript, figure, table…)."""
-    path: str
-    kind: str
-    media_type: str
-    size_bytes: int
-    sha256: str
-    created_at: Optional[str] = None
-
-
-class GraphIngestRequest(BaseModel):
-    """Record that the review was pushed into BrainKB's graph database. The push
-    itself runs as the user against query_service (space write + ingest checks)."""
-    space_slug: str
-    graph_iri: str
-    job_id: Optional[str] = None
-    triples: Optional[int] = None
-    source_file: Optional[str] = None
-    sha256: Optional[str] = None
-
-
-class OwnerRequest(BaseModel):
-    owner_email: str
 
 
 class GRADEResponse(BaseModel):
@@ -247,10 +218,6 @@ class ReviewSummaryResponse(BaseModel):
     stage_done: Optional[int] = None
     stage_remaining: Optional[int] = None
     articles_included: Optional[int] = None
-    source: str = "pipeline"
-    in_graph: bool = False
-    # The review's graph in BrainKB: https://brainkb.org/synthscholar/reviews/<review's own id>/
-    graph_iri: str = ""
 
 
 class CompareReviewSummaryResponse(BaseModel):
@@ -292,9 +259,6 @@ class ReviewDetailResponse(BaseModel):
     error: Optional[str] = None
     compare_result: Optional[dict] = None
     per_group_analysis: Optional[dict] = None
-    source: str = "pipeline"
-    provenance: Optional[dict] = None
-    artifacts: list[ArtifactResponse] = Field(default_factory=list)
 
 
 class ProgressEvent(BaseModel):
@@ -331,6 +295,10 @@ class HealthResponse(BaseModel):
 
 class VisibilityRequest(BaseModel):
     is_public: bool
+
+
+class OwnerRequest(BaseModel):
+    owner_email: str
 
 
 class CacheSharingRequest(BaseModel):

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -63,34 +63,3 @@ class ReviewRow(Base):
     pending_plan_iteration: Mapped[int | None] = mapped_column(Integer, nullable=True)
     plan_response_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-
-    # Where the review came from: "pipeline" (run here) or "import" (a local
-    # SynthScholar run's output directory, uploaded). Imports keep their files in
-    # review_artifacts and the import's own provenance in import_json.
-    source: Mapped[str] = mapped_column(String(20), nullable=False, default="pipeline")
-    import_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    # Every push of the review into BrainKB's graph database: space, graph IRI,
-    # ingest job, who and when. A review is ingested once (its RDF is append-only).
-    graph_json: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    # Flow counts + included count for listings, so a list never has to load and
-    # re-validate every review's full result (an imported review can be 30 MB).
-    summary_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-
-
-class ReviewArtifactRow(Base):
-    """A file belonging to a review: an imported run's PDF, manuscript, figures,
-    tables, RDF, verification reports; or a PDF generated on demand. Stored in
-    Postgres (same database, same backups); content-addressed by sha256."""
-
-    __tablename__ = "review_artifacts"
-
-    review_id: Mapped[str] = mapped_column(
-        String(128), ForeignKey("reviews.review_id", ondelete="CASCADE"), primary_key=True)
-    path: Mapped[str] = mapped_column(String(512), primary_key=True)   # relative, e.g. figures/fig_prisma.svg
-    kind: Mapped[str] = mapped_column(String(40), nullable=False, default="other")
-    media_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
-    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
