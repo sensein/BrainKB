@@ -88,8 +88,10 @@ async def check_allowed(iri: str, email: Optional[str], space_id: Optional[str] 
         return False, f"'{normalize(iri)}' is a reserved BrainKB system graph and cannot be registered or bound"
     if await rbac.is_admin(email):
         return True, ""
-    if res.get("space_id") and space_id and res["space_id"] == space_id:
-        return True, ""
+    if res.get("space_id") and space_id:
+        from core.spaces import ancestor_ids    # reserved for a space covers its subspaces
+        if res["space_id"] in await ancestor_ids(space_id):
+            return True, ""
     scope = f" for space '{res['space_slug']}'" if res.get("space_slug") else ""
     why = f" ({res['reason']})" if res.get("reason") else ""
     return False, (f"'{normalize(iri)}' is reserved{scope}{why}; only an Admin/SuperAdmin"

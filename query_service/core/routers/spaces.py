@@ -71,7 +71,8 @@ class SpaceCreate(BaseModel):
     name: str
     description: Optional[str] = None
     visibility: str = "private"
-    space_type: str = "individual"   # 'individual' | 'team'
+    space_type: str = "individual"   # 'individual' | 'team'; a subspace takes its parent's
+    parent_slug: Optional[str] = None  # create as a subspace of this space
 
 
 class MemberIn(BaseModel):
@@ -106,7 +107,19 @@ async def create_space(body: SpaceCreate, user: Annotated[LoginUserIn, Depends(g
     # SuperAdmin, or a user an admin has granted it); individual/private spaces
     # require create_private_space (any write-capable role).
     email = _agent(user)
-    if body.space_type == "team":
+    parent = None
+    if body.parent_slug:
+        # A subspace: whoever can manage the parent may create one (the parent's
+        # members get the same roles in it). It takes the parent's space type, so
+        # no separate team-space capability is needed.
+        parent = await sp.get_space(body.parent_slug)
+        if not parent:
+            raise HTTPException(404, f"parent space '{body.parent_slug}' not found")
+        if not await _can_manage(parent, email):
+            raise HTTPException(403, f"only someone who can manage '{body.parent_slug}' can create a subspace in it")
+        if not await rbac.has_capability(email, rbac.CREATE_PRIVATE_SPACE):
+            raise HTTPException(403, "not authorized to create a space (needs a write-capable role)")
+    elif body.space_type == "team":
         if not await rbac.has_capability(email, rbac.CREATE_TEAM_SPACE):
             raise HTTPException(403, "not authorized to create a team space (needs Admin/SuperAdmin "
                                      "or a granted create_team_space capability)")
@@ -117,7 +130,8 @@ async def create_space(body: SpaceCreate, user: Annotated[LoginUserIn, Depends(g
     if await sp.get_space(body.slug):
         raise HTTPException(409, f"space '{body.slug}' already exists")
     space = await sp.create_space(body.slug, body.name, body.description, email,
-                                  body.visibility, body.space_type)
+                                  body.visibility, parent["space_type"] if parent else body.space_type,
+                                  parent["space_id"] if parent else None)
     await sp.mirror_space_to_rdf(space)
     return space
 
@@ -150,10 +164,64 @@ async def get_space(slug: str, user: Annotated[Optional[object], Depends(get_cur
     # Fine-grained per-space read rules (if any) further restrict who can read.
     if not await sp.space_action_permitted(space, "read", member):
         raise HTTPException(403, "restricted by a space access rule (read)")
+    space = await _with_visible_hierarchy(space, member)
+    detail = await sp.member_role_detail(space["space_id"], member)
+    space["your_role"], space["role_inherited"] = (detail if detail else (None, False))
     # Owner/member emails are for members and admins only, not public readers.
     if role is None and not await rbac.is_admin(member):
         return sp.redact_people(space)
     return space
+
+
+async def _visible_slugs(member: Optional[str]) -> Optional[set]:
+    """Slugs the caller may see; None means every space (Admin/SuperAdmin)."""
+    if member and await rbac.is_admin(member):
+        return None
+    return {x["slug"] for x in await sp.list_visible_spaces(member)}
+
+
+async def _with_visible_hierarchy(space: dict, member: Optional[str]) -> dict:
+    """Keep only the ancestors and subspaces the caller may see: a private parent's
+    name is not shown to someone who can only see its public subspace."""
+    visible = await _visible_slugs(member)
+    keep = (lambda x: True) if visible is None else (lambda x: x["slug"] in visible)
+    out = dict(space)
+    out["ancestors"] = [a for a in space.get("ancestors", []) if keep(a)]
+    out["subspaces"] = [c for c in space.get("subspaces", []) if keep(c)]
+    out["parent_slug"] = (space["ancestors"][-1]["slug"]
+                          if space.get("ancestors") and keep(space["ancestors"][-1]) else None)
+    out.pop("parent_space_id", None)
+    return out
+
+
+@router.get("/spaces/{slug}/tree",
+            summary="A space and all its subspaces, nested",
+            description="The space and every subspace below it (any depth) that the caller "
+                        "may see, each with visibility, the caller's role (and whether it is "
+                        "inherited from a parent) and its graph count.")
+async def space_tree(slug: str, user: Annotated[Optional[object], Depends(get_current_user_optional)]):
+    member = _agent(user) if user else None
+    root = await sp.get_space(slug)
+    if not root:
+        return JSONResponse({"error": "space not found"}, status_code=404)
+    visible = await _visible_slugs(member)
+    if visible is not None and slug not in visible:
+        raise HTTPException(403, "private space — membership and a role are required")
+
+    async def node(sp_: dict, depth: int) -> dict:
+        detail = await sp.member_role_detail(sp_["space_id"], member)
+        children = []
+        if depth < 64:
+            for c in sp_.get("subspaces", []):
+                if visible is None or c["slug"] in visible:
+                    full = await sp.get_space(c["slug"])
+                    if full:
+                        children.append(await node(full, depth + 1))
+        return {"slug": sp_["slug"], "name": sp_["name"], "visibility": sp_["visibility"],
+                "your_role": detail[0] if detail else None,
+                "role_inherited": detail[1] if detail else False,
+                "graphs": len(sp_.get("graphs") or []), "subspaces": children}
+    return await node(root, 0)
 
 
 @router.patch("/spaces/{slug}/visibility",
@@ -198,6 +266,8 @@ async def delete_space(
         return JSONResponse({"error": "space not found"}, status_code=404)
     try:
         result = await sp.delete_space(space, _agent(user))
+    except sp.SpaceHasSubspaces as e:
+        raise HTTPException(409, f"'{slug}' still has subspaces ({', '.join(e.slugs)}); delete them first")
     except sp.SpaceDeletionError as e:
         logger.error("[spaces] deleting %s failed: %s", slug, e)
         raise HTTPException(502, f"space not deleted: {e}. Nothing was removed from the space "

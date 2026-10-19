@@ -164,7 +164,8 @@ async def search(q: str, caller: Optional[str], space_slug: Optional[str] = None
                ts_rank(i.tsv, plainto_tsquery('english', $1)) AS rank
         FROM graph_search_index i
         LEFT JOIN spaces s ON s.space_id = i.space_id
-        LEFT JOIN space_members m ON m.space_id = i.space_id AND m.member = $2
+        LEFT JOIN (SELECT DISTINCT space_id, member FROM space_effective_members) m
+               ON m.space_id = i.space_id AND m.member = $2
         WHERE {' AND '.join(where)}
         ORDER BY rank DESC, i.subject
         LIMIT ${limit_i} OFFSET ${offset_i}

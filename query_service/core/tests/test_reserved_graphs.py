@@ -27,8 +27,11 @@ async def is_admin(email):
 
 
 class CheckAllowedTests(unittest.TestCase):
-    def allowed(self, reservation, email, space_id=None, iri="https://brainkb.org/graph/allen/"):
-        with patch.object(rg, "find", fake_find(reservation)), patch.object(rg.rbac, "is_admin", is_admin):
+    def allowed(self, reservation, email, space_id=None, iri="https://brainkb.org/graph/allen/", ancestors=None):
+        async def up(sid):                      # the space and the spaces above it
+            return [sid] + list(ancestors or [])
+        with patch.object(rg, "find", fake_find(reservation)), patch.object(rg.rbac, "is_admin", is_admin), \
+                patch("core.spaces.ancestor_ids", up):
             return run(rg.check_allowed(iri, email, space_id))
 
     def test_unreserved_is_open(self):
@@ -54,6 +57,7 @@ class CheckAllowedTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("bican-resources", why)
         self.assertFalse(self.allowed(res, USER, space_id=None)[0])   # standalone registration
+        self.assertTrue(self.allowed(res, USER, space_id="sp-bican-sub", ancestors=["sp-bican"])[0])  # its subspace
 
 
 class AddValidationTests(unittest.TestCase):

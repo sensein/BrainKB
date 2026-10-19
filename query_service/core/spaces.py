@@ -62,8 +62,11 @@ def space_iri(slug: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def create_space(slug: str, name: str, description: Optional[str], owner: str,
-                       visibility: str = "private", space_type: str = "individual") -> Dict[str, Any]:
-    """Create a space and register the owner as a member with role 'owner'."""
+                       visibility: str = "private", space_type: str = "individual",
+                       parent_space_id: Optional[str] = None) -> Dict[str, Any]:
+    """Create a space and register the owner as a member with role 'owner'. With
+    ``parent_space_id`` it is a subspace: the parent's members get the same roles in
+    it (see the ``space_effective_members`` view)."""
     if visibility not in ("private", "public"):
         raise ValueError("visibility must be 'private' or 'public'")
     if space_type not in ("individual", "team"):
@@ -74,10 +77,11 @@ async def create_space(slug: str, name: str, description: Optional[str], owner: 
         async with conn.transaction():
             await conn.execute(
                 """
-                INSERT INTO spaces (space_id, slug, name, description, owner, visibility, space_type, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+                INSERT INTO spaces (space_id, slug, name, description, owner, visibility, space_type,
+                                    parent_space_id, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
                 """,
-                space_id, slug, name, description, owner, visibility, space_type, now,
+                space_id, slug, name, description, owner, visibility, space_type, parent_space_id, now,
             )
             await conn.execute(
                 """
@@ -102,6 +106,33 @@ async def get_space(slug: str) -> Optional[Dict[str, Any]]:
             "SELECT named_graph_iri FROM space_graphs WHERE space_id = $1 ORDER BY named_graph_iri",
             row["space_id"],
         )
+        ancestors = await conn.fetch(
+            """
+            WITH RECURSIVE up(space_id, depth) AS (
+                SELECT parent_space_id, 1 FROM spaces WHERE space_id = $1 AND parent_space_id IS NOT NULL
+                UNION ALL
+                SELECT s.parent_space_id, u.depth + 1 FROM up u JOIN spaces s ON s.space_id = u.space_id
+                WHERE s.parent_space_id IS NOT NULL AND u.depth < 64
+            )
+            SELECT s.slug, s.name, s.visibility, u.depth FROM up u JOIN spaces s USING (space_id)
+            ORDER BY u.depth DESC
+            """,
+            row["space_id"],
+        )
+        children = await conn.fetch(
+            "SELECT slug, name, visibility FROM spaces WHERE parent_space_id = $1 ORDER BY name",
+            row["space_id"],
+        )
+        inherited = await conn.fetch(
+            """
+            SELECT DISTINCT ON (e.member) e.member, e.role, h.slug AS inherited_from
+            FROM space_effective_members e JOIN spaces h ON h.space_id = e.holder_id
+            WHERE e.space_id = $1 AND NOT e.direct
+              AND NOT EXISTS (SELECT 1 FROM space_members d WHERE d.space_id = $1 AND d.member = e.member)
+            ORDER BY e.member, e.rank DESC, e.depth
+            """,
+            row["space_id"],
+        )
         return {
             "space_id": row["space_id"],
             "slug": row["slug"],
@@ -113,6 +144,12 @@ async def get_space(slug: str) -> Optional[Dict[str, Any]]:
             "iri": space_iri(row["slug"]),
             "members": [{"member": m["member"], "role": m["role"]} for m in members],
             "graphs": [g["named_graph_iri"] for g in graphs],
+            "parent_space_id": row.get("parent_space_id"),
+            # root first; the caller-facing endpoint drops the ones the caller can't see
+            "ancestors": [{"slug": a["slug"], "name": a["name"], "visibility": a["visibility"]} for a in ancestors],
+            "subspaces": [{"slug": c["slug"], "name": c["name"], "visibility": c["visibility"]} for c in children],
+            "inherited_members": [{"member": m["member"], "role": m["role"], "inherited_from": m["inherited_from"]}
+                                  for m in inherited],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -124,6 +161,7 @@ def redact_people(space: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(space)
     out["owner"] = None
     out["members"] = []
+    out["inherited_members"] = []
     return out
 
 
@@ -162,7 +200,7 @@ async def hidden_graphs_for(member: Optional[str]) -> set:
             JOIN spaces s ON s.space_id = g.space_id
             WHERE s.visibility = 'private'
               AND NOT EXISTS (
-                  SELECT 1 FROM space_members m
+                  SELECT 1 FROM space_effective_members m
                   WHERE m.space_id = s.space_id AND m.member = $1
               )
             """,
@@ -171,14 +209,52 @@ async def hidden_graphs_for(member: Optional[str]) -> set:
         return {r["named_graph_iri"] for r in rows}
 
 
+_ANCESTRY_ROLE_SQL = """
+    WITH RECURSIVE up(space_id, depth) AS (
+        SELECT $1::text, 0
+        UNION ALL
+        SELECT s.parent_space_id, u.depth + 1 FROM up u JOIN spaces s ON s.space_id = u.space_id
+        WHERE s.parent_space_id IS NOT NULL AND u.depth < 64
+    )
+    SELECT m.role, u.space_id AS holder_id, u.depth
+    FROM up u JOIN space_members m ON m.space_id = u.space_id AND m.member = $2
+    ORDER BY CASE m.role WHEN 'owner' THEN 3 WHEN 'editor' THEN 2 ELSE 1 END DESC, u.depth
+    LIMIT 1
+"""
+
+
 async def member_role(space_id: str, member: Optional[str]) -> Optional[str]:
+    """The caller's effective role: the strongest role they hold on this space or on
+    any space above it (a member of a space has the same role in its subspaces)."""
+    detail = await member_role_detail(space_id, member)
+    return detail[0] if detail else None
+
+
+async def member_role_detail(space_id: str, member: Optional[str]) -> Optional[Tuple[str, bool]]:
+    """(role, inherited) for the caller's effective role, or None."""
     if not member:
         return None
     async with get_db_connection() as conn:
-        return await conn.fetchval(
-            "SELECT role FROM space_members WHERE space_id = $1 AND member = $2",
-            space_id, member,
+        row = await conn.fetchrow(_ANCESTRY_ROLE_SQL, space_id, member)
+    return (row["role"], row["depth"] > 0) if row else None
+
+
+async def ancestor_ids(space_id: str) -> List[str]:
+    """This space and every space above it, nearest first."""
+    async with get_db_connection() as conn:
+        rows = await conn.fetch(
+            """
+            WITH RECURSIVE up(space_id, depth) AS (
+                SELECT $1::text, 0
+                UNION ALL
+                SELECT s.parent_space_id, u.depth + 1 FROM up u JOIN spaces s ON s.space_id = u.space_id
+                WHERE s.parent_space_id IS NOT NULL AND u.depth < 64
+            )
+            SELECT space_id FROM up ORDER BY depth
+            """,
+            space_id,
         )
+    return [r["space_id"] for r in rows]
 
 
 async def list_visible_spaces(member: Optional[str]) -> List[Dict[str, Any]]:
@@ -195,11 +271,16 @@ async def list_visible_spaces(member: Optional[str]) -> List[Dict[str, Any]]:
         if member:
             rows = await conn.fetch(
                 """
-                SELECT DISTINCT s.slug, s.name, s.description, s.owner, s.visibility,
-                       s.space_type, s.created_at, m.role AS your_role
+                SELECT s.space_id, s.parent_space_id, s.slug, s.name, s.description, s.owner,
+                       s.visibility, s.space_type, s.created_at, m.role AS your_role,
+                       (m.role IS NOT NULL AND NOT m.direct) AS role_inherited
                 FROM spaces s
-                LEFT JOIN space_members m ON m.space_id = s.space_id AND m.member = $1
-                WHERE s.visibility = 'public' OR m.member IS NOT NULL
+                LEFT JOIN LATERAL (
+                    SELECT e.role, e.direct FROM space_effective_members e
+                    WHERE e.space_id = s.space_id AND e.member = $1
+                    ORDER BY e.rank DESC, e.depth LIMIT 1
+                ) m ON TRUE
+                WHERE s.visibility = 'public' OR m.role IS NOT NULL
                 ORDER BY s.created_at DESC
                 """,
                 member,
@@ -207,13 +288,16 @@ async def list_visible_spaces(member: Optional[str]) -> List[Dict[str, Any]]:
         else:
             rows = await conn.fetch(
                 """
-                SELECT s.slug, s.name, s.description, s.owner, s.visibility,
-                       s.space_type, s.created_at, NULL::text AS your_role
+                SELECT s.space_id, s.parent_space_id, s.slug, s.name, s.description, s.owner,
+                       s.visibility, s.space_type, s.created_at, NULL::text AS your_role,
+                       FALSE AS role_inherited
                 FROM spaces s WHERE s.visibility = 'public'
                 ORDER BY s.created_at DESC
                 """,
             )
         out: List[Dict[str, Any]] = []
+        # a subspace names its parent only when the caller can see the parent too
+        visible_slug = {r["space_id"]: r["slug"] for r in rows}
         for r in rows:
             your_role = r["your_role"]
             is_owner = bool(member) and r["owner"] == member
@@ -226,6 +310,8 @@ async def list_visible_spaces(member: Optional[str]) -> List[Dict[str, Any]]:
                 "space_type": r["space_type"], "iri": space_iri(r["slug"]),
                 "created_at": r["created_at"],
                 "your_role": your_role,
+                "role_inherited": bool(r["role_inherited"]),
+                "parent_slug": visible_slug.get(r["parent_space_id"]),
                 "is_owner": is_owner,
                 "access": access,
                 "can_write": your_role in ("owner", "editor"),
@@ -498,6 +584,8 @@ def _space_manifest_graph(space: Dict[str, Any]) -> Graph:
         g.add((s, pred, agent_ref(m["member"])))
     for giri in space.get("graphs", []):
         g.add((s, BRAINKB.containsGraph, URIRef(giri)))
+    if space.get("ancestors"):
+        g.add((s, BRAINKB.parentSpace, URIRef(space_iri(space["ancestors"][-1]["slug"]))))
     return g
 
 
@@ -539,6 +627,14 @@ async def construct_space_graphs(space: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 NAMED_GRAPH_REGISTRY = "https://brainkb.org/metadata/named-graph"
+
+
+class SpaceHasSubspaces(Exception):
+    """A space with subspaces is not deleted: delete the subspaces first."""
+
+    def __init__(self, slugs: List[str]):
+        self.slugs = slugs
+        super().__init__("space has subspaces; delete them first: " + ", ".join(slugs))
 
 
 class SpaceDeletionError(Exception):
@@ -595,6 +691,8 @@ async def delete_space(space: Dict[str, Any], deleted_by: str) -> Dict[str, Any]
     A failure in step 1 raises SpaceDeletionError with nothing deleted in Postgres, so
     the space stays visible and the call can be retried (DROP SILENT is idempotent)."""
     from core.provenance import build_space_deletion_provenance, write_provenance, _now_iso
+    if space.get("subspaces"):
+        raise SpaceHasSubspaces([c["slug"] for c in space["subspaces"]])
     started = _now_iso()
     graphs = [_safe_iri(g) for g in space.get("graphs") or []]
     deltas = [_safe_iri(d) for d in await delta_graphs_for(graphs)]

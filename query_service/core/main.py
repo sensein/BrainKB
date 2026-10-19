@@ -217,6 +217,33 @@ async def startup_event():
                         await conn.execute("ALTER TABLE spaces ADD COLUMN IF NOT EXISTS space_type TEXT NOT NULL DEFAULT 'individual'")
                     except Exception:
                         pass
+                    # Subspaces: a space may sit inside a parent space, to any depth.
+                    # RESTRICT: a space with subspaces cannot be deleted (delete them
+                    # first). The parent is fixed at creation, so the tree has no cycles.
+                    await conn.execute(
+                        "ALTER TABLE spaces ADD COLUMN IF NOT EXISTS parent_space_id TEXT "
+                        "REFERENCES spaces(space_id) ON DELETE RESTRICT")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_spaces_parent ON spaces(parent_space_id)")
+                    # Effective membership: a member of a space has the same role in
+                    # every subspace below it. One row per (space, member, holding
+                    # ancestor); `direct` marks membership of the space itself. Every
+                    # set-based access check (listing, hidden graphs, search) reads this.
+                    await conn.execute(
+                        """
+                        CREATE OR REPLACE VIEW space_effective_members AS
+                        WITH RECURSIVE tree(space_id, holder_id, depth) AS (
+                            SELECT space_id, space_id, 0 FROM spaces
+                            UNION ALL
+                            SELECT t.space_id, s.parent_space_id, t.depth + 1
+                            FROM tree t JOIN spaces s ON s.space_id = t.holder_id
+                            WHERE s.parent_space_id IS NOT NULL AND t.depth < 64
+                        )
+                        SELECT t.space_id, m.member, m.role, t.holder_id, t.depth,
+                               (t.depth = 0) AS direct,
+                               CASE m.role WHEN 'owner' THEN 3 WHEN 'editor' THEN 2 ELSE 1 END AS rank
+                        FROM tree t JOIN space_members m ON m.space_id = t.holder_id
+                        """
+                    )
                     logger.info("Spaces tables initialized")
 
                     # RBAC: capabilities granted directly to a user (delegated
