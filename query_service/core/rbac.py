@@ -157,6 +157,12 @@ async def is_admin(email: Optional[str]) -> bool:
     return bool(await active_roles(email) & ADMIN_ROLES)
 
 
+async def is_superadmin(email: Optional[str]) -> bool:
+    """SuperAdmin only (read fresh from the DB, not from the token): the tier allowed
+    irreversible platform actions such as deleting a space."""
+    return SUPERADMIN_ROLE in await active_roles(email)
+
+
 # ---------------------------------------------------------------------------
 # delegated grants (admin only — enforced at the endpoint)
 # ---------------------------------------------------------------------------

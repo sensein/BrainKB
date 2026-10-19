@@ -30,6 +30,8 @@ the underlying operation (wrap calls in try/except).
 
 from __future__ import annotations
 
+import uuid
+
 import datetime
 import json
 import logging
@@ -203,6 +205,51 @@ def build_recovery_provenance(
 # ---------------------------------------------------------------------------
 # Persistence + retrieval
 # ---------------------------------------------------------------------------
+
+def build_space_deletion_provenance(
+    *,
+    space: Dict[str, Any],
+    agent_id: str,
+    started_at: str,
+    ended_at: str,
+    dropped_graphs: List[str],
+    dropped_delta_graphs: List[str],
+) -> Graph:
+    """PROV-O record of a space deletion. The space and its graphs are gone, so this
+    record keeps what they were: a ``brainkb:SpaceDeletionActivity`` that
+    ``prov:invalidated`` the space and every dropped graph (data and delta), with
+    the space's slug, name and owner, who deleted it and when."""
+    g = _new_graph()
+    slug = str(space["slug"])
+    activity = URIRef(PROV_BASE[f"activity/space-deletion/{quote(slug, safe='')}/{uuid.uuid4().hex[:12]}"])
+    agent = agent_ref(agent_id)
+    g.add((agent, RDF.type, PROV.Agent))
+    g.add((agent, RDF.type, PROV.Person))
+    g.add((activity, RDF.type, PROV.Activity))
+    g.add((activity, RDF.type, BRAINKB.SpaceDeletionActivity))
+    g.add((activity, PROV.startedAtTime, Literal(started_at, datatype=XSD.dateTime)))
+    g.add((activity, PROV.endedAtTime, Literal(ended_at, datatype=XSD.dateTime)))
+    g.add((activity, PROV.wasAssociatedWith, agent))
+    space_node = URIRef(space["iri"])
+    g.add((space_node, RDF.type, PROV.Entity))
+    g.add((space_node, RDF.type, BRAINKB.Space))
+    g.add((space_node, BRAINKB.slug, Literal(slug)))
+    if space.get("name"):
+        g.add((space_node, DCTERMS.title, Literal(space["name"])))
+    if space.get("owner"):
+        g.add((space_node, BRAINKB.owner, agent_ref(space["owner"])))
+    g.add((space_node, BRAINKB.visibility, Literal(space.get("visibility") or "")))
+    for node, kind in ([(space_node, None)] + [(URIRef(x), "data") for x in dropped_graphs]
+                       + [(URIRef(x), "delta") for x in dropped_delta_graphs]):
+        g.add((activity, PROV.invalidated, node))
+        g.add((node, PROV.wasInvalidatedBy, activity))
+        g.add((node, PROV.invalidatedAtTime, Literal(ended_at, datatype=XSD.dateTime)))
+        if kind == "data":
+            g.add((space_node, BRAINKB.containsGraph, node))
+        elif kind == "delta":
+            g.add((activity, BRAINKB.droppedDeltaGraph, node))
+    return g
+
 
 async def write_provenance(graph: Graph) -> bool:
     """

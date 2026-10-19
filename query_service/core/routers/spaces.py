@@ -174,6 +174,38 @@ async def set_visibility(slug: str, body: VisibilityIn, user: Annotated[LoginUse
     return space
 
 
+@router.delete("/spaces/{slug}",
+               dependencies=[Depends(require_scopes(["admin"]))],
+               summary="Delete a space and everything in it (SuperAdmin only)",
+               description="Irreversible. Drops the space's named graphs and their ingestion "
+                           "delta graphs, removes the graphs' registry entries and the space's "
+                           "RDF manifest, then deletes the space with its members, graph "
+                           "bindings, access rules and search-index entries. The deletion is "
+                           "recorded in the provenance graph (prov:invalidated). Requires the "
+                           "SuperAdmin role and `confirm` equal to the slug.")
+async def delete_space(
+    slug: str,
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    confirm: Annotated[str, Query(..., description="Must equal the space's slug")],
+):
+    if not await rbac.is_superadmin(_agent(user)):
+        raise HTTPException(403, "only a SuperAdmin can delete a space")
+    if confirm != slug:
+        raise HTTPException(400, "confirm must equal the space's slug")
+    space = await sp.get_space(slug)
+    if not space:
+        return JSONResponse({"error": "space not found"}, status_code=404)
+    try:
+        result = await sp.delete_space(space, _agent(user))
+    except sp.SpaceDeletionError as e:
+        logger.error("[spaces] deleting %s failed: %s", slug, e)
+        raise HTTPException(502, f"space not deleted: {e}. Nothing was removed from the space "
+                                 "registry; it is safe to retry.")
+    logger.info("[spaces] %s deleted space %s (%d graphs, %d delta graphs)", _agent(user), slug,
+                len(result["dropped_graphs"]), len(result["dropped_delta_graphs"]))
+    return result
+
+
 @router.post("/spaces/{slug}/members",
              dependencies=[Depends(require_scopes(["write"]))],
              summary="Add or update a member (owner only)")

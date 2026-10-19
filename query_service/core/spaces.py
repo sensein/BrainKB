@@ -532,3 +532,103 @@ async def construct_space_graphs(space: Dict[str, Any]) -> str:
         return "CONSTRUCT {} WHERE {}"
     unions = " UNION ".join(f"{{ GRAPH <{g}> {{ ?s ?p ?o }} }}" for g in graphs)
     return f"CONSTRUCT {{ ?s ?p ?o }} WHERE {{ {unions} }}"
+
+
+# ---------------------------------------------------------------------------
+# Deletion (SuperAdmin only — enforced at the endpoint)
+# ---------------------------------------------------------------------------
+
+NAMED_GRAPH_REGISTRY = "https://brainkb.org/metadata/named-graph"
+
+
+class SpaceDeletionError(Exception):
+    """The triplestore part of a deletion failed; nothing in Postgres was touched,
+    so the space is still listed and the deletion can be retried."""
+
+
+def _safe_iri(iri: str) -> str:
+    """IRIs are interpolated into SPARQL Update: refuse anything that could break out."""
+    iri = str(iri)
+    if not iri or any(c in iri for c in '<>"{}|\\^` \n\r\t'):
+        raise SpaceDeletionError(f"refusing unsafe graph IRI: {iri!r}")
+    return iri
+
+
+async def _sparql_update(update: str) -> None:
+    endpoint = _get_endpoint("post")  # .../update
+    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
+        resp = await client.post(endpoint, data={"update": update}, auth=get_oxigraph_auth())
+    if resp.status_code not in (200, 204):
+        raise SpaceDeletionError(f"SPARQL update failed (HTTP {resp.status_code}): {(resp.text or '')[:300]}")
+
+
+async def delta_graphs_for(graph_iris: List[str]) -> List[str]:
+    """Per-job delta graphs (copies of the triples each ingestion added) whose target
+    is one of these graphs. Raises if the lookup fails: deleting a space while its
+    deltas survive would leave its data in the store."""
+    from core.graph_database_connection_manager import fetch_data_gdb_async
+    from core.provenance import PROVENANCE_GRAPH
+    if not graph_iris:
+        return []
+    values = " ".join(f"<{_safe_iri(g)}>" for g in graph_iris)
+    query = (
+        "PREFIX brainkb: <https://brainkb.org/vocab/> "
+        f"SELECT DISTINCT ?delta WHERE {{ VALUES ?g {{ {values} }} "
+        f"GRAPH <{PROVENANCE_GRAPH}> {{ ?x brainkb:targetGraph ?g ; brainkb:deltaGraph ?delta }} }}"
+    )
+    res = await fetch_data_gdb_async(query)
+    if res.get("status") != "success":
+        raise SpaceDeletionError(f"could not look up the space's delta graphs: {res.get('message')}")
+    rows = ((res.get("message") or {}).get("results") or {}).get("bindings") or []
+    return sorted({r["delta"]["value"] for r in rows if "delta" in r})
+
+
+async def delete_space(space: Dict[str, Any], deleted_by: str) -> Dict[str, Any]:
+    """Delete a space completely, triplestore first, then Postgres:
+
+    1. drop its data graphs and their ingestion delta graphs, remove each graph's
+       registry entry and the space's RDF manifest (one SPARQL Update);
+    2. only if that succeeded, delete the Postgres rows (members, graph bindings and
+       access rules cascade) and the search index entries;
+    3. record the deletion in the provenance graph (prov:invalidated), which is kept.
+
+    A failure in step 1 raises SpaceDeletionError with nothing deleted in Postgres, so
+    the space stays visible and the call can be retried (DROP SILENT is idempotent)."""
+    from core.provenance import build_space_deletion_provenance, write_provenance, _now_iso
+    started = _now_iso()
+    graphs = [_safe_iri(g) for g in space.get("graphs") or []]
+    deltas = [_safe_iri(d) for d in await delta_graphs_for(graphs)]
+    s_iri = _safe_iri(space["iri"])
+    ops = [f"DROP SILENT GRAPH <{g}>" for g in graphs + deltas]
+    ops += [f"DELETE WHERE {{ GRAPH <{NAMED_GRAPH_REGISTRY}> {{ <{g}> ?p ?o }} }}" for g in graphs]
+    ops.append(f"DELETE WHERE {{ GRAPH <{SPACES_METADATA_GRAPH}> {{ <{s_iri}> ?p ?o }} }}")
+    await _sparql_update(" ;\n".join(ops))
+
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            n_index = await conn.fetchval(
+                "WITH d AS (DELETE FROM graph_search_index "
+                "WHERE named_graph_iri = ANY($1::text[]) OR space_id = $2 RETURNING 1) "
+                "SELECT count(*) FROM d",
+                graphs, space["space_id"],
+            )
+            await conn.execute("DELETE FROM spaces WHERE space_id = $1", space["space_id"])
+
+    ended = _now_iso()
+    recorded = await write_provenance(build_space_deletion_provenance(
+        space=space, agent_id=deleted_by, started_at=started, ended_at=ended,
+        dropped_graphs=graphs, dropped_delta_graphs=deltas))
+    if not recorded:
+        logger.warning("[spaces] space %s deleted but its deletion provenance was not written", space["slug"])
+    return {
+        "deleted": True,
+        "slug": space["slug"],
+        "name": space.get("name"),
+        "dropped_graphs": graphs,
+        "dropped_delta_graphs": deltas,
+        "search_index_rows_removed": int(n_index or 0),
+        "members_removed": len(space.get("members") or []),
+        "deleted_by": deleted_by,
+        "deleted_at": ended,
+        "provenance_recorded": recorded,
+    }
