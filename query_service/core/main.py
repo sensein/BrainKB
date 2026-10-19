@@ -15,6 +15,7 @@ from core.routers.rapid_release import router as rapid_release
 from core.routers.insert import router as insert_router
 from core.routers.spaces import router as spaces_router
 from core.routers.search import router as search_router
+from core.routers.synthscholar import router as synthscholar_router
 from core.configuration import load_environment
 from core.database import init_db_pool
 from core.graph_database_connection_manager import initialize_metadata_graph
@@ -63,6 +64,7 @@ app.include_router(query_router, prefix="/api")
 app.include_router(insert_router,prefix="/api")
 app.include_router(spaces_router, prefix="/api", tags=["Spaces"])
 app.include_router(search_router, prefix="/api", tags=["Search"])
+app.include_router(synthscholar_router, prefix="/api", tags=["SynthScholar ingest"])
 
 # rapid-release
 app.include_router(rapid_release, prefix="/api/rapid-release", tags=["Rapid release"])

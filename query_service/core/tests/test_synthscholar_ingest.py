@@ -1,0 +1,194 @@
+"""SynthScholar review ingestion: what an output directory keeps, how review.json is
+read (plain JSON, not the package), the import record that goes into the graph, and
+the endpoint's permission and once-per-review checks. Offline fakes for the space,
+role and storage calls, like the other router tests."""
+import asyncio
+import json
+import unittest
+from unittest.mock import patch
+
+from fastapi import HTTPException
+from rdflib import Graph, URIRef
+from rdflib.namespace import PROV
+
+from .. import synthscholar as ss
+from ..routers import synthscholar as router
+
+REVIEW = {
+    "protocol": {"title": "KGs in neuroscience", "review_id": "review_local_20261015_neurokg"},
+    "research_question": "Which KGs exist?",
+    "timestamp": "2026-10-15T19:46:01+00:00",
+    "flow": {"total_identified": 7301, "included_synthesis": 2},
+    "included_articles": [
+        {"pmid": "1", "title": "A", "full_text": "text", "full_text_source": "europe_pmc_oa",
+         "risk_of_bias": "{'assessments': [], 'overall': 'Some concerns'}"},
+        {"pmid": "2", "title": "B", "full_text": "", "risk_of_bias": {"overall": "Low"}},
+    ],
+    "screening_log": [
+        {"pmid": "1", "stage": "title_abstract", "assessed_on": "title_abstract", "decision": "include"},
+        {"pmid": "1", "stage": "full_text", "assessed_on": "full_text", "full_text_source": "europe_pmc_oa"},
+        {"pmid": "2", "stage": "full_text", "assessed_on": "abstract_only"},
+    ],
+    "grade_assessments": {},
+    "some_field_a_newer_skill_added": {"anything": True},
+}
+TTL = b"<https://x/r> <https://x/p> \"o\" ."
+
+
+def folder(review=REVIEW, ttl=TTL, extra=()):
+    return [("output/review.json", json.dumps(review).encode()), ("output/review.ttl", ttl),
+            ("output/figures/fig_prisma.svg", b"<svg/>"), ("output/work/screen.py", b"x"),
+            ("output/.DS_Store", b"x"), *extra]
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+class PlanAndReadTests(unittest.TestCase):
+    def test_keeps_the_review_and_records_what_was_left_out(self):
+        plan = ss.plan_import(folder(), [{"path": "work/big.jsonl", "reason": "intermediate files (work/)"},
+                                         {"path": "../../etc/passwd"}, "junk"])
+        self.assertEqual([f.path for f in plan.files], ["figures/fig_prisma.svg", "review.json", "review.ttl"])
+        self.assertEqual(plan.skipped, [
+            {"path": "work/screen.py", "reason": "intermediate files (work/)"},
+            {"path": "work/big.jsonl", "reason": "intermediate files (work/)", "by": "client"}])
+
+    def test_review_ttl_is_required(self):
+        with self.assertRaisesRegex(ss.ImportError_, "review.ttl is missing"):
+            ss.plan_import([("o/review.json", json.dumps(REVIEW).encode())])
+
+    def test_reads_review_json_as_plain_json_whatever_the_skill_version(self):
+        review = ss.read_review(ss.plan_import(folder()))
+        self.assertEqual(ss.review_id_of(review), "review_local_20261015_neurokg")
+        d = ss.detail_of(review)
+        self.assertEqual([a["rob_overall"] for a in d["included_articles"]], ["Some concerns", "Low"])
+        self.assertEqual(d["retrieval"], {"included": 2, "with_full_text": 1, "abstract_only": 1,
+                                          "routes": {"europe_pmc_oa": 1, "abstract only": 1}})
+        self.assertEqual(d["screening"]["basis_by_stage"]["full_text"], {"full_text": 1, "abstract_only": 1})
+        self.assertEqual(ss.summary_of(review)["included_count"], 2)
+
+    def test_a_review_without_its_own_id_is_refused(self):
+        bad = {**REVIEW, "protocol": {"title": "t"}}
+        with self.assertRaisesRegex(ss.ImportError_, "review_id"):
+            ss.review_id_of(ss.read_review(ss.plan_import(folder(bad))))
+        with self.assertRaisesRegex(ss.ImportError_, "not a SynthScholar review"):
+            ss.read_review(ss.plan_import(folder({"x": 1})))
+
+    def test_import_record_links_every_kept_file(self):
+        plan = ss.plan_import(folder())
+        ttl = ss.import_record_ttl("review_local_1", plan, agent=URIRef("https://brainkb.org/agent/u"),
+                                   imported_at="2026-10-19T00:00:00+00:00", space_slug="lab",
+                                   summary={"title": "T"})
+        g = Graph().parse(data=ttl, format="turtle")
+        act = URIRef("https://brainkb.org/synthscholar/reviews/review_local_1/import")
+        used = {str(o) for o in g.objects(act, PROV.used)}
+        self.assertEqual(used, {ss.file_iri("review_local_1", f.path) for f in plan.files})
+        self.assertFalse(any(isinstance(n, type(None)) for n in g.all_nodes()))
+        self.assertNotIn("_:", ttl)   # no blank nodes in an append-only graph
+
+
+SPACE = {"space_id": "1", "slug": "lab", "name": "Lab", "visibility": "private", "graphs": []}
+
+
+class Upload:
+    def __init__(self, name, content):
+        self.filename, self._c = name, content
+
+    async def read(self):
+        return self._c
+
+
+def ingest(*, ingest_role=True, can_add=True, can_write=True, exists=False, registered=False, upload=None):
+    calls = {}
+
+    async def cap(_e, c):
+        return ingest_role
+
+    async def get_space(slug):
+        return SPACE if slug == "lab" else None
+
+    async def can_add_graph(_s, _m):
+        return can_add
+
+    async def write(_s, _m):
+        return can_write, "member (editor)" if can_write else "viewer only"
+
+    async def allowed(*_a):
+        return True, ""
+
+    async def false(*_a, **_k):
+        return False
+
+    async def none(*_a, **_k):
+        return None
+
+    async def record(name):
+        async def f(*a, **k):
+            calls[name] = (a, k)
+        return f
+
+    async def exists_(_rid):
+        return exists
+
+    async def registered_(_g):
+        return registered
+
+    async def attach(sid, g):
+        calls["attach"] = g
+        return True
+
+    async def save(**k):
+        calls["save"] = k
+
+    async def start(user_id, graph, files):
+        calls["job"] = (user_id, graph, sorted(files))
+        return "job123"
+
+    async def noop(*a, **k):
+        return None
+    with patch.object(router.rbac, "has_capability", cap), patch.object(router.sp, "get_space", get_space), \
+            patch.object(router, "_can_add_graph", can_add_graph), patch.object(router.sp, "can_write_space", write), \
+            patch.object(router.reserved, "check_allowed", allowed), patch.object(router.ss, "review_exists", exists_), \
+            patch.object(router, "check_named_graph_exists", registered_), \
+            patch.object(router.sp, "get_space_for_graph", none), patch.object(router.sp, "attach_graph", attach), \
+            patch.object(router, "insert_data_gdb_async", noop), patch.object(router.sp, "mirror_space_to_rdf", noop), \
+            patch.object(router.ss, "save_review", save), patch.object(router.ss, "set_job", noop), \
+            patch.object(router, "_start_ingest_job", start):
+        files = [Upload(n, c) for n, c in (upload or folder())]
+        out = run(router.ingest_review({"email": "u@x.org", "id": 7}, "lab", files,
+                                       json.dumps([{"path": "work/a", "reason": "intermediate files (work/)"}]), None))
+        return out, calls
+
+
+class IngestEndpointTests(unittest.TestCase):
+    def test_ingests_into_the_review_s_own_graph_as_a_job(self):
+        out, calls = ingest()
+        graph = "https://brainkb.org/synthscholar/reviews/review_local_20261015_neurokg/"
+        self.assertEqual(out["graph_iri"], graph)
+        self.assertEqual(out["job_id"], "job123")
+        self.assertEqual(calls["attach"], graph)
+        self.assertEqual(calls["job"], ("u@x.org", graph, ["review.ttl", "synthscholar-import.ttl"]))
+        self.assertEqual(calls["save"]["owner_email"], "u@x.org")
+        self.assertEqual(out["left_out"], 2)    # work/screen.py uploaded + work/a reported by the client
+
+    def test_permissions_are_the_space_s(self):
+        for kwargs, code in (({"ingest_role": False}, 403), ({"can_add": False}, 403), ({"can_write": False}, 403)):
+            with self.subTest(**kwargs), self.assertRaises(HTTPException) as e:
+                ingest(**kwargs)
+            self.assertEqual(e.exception.status_code, code)
+
+    def test_once_per_review(self):
+        for kwargs in ({"exists": True}, {"registered": True}):
+            with self.subTest(**kwargs), self.assertRaises(HTTPException) as e:
+                ingest(**kwargs)
+            self.assertEqual(e.exception.status_code, 409)
+
+    def test_not_an_output_directory(self):
+        with self.assertRaises(HTTPException) as e:
+            ingest(upload=[("x/notes.md", b"hi")])
+        self.assertEqual(e.exception.status_code, 400)
+
+
+if __name__ == "__main__":
+    unittest.main()
