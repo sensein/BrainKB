@@ -133,8 +133,12 @@ async def create_space(body: SpaceCreate, user: Annotated[LoginUserIn, Depends(g
 
     if await sp.get_space(body.slug):
         raise HTTPException(409, f"space '{body.slug}' already exists")
+    # Under a public space everything is public: a subspace there is created public.
+    visibility = body.visibility
+    if parent and (parent["visibility"] == "public" or sp.public_ancestor(parent)):
+        visibility = "public"
     space = await sp.create_space(body.slug, body.name, body.description, email,
-                                  body.visibility, parent["space_type"] if parent else body.space_type,
+                                  visibility, parent["space_type"] if parent else body.space_type,
                                   parent["space_id"] if parent else None)
     await sp.mirror_space_to_rdf(space)
     return space
@@ -273,7 +277,10 @@ async def space_tree(slug: str, user: Annotated[Optional[object], Depends(get_cu
               dependencies=[Depends(require_scopes(["write"]))],
               summary="Set space visibility (owner only)",
               description="Flip a space between 'private' and 'public'. Public spaces are "
-                          "readable by anyone, including unauthenticated clients.")
+                          "readable by anyone, including unauthenticated clients. Making a space "
+                          "public makes all its subspaces public; a subspace of a public space "
+                          "cannot be made private (409). Under a private space each subspace "
+                          "can be public or private on its own.")
 async def set_visibility(slug: str, body: VisibilityIn, user: Annotated[LoginUserIn, Depends(get_current_user)]):
     space = await sp.get_space(slug)
     if not space:
@@ -282,9 +289,19 @@ async def set_visibility(slug: str, body: VisibilityIn, user: Annotated[LoginUse
         raise HTTPException(403, "not authorized to change this space's visibility")
     if body.visibility not in ("private", "public"):
         raise HTTPException(400, "visibility must be 'private' or 'public'")
-    await sp.set_visibility(slug, body.visibility)
+    # A public space makes all its subspaces public, so a subspace of a public space
+    # cannot be private on its own; under a private space each subspace chooses.
+    above = sp.public_ancestor(space)
+    if body.visibility == "private" and above:
+        raise HTTPException(409, f"'{slug}' is inside the public space '{above}', and everything in a public "
+                                 f"space is public — make '{above}' private first")
+    changed = await sp.set_visibility(slug, body.visibility)
+    for s_ in changed:          # this space and, when made public, its subspaces
+        changed_space = await sp.get_space(s_)
+        if changed_space:
+            await sp.mirror_space_to_rdf(changed_space)
     space = await sp.get_space(slug)
-    await sp.mirror_space_to_rdf(space)
+    space["visibility_changed"] = changed
     return space
 
 

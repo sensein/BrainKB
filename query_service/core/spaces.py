@@ -368,14 +368,41 @@ async def remove_member(space_id: str, member: str) -> None:
         )
 
 
-async def set_visibility(slug: str, visibility: str) -> None:
+async def set_visibility(slug: str, visibility: str) -> List[str]:
+    """Set a space's visibility. A public space makes everything under it public:
+    making a space public also makes all its subspaces (any depth) public. Making one
+    private changes only that space — under a private space each subspace keeps its
+    own setting, so some can stay public. Returns the slugs that changed."""
     if visibility not in ("private", "public"):
         raise ValueError("visibility must be 'private' or 'public'")
     async with get_db_connection() as conn:
-        await conn.execute(
-            "UPDATE spaces SET visibility = $1, updated_at = $2 WHERE slug = $3",
-            visibility, time.time(), slug,
-        )
+        if visibility == "public":
+            rows = await conn.fetch(
+                """
+                WITH RECURSIVE down(space_id) AS (
+                    SELECT space_id FROM spaces WHERE slug = $1
+                    UNION SELECT s.space_id FROM spaces s JOIN down d ON s.parent_space_id = d.space_id
+                )
+                UPDATE spaces SET visibility = 'public', updated_at = $2
+                WHERE space_id IN (SELECT space_id FROM down) AND visibility <> 'public'
+                RETURNING slug
+                """,
+                slug, time.time(),
+            )
+        else:
+            rows = await conn.fetch(
+                "UPDATE spaces SET visibility = $1, updated_at = $2 WHERE slug = $3 AND visibility <> $1 RETURNING slug",
+                visibility, time.time(), slug,
+            )
+    return [r["slug"] for r in rows]
+
+
+def public_ancestor(space: Dict[str, Any]) -> Optional[str]:
+    """The slug of the nearest public ancestor, if any (a space under it must be public)."""
+    for a in reversed(space.get("ancestors") or []):
+        if a.get("visibility") == "public":
+            return a.get("slug")
+    return None
 
 
 class GraphAlreadyBound(Exception):
