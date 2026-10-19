@@ -1518,7 +1518,14 @@ async def import_review(
         result = PRISMAReviewResult.model_validate_json(plan.get("review.json").content)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"review.json is not a SynthScholar review result: {str(e)[:300]}")
-    session = await review_store.import_review(result, plan, owner_email=owner, imported_by=owner)
+    try:
+        session = await review_store.import_review(result, plan, owner_email=owner, imported_by=owner)
+    except Exception as e:
+        # most often the database: the review_artifacts table or the new reviews
+        # columns not created yet (init_db), or a size limit on the connection
+        logger.error("[import] storing the review failed for %s: %s", owner, e, exc_info=True)
+        raise HTTPException(status_code=500,
+                            detail=f"Storing the imported review failed: {type(e).__name__}: {str(e)[:300]}")
     logger.info("[import] %s imported %s (%d files, %d skipped)", owner, session.review_id,
                 len(plan.files), len(plan.skipped))
     resp = _to_detail_response(session)
