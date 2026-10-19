@@ -81,6 +81,10 @@ async def init_db() -> None:
             "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS pending_plan_iteration INTEGER",
             "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS plan_response_json JSONB",
             "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'pipeline'",
+            "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS import_json JSONB",
+            "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS graph_json JSONB",
+            "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS summary_json JSONB",
         ):
             await conn.execute(text(stmt))
 

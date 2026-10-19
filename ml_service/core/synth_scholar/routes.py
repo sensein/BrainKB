@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import inspect
+import json
 import logging
 import os
 import re
@@ -26,12 +27,12 @@ import time
 from datetime import datetime, timezone
 from typing import Annotated, AsyncGenerator, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, UploadFile, File, Form
+from fastapi.responses import Response, StreamingResponse
 
 from synthscholar import __version__ as agent_version  # type: ignore[import-not-found]
 from synthscholar.models import (  # type: ignore[import-not-found]
-    ReviewProtocol, ReviewPlan, RoBTool, CompareReviewResult,
+    ReviewProtocol, ReviewPlan, RoBTool, CompareReviewResult, PRISMAReviewResult,
 )
 from synthscholar.pipeline import PRISMAReviewPipeline  # type: ignore[import-not-found]
 from synthscholar.export import (  # type: ignore[import-not-found]
@@ -45,7 +46,7 @@ from synthscholar.export import (  # type: ignore[import-not-found]
 )
 from synthscholar.agents import ROB_DOMAINS  # type: ignore[import-not-found]
 
-from core.security import decode_jwt, get_user, get_current_user
+from core.security import decode_token_with_kind, get_current_user, identity_from_token
 
 from .schemas import (
     RunReviewRequest, CompareRunRequest, CompareReviewSummaryResponse,
@@ -57,8 +58,12 @@ from .schemas import (
     ReviewSearchRequest, ReviewSearchResponse,
     SearchArticleResult, SearchReviewResult,
     SearchSynthesisResponse, SearchSynthesisGroup,
+    ArtifactResponse, GraphIngestRequest, OwnerRequest,
 )
 from .store import review_store, ReviewSession
+from .imports import ImportError_, plan_import
+from .provenance_view import build_provenance, review_graph_iri, safe_graph_entry
+from .review_pdf import PDFUnavailable, render_markdown_to_pdf
 from .progress_events import classify
 
 logger = logging.getLogger(__name__)
@@ -89,14 +94,13 @@ async def _get_user_for_sse(
             detail="Missing JWT (set Authorization header or ?token= query param).",
         )
     try:
-        payload = decode_jwt(raw)
+        payload, is_sso = decode_token_with_kind(raw)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
-    email = payload.get("sub")
-    if not email:
+    if not payload.get("sub"):
         raise HTTPException(status_code=401, detail="Invalid token (missing sub claim).")
-    user = await get_user(email=email)
-    if user is None:
+    user = await identity_from_token(payload, is_sso)
+    if not user:
         raise HTTPException(status_code=401, detail="Token user not found.")
     return user
 
@@ -222,6 +226,18 @@ def _to_flow_response(flow) -> FlowResponse:
 
 def _to_summary_response(s: ReviewSession) -> ReviewSummaryResponse:
     r = s.result
+    if r is None and s.summary:
+        flow = (s.summary or {}).get("flow")
+        return ReviewSummaryResponse(
+            review_id=s.review_id, status=s.status, title=s.protocol.title if s.protocol else "",
+            created_at=s.created_at, completed_at=s.completed_at,
+            flow=FlowResponse(**flow) if flow else None,
+            included_count=int((s.summary or {}).get("included_count") or 0),
+            is_public=s.is_public, share_to_cache=s.share_to_cache, error=s.error,
+            stage=s.stage, stage_index=s.stage_index, stage_total=s.stage_total, stage_done=s.stage_done,
+            stage_remaining=s.stage_remaining, articles_included=s.articles_included,
+            source=s.source, in_graph=bool(s.graph_ingests), graph_iri=review_graph_iri(s),
+        )
     return ReviewSummaryResponse(
         review_id=s.review_id,
         status=s.status,
@@ -243,6 +259,9 @@ def _to_summary_response(s: ReviewSession) -> ReviewSummaryResponse:
         stage_done=s.stage_done,
         stage_remaining=s.stage_remaining,
         articles_included=s.articles_included,
+        source=s.source,
+        in_graph=bool(s.graph_ingests),
+        graph_iri=review_graph_iri(s),
     )
 
 
@@ -262,7 +281,7 @@ def _to_article_summary(article) -> ArticleSummary:
     )
 
 
-def _to_detail_response(session: ReviewSession) -> ReviewDetailResponse:
+def _to_detail_response(session: ReviewSession, *, include_people: bool = True) -> ReviewDetailResponse:
     r = session.result
     resp = ReviewDetailResponse(
         review_id=session.review_id,
@@ -276,6 +295,8 @@ def _to_detail_response(session: ReviewSession) -> ReviewDetailResponse:
         last_completed_step=session.last_completed_step,
         run_request=session.run_request,
         error=session.error,
+        source=session.source,
+        provenance=build_provenance(session, include_people=include_people),
     )
     if r and isinstance(r, CompareReviewResult):
         resp.compare_result = r.model_dump()
@@ -290,6 +311,8 @@ def _to_detail_response(session: ReviewSession) -> ReviewDetailResponse:
                 decision=s.decision.value if hasattr(s.decision, "value") else str(s.decision),
                 reason=s.reason,
                 stage=s.stage.value if hasattr(s.stage, "value") else str(s.stage),
+                assessed_on=getattr(s, "assessed_on", "") or "",
+                full_text_source=getattr(s, "full_text_source", "") or "",
             )
             for s in r.screening_log
         ]
@@ -818,7 +841,9 @@ async def get_review(
 ):
     """Get full review detail including synthesis, evidence, screening log."""
     session = await _session_or_404(review_id, user)
-    return _to_detail_response(session)
+    resp = _to_detail_response(session)
+    resp.artifacts = [ArtifactResponse(**a) for a in await review_store.list_artifacts(review_id)]
+    return resp
 
 
 @router.get(
@@ -1250,7 +1275,7 @@ async def cancel_review(
 _EXPORT_FORMAT_PATTERN = (
     r"^(markdown|json|bibtex|ttl|jsonld|rubric_markdown|rubric_json|charting_markdown"
     r"|charting_json|appraisal_markdown|appraisal_json|narrative_summary_markdown"
-    r"|narrative_summary_json)$"
+    r"|narrative_summary_json|pdf)$"
 )
 
 
@@ -1279,6 +1304,8 @@ async def _export_session(session: ReviewSession, format: str, model: Optional[s
     result = session.result
     ts = datetime.now().strftime("%Y%m%d")
     is_compare = isinstance(result, CompareReviewResult)
+    if format == "pdf":
+        return await _pdf_response(session, ts)
 
     single_result = None
     single_model_slug = ""
@@ -1430,6 +1457,136 @@ async def _export_session(session: ReviewSession, format: str, model: Optional[s
     )
 
 
+async def _pdf_response(session: ReviewSession, ts: str) -> Response:
+    """The review's PDF: the manuscript an imported run brought (review.pdf), else one
+    generated from the Markdown export and cached as generated/review.pdf."""
+    import asyncio
+    for path in ("review.pdf", "generated/review.pdf"):
+        art = await review_store.get_artifact(session.review_id, path)
+        if art is not None:
+            return Response(art.content, media_type="application/pdf",
+                            headers={"Content-Disposition": f'attachment; filename="{session.review_id}.pdf"'})
+    result = session.result
+    if isinstance(result, CompareReviewResult):
+        raise HTTPException(status_code=422, detail="PDF export is not available for compare-mode reviews")
+    try:
+        pdf = await asyncio.to_thread(render_markdown_to_pdf, to_markdown(result))
+    except PDFUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    await review_store.put_artifact(session.review_id, "generated/review.pdf", pdf,
+                                    kind="manuscript_pdf", media_type="application/pdf")
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="prisma_review_{ts}.pdf"'})
+
+
+def _parse_left_out(raw: Optional[str]) -> list:
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="left_out must be a JSON list of {path, reason}")
+    return items if isinstance(items, list) else []
+
+
+@router.post("/synth-scholar/reviews/import", response_model=ReviewDetailResponse,
+             tags=["SynthScholar — import"], status_code=201)
+async def import_review(
+    user: Annotated[dict, Depends(get_current_user)],
+    files: Annotated[list[UploadFile], File(description="The output directory's files; each filename is its relative path")],
+    left_out: Annotated[Optional[str], Form(description="JSON list of {path, reason} the client chose not to upload "
+                                                         "(e.g. work/), so the import record still says what was left out")] = None,
+):
+    """Import a locally-run SynthScholar review from its output directory.
+
+    Upload every file of the directory (the browser sends each with its relative
+    path). review.json is required and must be a PRISMAReviewResult. Everything
+    except intermediate work (work/ and caches) is kept as the review's files; the
+    review is created completed, private, and owned by the caller. Pushing it into
+    the graph database is a separate step (it needs the caller's space rights)."""
+    owner = _user_email(user)
+    if not owner:
+        raise HTTPException(status_code=401, detail="Sign in to import a review")
+    uploads = []
+    for f in files:
+        uploads.append((f.filename or "", await f.read()))
+    try:
+        plan = plan_import(uploads, client_skipped=_parse_left_out(left_out))
+    except ImportError_ as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        result = PRISMAReviewResult.model_validate_json(plan.get("review.json").content)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"review.json is not a SynthScholar review result: {str(e)[:300]}")
+    session = await review_store.import_review(result, plan, owner_email=owner, imported_by=owner)
+    logger.info("[import] %s imported %s (%d files, %d skipped)", owner, session.review_id,
+                len(plan.files), len(plan.skipped))
+    resp = _to_detail_response(session)
+    resp.artifacts = [ArtifactResponse(**a) for a in await review_store.list_artifacts(session.review_id)]
+    return resp
+
+
+@router.get("/synth-scholar/reviews/{review_id}/artifacts", response_model=list[ArtifactResponse],
+            tags=["SynthScholar — import"])
+async def list_review_artifacts(review_id: str, user: Annotated[dict, Depends(get_current_user)]):
+    await _session_or_404(review_id, user)
+    return [ArtifactResponse(**a) for a in await review_store.list_artifacts(review_id)]
+
+
+def _artifact_response(art, download: bool) -> Response:
+    name = art.path.rsplit("/", 1)[-1]
+    disposition = "attachment" if download else "inline"
+    headers = {"Content-Disposition": f'{disposition}; filename="{name}"',
+               "ETag": f'"{art.sha256}"', "X-Content-SHA256": art.sha256,
+               # served from the API origin: never let an uploaded file run script there
+               "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+               "X-Content-Type-Options": "nosniff"}
+    return Response(art.content, media_type=art.media_type, headers=headers)
+
+
+@router.get("/synth-scholar/reviews/{review_id}/artifacts/{path:path}", tags=["SynthScholar — import"])
+async def get_review_artifact(review_id: str, path: str, user: Annotated[dict, Depends(get_current_user)],
+                              download: bool = Query(default=False)):
+    await _session_or_404(review_id, user)
+    art = await review_store.get_artifact(review_id, path)
+    if art is None:
+        raise HTTPException(status_code=404, detail="file not found")
+    return _artifact_response(art, download)
+
+
+@router.post("/synth-scholar/reviews/{review_id}/graph-ingests", tags=["SynthScholar — import"])
+async def record_graph_ingest(review_id: str, body: GraphIngestRequest,
+                              user: Annotated[dict, Depends(get_current_user)]):
+    """Record that the review was pushed into the graph database (the UI performs
+    the push as the user against query_service, which enforces the space's write
+    and ingest rights). A review is ingested once; its RDF is append-only."""
+    session = await _session_or_404(review_id, user)
+    if not session.owner_email and not _is_admin(user):
+        # a review with no recorded owner is readable by anyone signed in; only an
+        # admin may speak for it until it has an owner (PATCH .../owner)
+        raise HTTPException(status_code=403, detail="This review has no owner yet — an admin must assign one first")
+    if body.graph_iri != review_graph_iri(session):
+        raise HTTPException(status_code=422, detail=f"a review's graph is {review_graph_iri(session)}")
+    if session.graph_ingests:
+        # once per review: its graph is append-only, a second ingest would duplicate blank nodes
+        raise HTTPException(status_code=409, detail=f"already ingested into {session.graph_ingests[0].get('graph_iri')}")
+    entry = safe_graph_entry({**body.model_dump(), "ingested_by": _user_email(user),
+                              "ingested_at": datetime.now(timezone.utc).isoformat()})
+    ingests = await review_store.record_graph_ingest(review_id, entry)
+    return {"review_id": review_id, "graph_ingests": ingests}
+
+
+@router.patch("/synth-scholar/reviews/{review_id}/owner", tags=["SynthScholar — reviews"])
+async def set_review_owner(review_id: str, body: OwnerRequest, user: Annotated[dict, Depends(get_current_user)]):
+    """Admin only: assign a review to its owner. Reviews created before owners were
+    recorded correctly have no owner; this is how an admin hands them back."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin role required")
+    if not await review_store.set_owner(review_id, body.owner_email.strip()):
+        raise HTTPException(status_code=404, detail=f"Review '{review_id}' not found")
+    return {"review_id": review_id, "owner_email": body.owner_email.strip()}
+
+
 @router.get("/synth-scholar/reviews/{review_id}/log", tags=["SynthScholar — reviews"])
 async def get_pipeline_log(
     review_id: str,
@@ -1496,8 +1653,11 @@ async def list_public_reviews():
     tags=["SynthScholar — public"],
 )
 async def get_public_review(review_id: str):
-    """Full detail for one published review. 404 if it is not published."""
-    return _to_detail_response(await _public_session_or_404(review_id))
+    """Full detail for one published review. 404 if it is not published. People's
+    emails (who imported it, who pushed it to the graph) are not shown publicly."""
+    resp = _to_detail_response(await _public_session_or_404(review_id), include_people=False)
+    resp.artifacts = [ArtifactResponse(**a) for a in await review_store.list_artifacts(review_id)]
+    return resp
 
 
 @router.get("/synth-scholar/public/reviews/{review_id}/log", tags=["SynthScholar — public"])
@@ -1532,6 +1692,16 @@ async def export_public_review(
     """Export a published review. Same formats as the authenticated route."""
     session = await _public_session_or_404(review_id)
     return await _export_session(session, format, model)
+
+
+@router.get("/synth-scholar/public/reviews/{review_id}/artifacts/{path:path}", tags=["SynthScholar — public"])
+async def get_public_review_artifact(review_id: str, path: str, download: bool = Query(default=False)):
+    """A published review's file (PDF, manuscript, figure, table). 404 otherwise."""
+    await _public_session_or_404(review_id)
+    art = await review_store.get_artifact(review_id, path)
+    if art is None:
+        raise HTTPException(status_code=404, detail="file not found")
+    return _artifact_response(art, download)
 
 
 @router.patch(

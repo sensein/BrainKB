@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import select, delete as sa_delete, update as sa_update
+from sqlalchemy.orm import defer
 
 from synthscholar.models import (  # type: ignore[import-not-found]
     PRISMAReviewResult,
@@ -31,7 +32,7 @@ from synthscholar.models import (  # type: ignore[import-not-found]
 )
 
 from .database import async_session
-from .db_models import ReviewRow
+from .db_models import ReviewArtifactRow, ReviewRow
 from .progress_events import classify, merge_into_state
 from .schemas import ReviewStatus
 
@@ -135,6 +136,11 @@ class ReviewSession:
     checkpoint_json: Optional[dict] = None
     last_completed_step: int = 0
     owner_email: Optional[str] = None
+    # "pipeline" (run here) | "import" (a local run's output directory)
+    source: str = "pipeline"
+    import_manifest: Optional[dict] = None
+    graph_ingests: list = field(default_factory=list)
+    summary: Optional[dict] = None
 
     stage: Optional[str] = None
     stage_index: Optional[int] = None
@@ -274,6 +280,7 @@ class ReviewSession:
                         # PDF full-text extraction and would otherwise abort
                         # the UPDATE with UntranslatableCharacterError.
                         result_json=_scrub_pg_unsafe(self.result.model_dump()) if self.result else None,
+                        summary_json=_summary_for(self.result),
                         completed_at=datetime.fromisoformat(self.completed_at),
                         progress_step=self.progress_step,
                         pipeline_log=_scrub_pg_unsafe(list(self.pipeline_log)),
@@ -568,14 +575,27 @@ class ReviewSession:
 
 # ── Hydration helpers ────────────────────────────────────────────────────
 
-def _row_to_session(row: ReviewRow) -> ReviewSession:
-    """Convert a DB row to a ReviewSession (without live SSE state)."""
+def _summary_for(result) -> Optional[dict]:
+    """Listing summary (flow + included count) of a result, compare-aware."""
+    if result is None:
+        return None
+    if isinstance(result, CompareReviewResult):
+        return {"flow": None, "included_count": sum(
+            len(mr.result.included_articles) for mr in result.model_results if mr.result)}
+    from .imports import summary_of
+    return summary_of(result)
+
+
+def _row_to_session(row: ReviewRow, with_result: bool = True) -> ReviewSession:
+    """Convert a DB row to a ReviewSession (without live SSE state). With
+    with_result=False the result is not loaded (listings): `summary` carries the
+    flow and included count instead."""
     protocol = None
     if row.protocol_json:
         protocol = ReviewProtocol.model_validate(row.protocol_json)
 
     result = None
-    if row.result_json:
+    if with_result and row.result_json:
         is_compare = row.run_request_json and row.run_request_json.get("compare_mode")
         if is_compare:
             result = CompareReviewResult.model_validate(row.result_json)
@@ -598,6 +618,10 @@ def _row_to_session(row: ReviewRow) -> ReviewSession:
         checkpoint_json=row.checkpoint_json,
         last_completed_step=row.last_completed_step or 0,
         owner_email=row.owner_email,
+        source=getattr(row, "source", None) or "pipeline",
+        import_manifest=row.import_json,
+        graph_ingests=list(row.graph_json or []),
+        summary=row.summary_json,
     )
     if row.stage is not None or row.stage_idx is not None:
         session.stage = row.stage
@@ -696,15 +720,17 @@ class ReviewStore:
     async def list_for_owner(self, owner_email: Optional[str]) -> list[ReviewSession]:
         """List reviews. If owner_email is None → list ALL (admin view)."""
         async with async_session() as db:
-            stmt = select(ReviewRow).order_by(ReviewRow.created_at.desc())
+            stmt = select(ReviewRow).options(defer(ReviewRow.result_json)).order_by(ReviewRow.created_at.desc())
             if owner_email is not None:
                 stmt = stmt.where(ReviewRow.owner_email == owner_email)
             result = await db.execute(stmt)
             rows = result.scalars().all()
+        summaries = await self._ensure_summaries(rows)
 
         sessions = []
         for row in rows:
-            s = _row_to_session(row)
+            s = _row_to_session(row, with_result=False)
+            s.summary = summaries.get(row.review_id, s.summary)
             if row.review_id in self._runtime:
                 live = self._runtime[row.review_id]
                 s._live = live
@@ -736,12 +762,43 @@ class ReviewStore:
         async with async_session() as db:
             result = await db.execute(
                 select(ReviewRow)
+                .options(defer(ReviewRow.result_json))
                 .where(ReviewRow.is_public.is_(True))
                 .where(ReviewRow.status == ReviewStatus.COMPLETED.value)
                 .order_by(ReviewRow.created_at.desc())
             )
             rows = result.scalars().all()
-        return [_row_to_session(row) for row in rows]
+        summaries = await self._ensure_summaries(rows)
+        out = []
+        for row in rows:
+            s = _row_to_session(row, with_result=False)
+            s.summary = summaries.get(row.review_id, s.summary)
+            out.append(s)
+        return out
+
+    async def _ensure_summaries(self, rows) -> dict:
+        """Listing summaries for rows written before summary_json existed: computed
+        once from the stored result, then saved, so later listings stay cheap."""
+        missing = [r.review_id for r in rows if r.summary_json is None and r.status == ReviewStatus.COMPLETED.value]
+        out: dict = {}
+        if not missing:
+            return out
+        async with async_session() as db:
+            found = await db.execute(
+                select(ReviewRow.review_id, ReviewRow.result_json, ReviewRow.run_request_json)
+                .where(ReviewRow.review_id.in_(missing)))
+            for rid, rj, rr in found.all():
+                if not rj:
+                    continue
+                try:
+                    res = (CompareReviewResult if (rr or {}).get("compare_mode") else PRISMAReviewResult).model_validate(rj)
+                except Exception as exc:
+                    logger.warning("[summary] %s: %s", rid, exc)
+                    continue
+                out[rid] = _summary_for(res)
+                await db.execute(sa_update(ReviewRow).where(ReviewRow.review_id == rid).values(summary_json=out[rid]))
+            await db.commit()
+        return out
 
     async def get_public(self, review_id: str) -> Optional[ReviewSession]:
         """Fetch a review only if its author published it. Returns None otherwise
@@ -753,6 +810,108 @@ class ReviewStore:
         if not session.is_public or session.status != ReviewStatus.COMPLETED:
             return None
         return session
+
+    # ── imports ─────────────────────────────────────────────────────────────
+
+    async def import_review(self, result: PRISMAReviewResult, plan, owner_email: str,
+                            imported_by: str) -> ReviewSession:
+        """Create a completed review from a local run's output directory: the
+        result, its files as artifacts, and the import's provenance."""
+        now = datetime.now(timezone.utc)
+        original_id = (getattr(result.protocol, "review_id", "") or "").strip()
+        review_id = f"review_import_{now.strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        completed = None
+        try:
+            completed = datetime.fromisoformat(str(result.timestamp).replace("Z", "+00:00")) if result.timestamp else None
+        except ValueError:
+            completed = None
+        rc = getattr(result, "run_configuration", None)
+        manifest = {
+            **plan.manifest(),
+            "imported_by": imported_by,
+            "imported_at": now.isoformat(),
+            "original_review_id": original_id or None,
+            "run_completed_at": result.timestamp or None,
+            "synthscholar_version": getattr(rc, "package_version", None) if rc else None,
+            "model_name": getattr(rc, "model_name", None) if rc else None,
+        }
+        from .imports import local_run_provenance
+        manifest["local_run"] = local_run_provenance(plan)
+        title = (result.protocol.title if result.protocol else "") or original_id or "Imported review"
+        row = ReviewRow(
+            review_id=review_id,
+            status=ReviewStatus.COMPLETED.value,
+            title=title[:500],
+            protocol_json=_scrub_pg_unsafe(result.protocol.model_dump()) if result.protocol else None,
+            result_json=_scrub_pg_unsafe(result.model_dump()),
+            summary_json=_summary_for(result),
+            pipeline_log=[f"[{now.isoformat()}] Imported from a local SynthScholar run"
+                          + (f" ({original_id})" if original_id else "")
+                          + f" by {imported_by}: {len(plan.files)} files"],
+            progress_step=0,
+            created_at=now,
+            completed_at=completed or now,
+            is_public=False,
+            share_to_cache=False,
+            run_request_json=None,
+            owner_email=owner_email,
+            source="import",
+            import_json=manifest,
+            graph_json=[],
+            articles_included=len(result.included_articles or []),
+        )
+        async with async_session() as db:
+            db.add(row)
+            await db.flush()
+            for f in plan.files:
+                db.add(ReviewArtifactRow(review_id=review_id, path=f.path, kind=f.kind, media_type=f.media_type,
+                                         size_bytes=f.size, sha256=f.sha256, content=f.content, created_at=now))
+            await db.commit()
+        return await self.get(review_id)
+
+    async def list_artifacts(self, review_id: str) -> list[dict]:
+        async with async_session() as db:
+            rows = (await db.execute(
+                select(ReviewArtifactRow.path, ReviewArtifactRow.kind, ReviewArtifactRow.media_type,
+                       ReviewArtifactRow.size_bytes, ReviewArtifactRow.sha256, ReviewArtifactRow.created_at)
+                .where(ReviewArtifactRow.review_id == review_id)
+                .order_by(ReviewArtifactRow.path))).all()
+        return [{"path": r.path, "kind": r.kind, "media_type": r.media_type, "size_bytes": r.size_bytes,
+                 "sha256": r.sha256, "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]
+
+    async def get_artifact(self, review_id: str, path: str) -> Optional[ReviewArtifactRow]:
+        async with async_session() as db:
+            return await db.get(ReviewArtifactRow, (review_id, path))
+
+    async def put_artifact(self, review_id: str, path: str, content: bytes, *, kind: str, media_type: str) -> None:
+        """Store (or replace) one artifact — e.g. a PDF generated on demand."""
+        import hashlib
+        async with async_session() as db:
+            existing = await db.get(ReviewArtifactRow, (review_id, path))
+            if existing is not None:
+                await db.delete(existing)
+                await db.flush()
+            db.add(ReviewArtifactRow(review_id=review_id, path=path, kind=kind, media_type=media_type,
+                                     size_bytes=len(content), sha256=hashlib.sha256(content).hexdigest(),
+                                     content=content, created_at=datetime.now(timezone.utc)))
+            await db.commit()
+
+    async def record_graph_ingest(self, review_id: str, entry: dict) -> list:
+        async with async_session() as db:
+            row = await db.get(ReviewRow, review_id)
+            if row is None:
+                return []
+            ingests = list(row.graph_json or []) + [entry]
+            row.graph_json = ingests
+            await db.commit()
+            return ingests
+
+    async def set_owner(self, review_id: str, owner_email: str) -> bool:
+        async with async_session() as db:
+            result = await db.execute(
+                sa_update(ReviewRow).where(ReviewRow.review_id == review_id).values(owner_email=owner_email))
+            await db.commit()
+            return result.rowcount > 0
 
     async def delete(self, review_id: str) -> bool:
         self._runtime.pop(review_id, None)

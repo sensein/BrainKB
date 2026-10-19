@@ -89,6 +89,43 @@ def decode_token_any(token: str) -> dict:
     return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
 
 
+def decode_token_with_kind(token: str) -> tuple[dict, bool]:
+    """(payload, is_sso): is_sso when the issuer's RS256 SSO key verified it."""
+    payload = jwks.verify_access_token(token)
+    if payload is not None:
+        return payload, True
+    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM]), False
+
+
+async def identity_from_token(payload: dict, is_sso: bool) -> Optional[dict]:
+    """The caller as a plain dict: email/sub, roles and scopes FROM THE VERIFIED
+    TOKEN, plus the local account row's columns when there is one.
+
+    Previously callers got the raw asyncpg Record (or False). `user.get(...)` /
+    `getattr(user, "email")` then silently returned nothing, so every review was
+    stored with an empty owner, ownership checks were skipped, and admins were never
+    recognised (roles live in the token, not the row). An SSO token has already been
+    verified by the issuer, so an OAuth account without an active local row (the
+    usual case: OAuth onboarding creates an inactive shell row) is still a valid
+    caller; a legacy HS256 token still needs an active row, as before."""
+    email = payload.get("sub")
+    if not email:
+        return None
+    row = await get_user(email=email)
+    if not row and not is_sso:
+        return None
+    user = dict(row) if row else {}
+    user.pop("password", None)
+    user.update({
+        "email": email,
+        "sub": email,
+        "roles": list(payload.get("roles") or []),
+        "scopes": list(payload.get("scopes") or []),
+        "auth_source": payload.get("auth_source"),
+    })
+    return user
+
+
 def decode_jwt(token: str):
     try:
         return decode_token_any(token)
@@ -100,9 +137,8 @@ async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
 ):
     try:
-        payload = decode_token_any(token)
-        email = payload.get("sub")
-        if email is None:
+        payload, is_sso = decode_token_with_kind(token)
+        if payload.get("sub") is None:
             raise credentials_exception
     except ExpiredSignatureError as e:
         raise HTTPException(
@@ -112,8 +148,8 @@ async def get_current_user(
         ) from e
     except JWTError as e:
         raise credentials_exception from e
-    user = await get_user(email=email)
-    if user is None:
+    user = await identity_from_token(payload, is_sso)
+    if not user:
         raise credentials_exception
     return user
 
@@ -173,7 +209,7 @@ async def authenticate_websocket(websocket: WebSocket, required_scopes: Optional
         # Decode and validate JWT token (same logic as get_current_user):
         # RS256 SSO access token (aud-checked) first, then legacy HS256.
         try:
-            payload = decode_token_any(token)
+            payload, is_sso = decode_token_with_kind(token)
         except ExpiredSignatureError:
             logger.warning("JWT token has expired")
             return None
@@ -194,9 +230,9 @@ async def authenticate_websocket(websocket: WebSocket, required_scopes: Optional
                 logger.warning(f"Insufficient scopes. Required: {required_scopes}, Token has: {token_scopes}")
                 return None
         
-        # Get user from database (same as get_current_user)
-        user = await get_user(email=email)
-        if user is None:
+        # Same identity as get_current_user (token roles/scopes + account row)
+        user = await identity_from_token(payload, is_sso)
+        if not user:
             logger.warning(f"User not found for email: {email}")
             return None
         

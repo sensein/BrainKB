@@ -65,6 +65,15 @@ Once started, services are accessible at:
     with SSE progress streaming and markdown / JSON / RDF exports). Reuses
     the unified `brainkb` Postgres database. See `env.template` for the
     optional API keys (OpenRouter, NCBI, Semantic Scholar, CORE).
+  - **Imports a locally-run review** (`POST /api/synth-scholar/reviews/import`):
+    the run's output directory is uploaded as-is; everything but intermediate
+    `work/` is kept with the review (manuscript, PDF, figures, tables, RDF,
+    search log, verification reports — table `review_artifacts`), the review is
+    private to the importer, and its provenance records the import, what was left
+    out, the run's searches and checks. `format=pdf` export serves the run's own
+    PDF, or renders one from the review (pandoc + Typst, in the image). A review's
+    RDF goes into a space's graph `https://brainkb.org/synthscholar/reviews/<review's own id>/`
+    through query_service as the user (UI or MCP), once, and is recorded on the review.
 - **Oxigraph SPARQL**: `http://localhost:7878/` (password protected) graph database
 - **pgAdmin**: `http://localhost:5051/`
 - **User management service (FastAPI)**: `http://localhost:8004`
