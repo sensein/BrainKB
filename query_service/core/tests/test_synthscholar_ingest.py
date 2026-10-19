@@ -238,5 +238,24 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(ss.study_in_review(Q, pmid="999"), [])
 
 
+    def test_records_search_answers_not_questions(self):
+        r = {"data_charting_rubrics": [
+            {"source_id": "S-1", "title": "A", "custom_fields": {"D4 Which interfaces (SPARQL, Cypher)?": "REST only"}},
+            {"source_id": "S-2", "title": "B", "custom_fields": {"D4 Which interfaces (SPARQL, Cypher)?": "SPARQL endpoint"}}]}
+        self.assertEqual([x["source_id"] for x in ss.query_records(r, "charting", q="sparql")["items"]], ["S-2"])
+        self.assertEqual(ss.query_records(r, "charting", study="s-1", fields="title")["items"], [{"title": "A"}])
+        self.assertIn("custom_fields", ss.query_records(r, "charting")["fields"])
+        with self.assertRaises(ss.ImportError_):
+            ss.query_records(r, "bogus")
+
+    def test_text_sections(self):
+        r = {"synthesis_text": "S", "limitations": "L", "search_queries": ["q1"], "per_group_analysis": {"n_groups": 2}}
+        self.assertEqual(ss.review_text(r, "limitations"), {"limitations": "L"})
+        allt = ss.review_text(r)
+        self.assertEqual((allt["synthesis"], allt["search_queries"], allt["per_group"]), ("S", ["q1"], {"n_groups": 2}))
+        with self.assertRaises(ss.ImportError_):
+            ss.review_text(r, "nope")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -679,3 +679,79 @@ async def load_review_json(review_id: str) -> Optional[dict]:
 
 _REVIEW_CACHE: dict = {}
 _REVIEW_CACHE_SIZE = int(os.getenv("SYNTHSCHOLAR_REVIEW_CACHE", "4"))
+
+
+# Per-study records the review produced, by kind, and its own text sections.
+RECORD_KINDS = {"charting": "data_charting_rubrics", "appraisal": "critical_appraisals", "narrative": "narrative_rows"}
+TEXT_SECTIONS = {
+    "research_question": "research_question", "abstract": "structured_abstract", "introduction": "introduction_text",
+    "synthesis": "synthesis_text", "bias": "bias_assessment", "limitations": "limitations",
+    "conclusions": "conclusions_text",
+}
+
+
+def _flat(v: Any, limit: int = 2000) -> Any:
+    """A record value as plain JSON, long strings cut — records can nest deeply."""
+    if isinstance(v, str):
+        return v[:limit]
+    if isinstance(v, (int, float, bool)) or v is None:
+        return v
+    if isinstance(v, list):
+        return [_flat(x, limit) for x in v[:50]]
+    if isinstance(v, dict):
+        return {str(k): _flat(x, limit) for k, x in list(v.items())[:100]}
+    return str(v)[:limit]
+
+
+def _values_text(v: Any) -> str:
+    """The answers in a record, as one lowercase string — values only: the charting
+    form's questions are its field names, and matching them would match every record."""
+    if isinstance(v, dict):
+        return " ".join(_values_text(x) for x in v.values())
+    if isinstance(v, list):
+        return " ".join(_values_text(x) for x in v)
+    return "" if v is None else str(v).lower()
+
+
+def query_records(review: dict, kind: str, *, q: str = "", study: str = "", fields: str = "",
+                  limit: int = 50, offset: int = 0) -> dict:
+    """Per-study records — `charting` (the data-charting form's answers), `appraisal`
+    (critical appraisal by domain) or `narrative` (narrative synthesis rows) — filtered
+    by text in the record's answers or by study (source id, title, DOI or PMID), and
+    trimmed to `fields` (comma-separated) when given. Lists the available fields."""
+    key = RECORD_KINDS.get(_norm(kind))
+    if key is None:
+        raise ImportError_(f"kind must be one of {', '.join(RECORD_KINDS)}")
+    records = [r for r in (review.get(key) or []) if isinstance(r, dict)]
+    want = [f.strip() for f in fields.split(",") if f.strip()]
+    q, study = _norm(q), _norm(study)
+    available: Counter = Counter()
+    out = []
+    for r in records:
+        available.update(r.keys())
+        if study and not any(study == _norm(r.get(k)) or (k == "title" and study in _norm(r.get(k)))
+                             for k in ("source_id", "title", "doi", "pmid")):
+            continue
+        if q and q not in _values_text(r):
+            continue
+        out.append(_flat({k: r.get(k) for k in want} if want else r))
+    page = _page(out, limit, offset)
+    page["fields"] = [k for k, _ in available.most_common()]
+    return page
+
+
+def review_text(review: dict, section: str = "") -> dict:
+    """The review's own text: one section, or all of them (plus the search queries
+    and the per-group analysis when there is one)."""
+    sec = _norm(section)
+    if sec and sec not in TEXT_SECTIONS and sec not in ("per_group", "search_queries"):
+        raise ImportError_(f"section must be one of {', '.join([*TEXT_SECTIONS, 'per_group', 'search_queries'])}")
+    out: dict = {}
+    for name, key in TEXT_SECTIONS.items():
+        if not sec or sec == name:
+            out[name] = _s(review.get(key))
+    if not sec or sec == "search_queries":
+        out["search_queries"] = [x for x in (review.get("search_queries") or []) if isinstance(x, str)]
+    if (not sec or sec == "per_group") and isinstance(review.get("per_group_analysis"), dict):
+        out["per_group"] = _flat(review["per_group_analysis"], 4000)
+    return out

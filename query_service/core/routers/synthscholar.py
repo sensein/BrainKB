@@ -7,6 +7,8 @@ GET    /synthscholar/reviews/{review_id}/files/{path}   one of its files
 GET    /synthscholar/reviews/{review_id}/studies    included studies (filters: text, full text/abstract, route, RoB, years)
 GET    /synthscholar/reviews/{review_id}/screening  screening audit trail with counts and exclusion reasons
 GET    /synthscholar/reviews/{review_id}/evidence   evidence spans behind the review's claims
+GET    /synthscholar/reviews/{review_id}/records    per-study charting / appraisal / narrative records
+GET    /synthscholar/reviews/{review_id}/text       the review's own text sections
 GET    /synthscholar/studies                        which readable reviews include or screened a study (doi/pmid/title)
 
 Permissions are the space's, the same as any ingest: ingesting needs the ingest
@@ -308,3 +310,27 @@ async def find_study(user: Annotated[Optional[object], Depends(get_current_user_
             out.append({"review_id": r["review_id"], "title": r.get("title"), "space_slug": r["space_slug"],
                         "matches": hits[:20]})
     return {"reviews": out}
+
+
+@router.get("/synthscholar/reviews/{review_id}/records", summary="Per-study records of a review")
+async def review_records(review_id: str, user: Annotated[Optional[object], Depends(get_current_user_optional)],
+                         kind: str = Query(description="charting | appraisal | narrative"),
+                         q: str = "", study: str = Query(default="", description="Source id, title, DOI or PMID"),
+                         fields: str = Query(default="", description="Comma-separated fields to return"),
+                         limit: int = 50, offset: int = 0):
+    try:
+        return ss.query_records(await _review_json(review_id, user), kind, q=q, study=study, fields=fields,
+                                limit=limit, offset=offset)
+    except ss.ImportError_ as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/synthscholar/reviews/{review_id}/text", summary="A review's own text sections")
+async def review_text(review_id: str, user: Annotated[Optional[object], Depends(get_current_user_optional)],
+                      section: str = Query(default="", description="abstract, introduction, synthesis, bias, "
+                                                                     "limitations, conclusions, research_question, "
+                                                                     "search_queries, per_group — or all")):
+    try:
+        return ss.review_text(await _review_json(review_id, user), section)
+    except ss.ImportError_ as e:
+        raise HTTPException(400, str(e))
