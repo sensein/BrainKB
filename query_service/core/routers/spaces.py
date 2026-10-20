@@ -305,15 +305,30 @@ async def set_visibility(slug: str, body: VisibilityIn, user: Annotated[LoginUse
     return space
 
 
+async def _remove_synthscholar(slugs: list) -> int:
+    """Deleted spaces take their SynthScholar reviews (and kept files) with them;
+    the reviews' graphs were among the dropped ones."""
+    from core import synthscholar as _ss
+    n = 0
+    for s_ in slugs:
+        try:
+            n += await _ss.delete_space_reviews(s_)
+        except Exception as e:   # the space is gone either way; a leftover row is skipped on re-ingest
+            logger.error("[spaces] removing %s's SynthScholar reviews failed: %s", s_, e)
+    return n
+
+
 @router.delete("/spaces/{slug}",
                dependencies=[Depends(require_scopes(["admin"]))],
                summary="Delete a space and everything in it (SuperAdmin only)",
                description="Irreversible. Drops the space's named graphs and their ingestion "
                            "delta graphs, removes the graphs' registry entries and the space's "
                            "RDF manifest, then deletes the space with its members, graph "
-                           "bindings, access rules and search-index entries. The deletion is "
-                           "recorded in the provenance graph (prov:invalidated). Requires the "
-                           "SuperAdmin role and `confirm` equal to the slug.")
+                           "bindings, access rules, search-index entries and SynthScholar reviews. "
+                           "Every subspace below it (any depth) is deleted the same way, deepest "
+                           "first. Each deletion is recorded in the provenance graph "
+                           "(prov:invalidated). Requires the SuperAdmin role and `confirm` equal "
+                           "to the slug.")
 async def delete_space(
     slug: str,
     user: Annotated[LoginUserIn, Depends(get_current_user)],
@@ -327,22 +342,17 @@ async def delete_space(
     if not space:
         return JSONResponse({"error": "space not found"}, status_code=404)
     try:
-        result = await sp.delete_space(space, _agent(user))
-    except sp.SpaceHasSubspaces as e:
-        raise HTTPException(409, f"'{slug}' still has subspaces ({', '.join(e.slugs)}); delete them first")
-    except sp.SpaceDeletionError as e:
-        logger.error("[spaces] deleting %s failed: %s", slug, e)
-        raise HTTPException(502, f"space not deleted: {e}. Nothing was removed from the space "
-                                 "registry; it is safe to retry.")
-    # The space's SynthScholar reviews (their kept files) go with it; their graphs
-    # were among the dropped ones.
-    from core import synthscholar as _ss
-    try:
-        result["synthscholar_reviews_removed"] = await _ss.delete_space_reviews(slug)
-    except Exception as e:      # the space is gone either way; a leftover row is skipped on re-ingest
-        logger.error("[spaces] removing %s's SynthScholar reviews failed: %s", slug, e)
-    logger.info("[spaces] %s deleted space %s (%d graphs, %d delta graphs)", _agent(user), slug,
-                len(result["dropped_graphs"]), len(result["dropped_delta_graphs"]))
+        result = await sp.delete_space_tree(space, _agent(user))
+    except sp.SpaceTreeDeletionError as e:
+        logger.error("[spaces] deleting %s failed at %s: %s", slug, e.slug, e.cause)
+        await _remove_synthscholar([d["slug"] for d in e.deleted])
+        done = ", ".join(d["slug"] for d in e.deleted) or "nothing"
+        raise HTTPException(502, f"deleting '{e.slug}' failed: {e.cause}. Already deleted: {done}. "
+                                 "The rest is untouched; it is safe to retry.")
+    result["synthscholar_reviews_removed"] = await _remove_synthscholar(
+        [slug, *result["subspaces_deleted"]])
+    logger.info("[spaces] %s deleted space %s with %d subspace(s) (%d graphs, %d delta graphs)", _agent(user), slug,
+                len(result["subspaces_deleted"]), len(result["dropped_graphs"]), len(result["dropped_delta_graphs"]))
     return result
 
 

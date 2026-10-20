@@ -683,6 +683,57 @@ async def construct_space_graphs(space: Dict[str, Any]) -> str:
 NAMED_GRAPH_REGISTRY = "https://brainkb.org/metadata/named-graph"
 
 
+async def descendant_slugs(space_id: str) -> List[str]:
+    """Every space below this one, deepest first (the order they can be deleted in)."""
+    async with get_db_connection() as conn:
+        rows = await conn.fetch(
+            """
+            WITH RECURSIVE down(space_id, depth) AS (
+                SELECT space_id, 1 FROM spaces WHERE parent_space_id = $1
+                UNION ALL SELECT s.space_id, d.depth + 1 FROM spaces s JOIN down d ON s.parent_space_id = d.space_id
+            )
+            SELECT s.slug FROM down d JOIN spaces s USING (space_id) ORDER BY d.depth DESC, s.slug
+            """,
+            space_id,
+        )
+    return [r["slug"] for r in rows]
+
+
+async def delete_space_tree(space: Dict[str, Any], deleted_by: str) -> Dict[str, Any]:
+    """Delete a space and every subspace below it, deepest first, each completely
+    (delete_space: its graphs and their ingestion history, registry entries, manifest,
+    search entries, members, bindings, access rules; each deletion recorded in
+    provenance). Stops at the first failure: what was deleted stays deleted and is
+    reported, the rest is untouched, and a retry continues from there."""
+    deleted: List[Dict[str, Any]] = []
+    for slug in await descendant_slugs(space["space_id"]) + [space["slug"]]:
+        current = await get_space(slug)
+        if current is None:          # already gone (a retry, or a concurrent delete)
+            continue
+        try:
+            deleted.append(await delete_space(current, deleted_by))
+        except SpaceDeletionError as e:
+            raise SpaceTreeDeletionError(slug, deleted, e) from e
+    root = next((d for d in deleted if d["slug"] == space["slug"]), None) or {"deleted": True, "slug": space["slug"]}
+    return {
+        **root,
+        "subspaces_deleted": [d["slug"] for d in deleted if d["slug"] != space["slug"]],
+        "dropped_graphs": [g for d in deleted for g in d.get("dropped_graphs", [])],
+        "dropped_delta_graphs": [g for d in deleted for g in d.get("dropped_delta_graphs", [])],
+        "search_index_rows_removed": sum(d.get("search_index_rows_removed", 0) for d in deleted),
+        "members_removed": sum(d.get("members_removed", 0) for d in deleted),
+        "spaces": deleted,
+    }
+
+
+class SpaceTreeDeletionError(Exception):
+    """Deleting one space of a tree failed; `deleted` lists those already removed."""
+
+    def __init__(self, slug: str, deleted: List[Dict[str, Any]], cause: Exception):
+        self.slug, self.deleted, self.cause = slug, deleted, cause
+        super().__init__(f"deleting '{slug}' failed: {cause}")
+
+
 class SpaceHasSubspaces(Exception):
     """A space with subspaces is not deleted: delete the subspaces first."""
 
@@ -745,7 +796,7 @@ async def delete_space(space: Dict[str, Any], deleted_by: str) -> Dict[str, Any]
     A failure in step 1 raises SpaceDeletionError with nothing deleted in Postgres, so
     the space stays visible and the call can be retried (DROP SILENT is idempotent)."""
     from core.provenance import build_space_deletion_provenance, write_provenance, _now_iso
-    if space.get("subspaces"):
+    if space.get("subspaces"):       # delete_space_tree removes those first
         raise SpaceHasSubspaces([c["slug"] for c in space["subspaces"]])
     started = _now_iso()
     graphs = [_safe_iri(g) for g in space.get("graphs") or []]
