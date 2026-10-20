@@ -123,6 +123,8 @@ async def ingest_review(
     if not await rbac.has_capability(member, rbac.INGEST):
         raise HTTPException(403, "Not authorized to ingest: a write-capable role is required.")
     space = await sp.get_space(space_slug)
+    if space is not None:
+        space_slug = space["slug"]          # an old slug of a renamed space
     if not space:
         raise HTTPException(404, f"space {space_slug!r} not found")
     if not await _can_add_graph(space, member):
@@ -196,6 +198,7 @@ async def ingest_review(
 
 
 async def _readable_summaries(user, space: Optional[str] = None, q: str = "") -> list[dict]:
+    space = await sp.canonical_slug(space) if space else space
     member = _agent(user) if user else None
     cache: dict = {}
     out = []
@@ -234,6 +237,7 @@ async def _locate(review_id: str, user, space: Optional[str]) -> str:
     with no `space` given, the one readable copy is used, and several are a 409 that
     names them (never a guess). 404 when none is readable — private reviews are not
     disclosed."""
+    space = await sp.canonical_slug(space) if space else space
     member = _agent(user) if user else None
     readable = []
     for r in await ss.list_reviews(review_id):

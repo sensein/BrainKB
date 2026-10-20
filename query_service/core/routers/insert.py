@@ -1194,6 +1194,13 @@ async def insert_knowledge_graph_triples(
     # hands a whole group ingest access. Unmapped legacy graphs fall through to the
     # endpoint scope check.
     _graph_key = named_graph_iri if named_graph_iri.endswith("/") else named_graph_iri + "/"
+    _moved_to = await _spaces.renamed_graph(_graph_key)
+    if _moved_to is not None:
+        return JSONResponse(
+            {"error": f"This graph was renamed with its space; ingest into {_moved_to} instead.",
+             "named_graph_iri": named_graph_iri, "renamed_to": _moved_to},
+            status_code=409,
+        )
     _space_for_graph = await _spaces.get_space_for_graph(_graph_key)
     if _space_for_graph is not None:
         _allowed, _reason = await _spaces.can_write_space(_space_for_graph, _agent_email(user))
@@ -1328,6 +1335,13 @@ async def insert_file_knowledge_graph_triples(
     # hands a whole group ingest access. Unmapped legacy graphs fall through to the
     # endpoint scope check.
     _graph_key = named_graph_iri if named_graph_iri.endswith("/") else named_graph_iri + "/"
+    _moved_to = await _spaces.renamed_graph(_graph_key)
+    if _moved_to is not None:
+        return JSONResponse(
+            {"error": f"This graph was renamed with its space; ingest into {_moved_to} instead.",
+             "named_graph_iri": named_graph_iri, "renamed_to": _moved_to},
+            status_code=409,
+        )
     _space_for_graph = await _spaces.get_space_for_graph(_graph_key)
     if _space_for_graph is not None:
         _allowed, _reason = await _spaces.can_write_space(_space_for_graph, _agent_email(user))

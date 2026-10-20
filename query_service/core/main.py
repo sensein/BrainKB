@@ -329,6 +329,29 @@ async def startup_event():
                         """
                     )
                     logger.info("Reserved-graphs table initialized")
+                    # Space renames (spaces.rename_space): the slugs a space had before and
+                    # the IRIs its graphs had before, so old links keep resolving, an old IRI
+                    # stays governed by the space, and nobody else can claim them.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS space_aliases (
+                            old_slug TEXT PRIMARY KEY,
+                            space_id TEXT NOT NULL REFERENCES spaces(space_id) ON DELETE CASCADE,
+                            renamed_at DOUBLE PRECISION
+                        )
+                        """
+                    )
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS graph_aliases (
+                            old_iri TEXT PRIMARY KEY,
+                            new_iri TEXT NOT NULL,
+                            space_id TEXT NOT NULL REFERENCES spaces(space_id) ON DELETE CASCADE,
+                            renamed_at DOUBLE PRECISION
+                        )
+                        """
+                    )
+                    logger.info("Space-rename alias tables initialized")
 
                     # Search locator index (hybrid search): Postgres full-text index that
                     # locates subjects/subgraphs (carrying graph + workspace/space), then the

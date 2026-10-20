@@ -65,7 +65,7 @@ is used if present, but its absence is not an error for public spaces.
 | GET  | `/spaces/{slug}/tree` | optional | The space and all visible subspaces, nested, with your role in each |
 | GET  | `/spaces/writable` | read | Spaces the caller can ingest into (the same checks ingestion applies), with their graphs and descriptions, plus graphs in no space; `writable` is a reserved slug |
 | DELETE | `/spaces/{slug}?confirm={slug}` | SuperAdmin | Delete the space and everything in it (see below) |
-| PATCH | `/spaces/{slug}` | owner | Rename the space or change its description; the slug (and IRI) stays the same |
+| PATCH | `/spaces/{slug}` | owner | Rename the space, change its description, or give it a new `slug` (see *Renaming a space* below) |
 | PATCH | `/spaces/{slug}/visibility` | owner | Flip private/public |
 | POST | `/spaces/{slug}/members` | owner | Add/update a member (role) |
 | DELETE | `/spaces/{slug}/members/{member}` | owner | Remove a member |
@@ -150,3 +150,31 @@ GRAPH <https://brainkb.org/metadata/spaces/> {
   public even for public spaces. Ingestion is likewise restricted to activated JWT
   users with valid credentials (and space owner/editor membership); it is never
   anonymous. Only *reads* of public spaces are anonymous.
+
+
+## Renaming a space
+
+`PATCH /spaces/{slug}` with a new `slug` renames the space and moves every graph whose IRI is
+built from the old slug — `https://brainkb.org/graph/<slug>/…` and
+`https://brainkb.org/synthscholar/<slug>/…` — to the same IRI with the new slug. Graphs bound to
+the space under any other IRI keep it. In one step (`spaces.rename_space`):
+
+- **Postgres** (one transaction): `spaces.slug`, `space_graphs`, `graph_search_index`,
+  `reserved_graphs` reserved for the space, and SynthScholar reviews and files are updated;
+  `space_aliases` and `graph_aliases` record the old slug and IRIs.
+- **Triplestore** (one SPARQL Update, run before the transaction commits): each graph's triples are
+  copied to the new IRI and the old graph dropped; its registry entry moves; every ingestion
+  activity's `brainkb:targetGraph` gains the new IRI (the old one is kept, so history is found under
+  either); `dcterms:replaces` links new → old. If this fails, the transaction rolls back and nothing
+  has changed.
+- **Afterwards**: the space manifest is re-mirrored and a `brainkb:SpaceRenameActivity` is written to
+  the provenance graph (`prov:used` the old IRIs, `prov:generated` the new ones,
+  `prov:wasRevisionOf` / `dcterms:replaces`).
+
+**Aliases.** An old slug still resolves to the space (`GET /spaces/{old}` returns it with
+`renamed_from`). An old graph IRI is governed by the renamed space — never by the unmapped/legacy
+rules — and nobody can bind it, register a space with the old slug, or rename onto it. Ingesting into
+an old IRI is refused (409) with `renamed_to`, so data never lands in an orphaned graph. Renaming
+again chains the aliases to the newest IRI; renaming back makes the original slug and IRIs the
+space's own again. Triples inside a moved graph are not rewritten: IRIs they contain that carry the
+old slug (e.g. SynthScholar file IRIs) resolve through the aliases.

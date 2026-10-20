@@ -89,6 +89,7 @@ class VisibilityIn(BaseModel):
 class SpaceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    slug: Optional[str] = None   # a new slug: the graphs named after the old one move with it
 
 
 class SpaceGraphIn(BaseModel):
@@ -136,7 +137,7 @@ async def create_space(body: SpaceCreate, user: Annotated[LoginUserIn, Depends(g
         if not await rbac.has_capability(email, rbac.CREATE_PRIVATE_SPACE):
             raise HTTPException(403, "not authorized to create a space (needs a write-capable role)")
 
-    if await sp.get_space(body.slug):
+    if await sp.get_space(body.slug):      # also finds a slug a renamed space had before
         raise HTTPException(409, f"space '{body.slug}' already exists")
     # Under a public space everything is public: a subspace there is created public.
     visibility = body.visibility
@@ -259,7 +260,7 @@ async def space_tree(slug: str, user: Annotated[Optional[object], Depends(get_cu
     if not root:
         return JSONResponse({"error": "space not found"}, status_code=404)
     visible = await _visible_slugs(member)
-    if visible is not None and slug not in visible:
+    if visible is not None and root["slug"] not in visible:
         raise HTTPException(403, "private space — membership and a role are required")
 
     async def node(sp_: dict, depth: int) -> dict:
@@ -280,10 +281,15 @@ async def space_tree(slug: str, user: Annotated[Optional[object], Depends(get_cu
 
 @router.patch("/spaces/{slug}",
               dependencies=[Depends(require_scopes(["write"]))],
-              summary="Rename a space or change its description (owner/manager)",
-              description="Change the display name and/or description of a space. The slug, and "
-                          "so the space's IRI and every link to it, stays the same. Send only the "
-                          "fields to change; an empty description clears it.")
+              summary="Rename a space, change its slug or its description (owner/manager)",
+              description="Change the display name, description and/or slug of a space. Send only "
+                          "the fields to change; an empty description clears it. A new slug moves the "
+                          "space's IRI and every graph whose IRI is built from the old slug "
+                          "(https://brainkb.org/graph/<slug>/…, …/synthscholar/<slug>/…) to the new one, "
+                          "with their registry entries, search entries, ingestion history and SynthScholar "
+                          "reviews; graphs with other IRIs keep theirs. The old slug and IRIs stay as "
+                          "aliases, so existing links keep resolving and nobody else can take them. "
+                          "409 if the slug or a target graph is taken.")
 async def update_space(slug: str, body: SpaceUpdate, user: Annotated[LoginUserIn, Depends(get_current_user)]):
     space = await sp.get_space(slug)
     if not space:
@@ -292,14 +298,31 @@ async def update_space(slug: str, body: SpaceUpdate, user: Annotated[LoginUserIn
         raise HTTPException(403, "not authorized to rename this space")
     name = body.name.strip() if body.name is not None else None
     description = body.description.strip() if body.description is not None else None
-    if name is None and description is None:
-        raise HTTPException(400, "send a name, a description, or both")
+    new_slug = body.slug.strip() if body.slug is not None else None
+    if name is None and description is None and new_slug is None:
+        raise HTTPException(400, "send a name, a description, a slug, or a combination")
     if name is not None and not 1 <= len(name) <= 200:
         raise HTTPException(400, "name must be 1-200 characters")
     if description is not None and len(description) > 2000:
         raise HTTPException(400, "description must be at most 2000 characters")
-    await sp.update_details(slug, name, description)
-    space = await sp.get_space(slug)
+    if new_slug is not None and new_slug != space["slug"]:
+        if not _SLUG_RE.match(new_slug):
+            raise HTTPException(400, "slug must be lowercase alphanumeric/hyphen, 3-64 chars")
+        if new_slug in _RESERVED_SLUGS:
+            raise HTTPException(400, f"'{new_slug}' is reserved; choose another slug")
+        try:
+            result = await sp.rename_space(space, new_slug, _agent(user), name=name)
+        except sp.SpaceRenameError as e:
+            raise HTTPException(e.status, str(e))
+        except sp.SpaceDeletionError as e:      # an IRI that can't go into SPARQL
+            raise HTTPException(400, str(e))
+        if description is not None:
+            await sp.update_details(new_slug, None, description)
+        space = await sp.get_space(new_slug)
+        await sp.mirror_space_to_rdf(space)
+        return {**space, "rename": result}
+    await sp.update_details(space["slug"], name, description)
+    space = await sp.get_space(space["slug"])
     await sp.mirror_space_to_rdf(space)
     return space
 
@@ -326,7 +349,7 @@ async def set_visibility(slug: str, body: VisibilityIn, user: Annotated[LoginUse
     if body.visibility == "private" and above:
         raise HTTPException(409, f"'{slug}' is inside the public space '{above}', and everything in a public "
                                  f"space is public — make '{above}' private first")
-    changed = await sp.set_visibility(slug, body.visibility)
+    changed = await sp.set_visibility(space["slug"], body.visibility)
     for s_ in changed:          # this space and, when made public, its subspaces
         changed_space = await sp.get_space(s_)
         if changed_space:

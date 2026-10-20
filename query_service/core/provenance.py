@@ -35,11 +35,11 @@ import uuid
 import datetime
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import httpx
-from rdflib import Graph, Literal, Namespace, URIRef, RDF, XSD, DCTERMS
+from rdflib import Graph, Literal, Namespace, URIRef, RDF, RDFS, XSD, DCTERMS
 
 from core.shared import get_oxigraph_endpoint, get_oxigraph_auth
 from core.graph_database_connection_manager import _get_endpoint
@@ -248,6 +248,47 @@ def build_space_deletion_provenance(
             g.add((space_node, BRAINKB.containsGraph, node))
         elif kind == "delta":
             g.add((activity, BRAINKB.droppedDeltaGraph, node))
+    return g
+
+
+def build_space_rename_provenance(
+    *,
+    old_iri: str,
+    new_iri: str,
+    old_slug: str,
+    new_slug: str,
+    name: str,
+    agent_id: str,
+    started_at: str,
+    ended_at: str,
+    moved_graphs: List[Tuple[str, str]],
+) -> Graph:
+    """PROV-O record of a space rename: a ``brainkb:SpaceRenameActivity`` that
+    ``prov:used`` the space and graphs under their old IRIs and ``prov:generated``
+    them under the new ones; each new IRI ``prov:wasRevisionOf`` and
+    ``dcterms:replaces`` its old IRI, so the old IRIs stay traceable."""
+    g = _new_graph()
+    activity = URIRef(PROV_BASE[f"activity/space-rename/{quote(new_slug, safe='')}/{uuid.uuid4().hex[:12]}"])
+    agent = agent_ref(agent_id)
+    g.add((agent, RDF.type, PROV.Agent))
+    g.add((agent, RDF.type, PROV.Person))
+    g.add((activity, RDF.type, PROV.Activity))
+    g.add((activity, RDF.type, BRAINKB.SpaceRenameActivity))
+    g.add((activity, PROV.startedAtTime, Literal(started_at, datatype=XSD.dateTime)))
+    g.add((activity, PROV.endedAtTime, Literal(ended_at, datatype=XSD.dateTime)))
+    g.add((activity, PROV.wasAssociatedWith, agent))
+    g.add((activity, RDFS.comment, Literal(f"Space '{old_slug}' renamed to '{new_slug}' ({name})")))
+    for old, new in [(old_iri, new_iri)] + list(moved_graphs):
+        o, n = URIRef(old), URIRef(new)
+        g.add((o, RDF.type, PROV.Entity))
+        g.add((n, RDF.type, PROV.Entity))
+        g.add((activity, PROV.used, o))
+        g.add((activity, PROV.generated, n))
+        g.add((n, PROV.wasGeneratedBy, activity))
+        g.add((n, PROV.wasRevisionOf, o))
+        g.add((n, DCTERMS.replaces, o))
+    g.add((URIRef(new_iri), BRAINKB.slug, Literal(new_slug)))
+    g.add((URIRef(old_iri), BRAINKB.slug, Literal(old_slug)))
     return g
 
 
