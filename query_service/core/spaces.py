@@ -397,6 +397,29 @@ async def set_visibility(slug: str, visibility: str) -> List[str]:
     return [r["slug"] for r in rows]
 
 
+async def update_details(slug: str, name: Optional[str] = None,
+                         description: Optional[str] = None) -> bool:
+    """Change a space's display name and/or description. The slug (and so the
+    space's IRI) never changes. An empty description clears it. Returns whether
+    anything changed."""
+    sets, args = [], []
+    if name is not None:
+        args.append(name)
+        sets.append(f"name = ${len(args)}")
+    if description is not None:
+        args.append(description or None)
+        sets.append(f"description = ${len(args)}")
+    if not sets:
+        return False
+    args.append(time.time())
+    sets.append(f"updated_at = ${len(args)}")
+    args.append(slug)
+    async with get_db_connection() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE spaces SET {', '.join(sets)} WHERE slug = ${len(args)} RETURNING slug", *args)
+    return row is not None
+
+
 def public_ancestor(space: Dict[str, Any]) -> Optional[str]:
     """The slug of the nearest public ancestor, if any (a space under it must be public)."""
     for a in reversed(space.get("ancestors") or []):

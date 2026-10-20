@@ -86,6 +86,11 @@ class VisibilityIn(BaseModel):
     visibility: str
 
 
+class SpaceUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
 class SpaceGraphIn(BaseModel):
     named_graph_url: HttpUrl
     description: str = ""
@@ -271,6 +276,32 @@ async def space_tree(slug: str, user: Annotated[Optional[object], Depends(get_cu
                 "role_inherited": detail[1] if detail else False,
                 "graphs": len(sp_.get("graphs") or []), "subspaces": children}
     return await node(root, 0)
+
+
+@router.patch("/spaces/{slug}",
+              dependencies=[Depends(require_scopes(["write"]))],
+              summary="Rename a space or change its description (owner/manager)",
+              description="Change the display name and/or description of a space. The slug, and "
+                          "so the space's IRI and every link to it, stays the same. Send only the "
+                          "fields to change; an empty description clears it.")
+async def update_space(slug: str, body: SpaceUpdate, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    space = await sp.get_space(slug)
+    if not space:
+        return JSONResponse({"error": "space not found"}, status_code=404)
+    if not await _can_manage(space, _agent(user)):
+        raise HTTPException(403, "not authorized to rename this space")
+    name = body.name.strip() if body.name is not None else None
+    description = body.description.strip() if body.description is not None else None
+    if name is None and description is None:
+        raise HTTPException(400, "send a name, a description, or both")
+    if name is not None and not 1 <= len(name) <= 200:
+        raise HTTPException(400, "name must be 1-200 characters")
+    if description is not None and len(description) > 2000:
+        raise HTTPException(400, "description must be at most 2000 characters")
+    await sp.update_details(slug, name, description)
+    space = await sp.get_space(slug)
+    await sp.mirror_space_to_rdf(space)
+    return space
 
 
 @router.patch("/spaces/{slug}/visibility",
