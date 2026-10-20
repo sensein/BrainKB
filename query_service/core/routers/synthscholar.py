@@ -139,16 +139,24 @@ async def ingest_review(
         review_id = ss.review_id_of(review)
     except ss.ImportError_ as e:
         raise HTTPException(400, str(e))
-    graph_iri = ss.graph_iri_for(review_id)
+    graph_iri = ss.graph_iri_for(review_id, space_slug)
 
     ok, why = await reserved.check_allowed(graph_iri, member, space["space_id"])
     if not ok:
         raise HTTPException(403, why)
-    # Once per review: its graph is append-only (a second pass would not de-duplicate,
-    # it would add a disconnected copy). The same run uploaded again is refused here.
-    if await ss.review_exists(review_id) or await check_named_graph_exists(graph_iri) \
-            or await sp.get_space_for_graph(graph_iri) is not None:
-        raise HTTPException(409, f"review {review_id} is already ingested ({graph_iri})")
+    # Once per review per space: its graph is append-only (a second pass would not
+    # de-duplicate, it would add a disconnected copy). The same run can go into other
+    # spaces; into this one again it is refused.
+    existing = await ss.get_row(space_slug, review_id)
+    if existing:
+        holder = await sp.get_space_for_graph(existing["graph_iri"])
+        if holder is not None and holder.get("slug") == space_slug:
+            raise HTTPException(409, f"review {review_id} is already in space {space_slug} ({existing['graph_iri']})")
+        # Its graph is gone (the space was deleted and made again): a leftover record.
+        await ss.delete_review(space_slug, review_id)
+    if await check_named_graph_exists(graph_iri) or await sp.get_space_for_graph(graph_iri) is not None:
+        raise HTTPException(409, f"the graph {graph_iri} is already registered — this review was ingested "
+                                 f"into {space_slug} before")
 
     try:
         await sp.attach_graph(space["space_id"], graph_iri)
@@ -165,10 +173,11 @@ async def ingest_review(
     imported_at = ss.now_utc()
     manifest = {**plan.manifest(), "imported_by": member, "imported_at": imported_at.isoformat(),
                 "local_run": ss.local_run_provenance(plan)}
-    await ss.save_review(review_id=review_id, space_slug=space_slug, owner_email=member, imported_at=imported_at,
+    await ss.save_review(review_id=review_id, space_slug=space_slug, graph_iri=graph_iri, owner_email=member,
+                         imported_at=imported_at,
                          summary=summary, detail=ss.detail_of(review), manifest=manifest, plan=plan)
     record = ss.import_record_ttl(review_id, plan, agent=agent_ref(member), imported_at=imported_at.isoformat(),
-                                  space_slug=space_slug, summary=summary)
+                                  space_slug=space_slug, summary=summary, graph_iri=graph_iri)
     try:
         job_id = await _start_ingest_job(job_user, graph_iri, {
             "review.ttl": plan.get("review.ttl").content,          # plan_import guarantees it
@@ -176,9 +185,9 @@ async def ingest_review(
         })
     except Exception:
         logger.exception("[synthscholar] could not start the ingest job for %s", review_id)
-        await ss.delete_review(review_id)   # the graph stays registered and empty; a retry is refused (409)
+        await ss.delete_review(space_slug, review_id)   # the graph stays registered and empty; a retry is refused (409)
         raise HTTPException(500, "The review was received but its ingest job could not be started.")
-    await ss.set_job(review_id, job_id)
+    await ss.set_job(space_slug, review_id, job_id)
     logger.info("[synthscholar] %s ingested %s into %s (%d files, %d left out) job=%s",
                 member, review_id, space_slug, len(plan.files), len(plan.skipped), job_id)
     return {"review_id": review_id, "graph_iri": graph_iri, "space_slug": space_slug, "job_id": job_id,
@@ -216,17 +225,41 @@ async def list_reviews(user: Annotated[Optional[object], Depends(get_current_use
     return {"reviews": await _readable_summaries(user, space, q)}
 
 
-async def _readable_review(review_id: str, user) -> dict:
-    review = await ss.get_review(review_id)
+SPACE_Q = Query(default=None, description="The space holding the review — needed only when the same "
+                                          "review is in several spaces you can read")
+
+
+async def _locate(review_id: str, user, space: Optional[str]) -> str:
+    """The space of the readable copy of this review. A review is unique per space;
+    with no `space` given, the one readable copy is used, and several are a 409 that
+    names them (never a guess). 404 when none is readable — private reviews are not
+    disclosed."""
     member = _agent(user) if user else None
-    if review is None or not await _can_read(await sp.get_space(review["space_slug"]), member):
-        raise HTTPException(404, f"review {review_id!r} not found")   # don't disclose private reviews
+    readable = []
+    for r in await ss.list_reviews(review_id):
+        if space and r["space_slug"] != space:
+            continue
+        if await _can_read(await sp.get_space(r["space_slug"]), member):
+            readable.append(r["space_slug"])
+    if not readable:
+        raise HTTPException(404, f"review {review_id!r} not found")
+    if len(readable) > 1:
+        raise HTTPException(409, {"message": f"review {review_id!r} is in several spaces — pass space",
+                                  "spaces": sorted(readable)})
+    return readable[0]
+
+
+async def _readable_review(review_id: str, user, space: Optional[str] = None) -> dict:
+    review = await ss.get_review(await _locate(review_id, user, space), review_id)
+    if review is None:
+        raise HTTPException(404, f"review {review_id!r} not found")
     return review
 
 
 @router.get("/synthscholar/reviews/{review_id}", summary="One SynthScholar review")
-async def get_review(review_id: str, user: Annotated[Optional[object], Depends(get_current_user_optional)]):
-    review = await _readable_review(review_id, user)
+async def get_review(review_id: str, user: Annotated[Optional[object], Depends(get_current_user_optional)],
+                     space: Optional[str] = SPACE_Q):
+    review = await _readable_review(review_id, user, space)
     if not user:
         review.pop("owner_email", None)
         review["manifest"].pop("imported_by", None)
@@ -239,10 +272,10 @@ async def get_review(review_id: str, user: Annotated[Optional[object], Depends(g
 
 @router.get("/synthscholar/reviews/{review_id}/files/{path:path}", summary="A file kept with a review")
 async def get_file(review_id: str, path: str, user: Annotated[Optional[object], Depends(get_current_user_optional)],
-                   download: bool = False):
-    await _readable_review(review_id, user)
+                   download: bool = False, space: Optional[str] = SPACE_Q):
+    where = await _locate(review_id, user, space)
     clean = ss.clean_path(path)
-    f = await ss.get_file(review_id, clean) if clean else None
+    f = await ss.get_file(where, review_id, clean) if clean else None
     if f is None:
         raise HTTPException(404, "file not found")
     name = clean.rsplit("/", 1)[-1]
@@ -255,9 +288,9 @@ async def get_file(review_id: str, path: str, user: Annotated[Optional[object], 
     })
 
 
-async def _review_json(review_id: str, user) -> dict:
-    await _readable_review(review_id, user)            # 404 unless the caller can read the space
-    data = await ss.load_review_json(review_id)
+async def _review_json(review_id: str, user, space: Optional[str] = None) -> dict:
+    where = await _locate(review_id, user, space)       # 404 unless the caller can read the space
+    data = await ss.load_review_json(where, review_id)
     if data is None:
         raise HTTPException(404, "this review has no review.json")
     return data
@@ -269,8 +302,9 @@ async def review_studies(review_id: str, user: Annotated[Optional[object], Depen
                          source: str = Query(default="", description="Full-text route, e.g. europe_pmc, unpaywall, ezproxy"),
                          rob: str = Query(default="", description="Risk-of-bias rating, e.g. low, high, some concerns"),
                          year_from: Optional[int] = None, year_to: Optional[int] = None,
-                         with_abstract: bool = False, limit: int = 50, offset: int = 0):
-    return ss.query_studies(await _review_json(review_id, user), q=q, full_text=full_text, source=source, rob=rob,
+                         with_abstract: bool = False, limit: int = 50, offset: int = 0,
+                         space: Optional[str] = SPACE_Q):
+    return ss.query_studies(await _review_json(review_id, user, space), q=q, full_text=full_text, source=source, rob=rob,
                             year_from=year_from, year_to=year_to, with_abstract=with_abstract, limit=limit, offset=offset)
 
 
@@ -280,16 +314,18 @@ async def review_screening(review_id: str, user: Annotated[Optional[object], Dep
                            decision: str = Query(default="", description="include | exclude"),
                            assessed_on: str = Query(default="", description="title_abstract | full_text | abstract_only"),
                            reason: str = Query(default="", description="Text or criterion code in the reason, e.g. EC2"),
-                           q: str = "", pmid: str = "", limit: int = 50, offset: int = 0):
-    return ss.query_screening(await _review_json(review_id, user), stage=stage, decision=decision,
+                           q: str = "", pmid: str = "", limit: int = 50, offset: int = 0,
+                         space: Optional[str] = SPACE_Q):
+    return ss.query_screening(await _review_json(review_id, user, space), stage=stage, decision=decision,
                               assessed_on=assessed_on, reason=reason, q=q, pmid=pmid, limit=limit, offset=offset)
 
 
 @router.get("/synthscholar/reviews/{review_id}/evidence", summary="Evidence spans of a review")
 async def review_evidence(review_id: str, user: Annotated[Optional[object], Depends(get_current_user_optional)],
                           q: str = "", claim: str = "", pmid: str = "", grounded: Optional[bool] = None,
-                          limit: int = 50, offset: int = 0):
-    return ss.query_evidence(await _review_json(review_id, user), q=q, claim=claim, pmid=pmid, grounded=grounded,
+                          limit: int = 50, offset: int = 0,
+                         space: Optional[str] = SPACE_Q):
+    return ss.query_evidence(await _review_json(review_id, user, space), q=q, claim=claim, pmid=pmid, grounded=grounded,
                              limit=limit, offset=offset)
 
 
@@ -302,7 +338,7 @@ async def find_study(user: Annotated[Optional[object], Depends(get_current_user_
         raise HTTPException(400, "title must be at least 6 characters")
     out = []
     for r in await _readable_summaries(user):
-        data = await ss.load_review_json(r["review_id"])
+        data = await ss.load_review_json(r["space_slug"], r["review_id"])
         if not data:
             continue
         hits = ss.study_in_review(data, doi=doi, pmid=pmid, title=title)
@@ -317,9 +353,10 @@ async def review_records(review_id: str, user: Annotated[Optional[object], Depen
                          kind: str = Query(description="charting | appraisal | narrative"),
                          q: str = "", study: str = Query(default="", description="Source id, title, DOI or PMID"),
                          fields: str = Query(default="", description="Comma-separated fields to return"),
-                         limit: int = 50, offset: int = 0):
+                         limit: int = 50, offset: int = 0,
+                         space: Optional[str] = SPACE_Q):
     try:
-        return ss.query_records(await _review_json(review_id, user), kind, q=q, study=study, fields=fields,
+        return ss.query_records(await _review_json(review_id, user, space), kind, q=q, study=study, fields=fields,
                                 limit=limit, offset=offset)
     except ss.ImportError_ as e:
         raise HTTPException(400, str(e))
@@ -329,8 +366,9 @@ async def review_records(review_id: str, user: Annotated[Optional[object], Depen
 async def review_text(review_id: str, user: Annotated[Optional[object], Depends(get_current_user_optional)],
                       section: str = Query(default="", description="abstract, introduction, synthesis, bias, "
                                                                      "limitations, conclusions, research_question, "
-                                                                     "search_queries, per_group — or all")):
+                                                                     "search_queries, per_group — or all"),
+                         space: Optional[str] = SPACE_Q):
     try:
-        return ss.review_text(await _review_json(review_id, user), section)
+        return ss.review_text(await _review_json(review_id, user, space), section)
     except ss.ImportError_ as e:
         raise HTTPException(400, str(e))

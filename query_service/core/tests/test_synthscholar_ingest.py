@@ -77,13 +77,15 @@ class PlanAndReadTests(unittest.TestCase):
 
     def test_import_record_links_every_kept_file(self):
         plan = ss.plan_import(folder())
+        graph = ss.graph_iri_for("review_local_1", "lab")
+        self.assertEqual(graph, "https://brainkb.org/synthscholar/lab/reviews/review_local_1/")
         ttl = ss.import_record_ttl("review_local_1", plan, agent=URIRef("https://brainkb.org/agent/u"),
                                    imported_at="2026-10-19T00:00:00+00:00", space_slug="lab",
-                                   summary={"title": "T"})
+                                   summary={"title": "T"}, graph_iri=graph)
         g = Graph().parse(data=ttl, format="turtle")
-        act = URIRef("https://brainkb.org/synthscholar/reviews/review_local_1/import")
+        act = URIRef(f"{graph}import")
         used = {str(o) for o in g.objects(act, PROV.used)}
-        self.assertEqual(used, {ss.file_iri("review_local_1", f.path) for f in plan.files})
+        self.assertEqual(used, {ss.file_iri(graph, f.path) for f in plan.files})
         self.assertFalse(any(isinstance(n, type(None)) for n in g.all_nodes()))
         self.assertNotIn("_:", ttl)   # no blank nodes in an append-only graph
 
@@ -99,7 +101,10 @@ class Upload:
         return self._c
 
 
-def ingest(*, ingest_role=True, can_add=True, can_write=True, exists=False, registered=False, upload=None):
+def ingest(*, ingest_role=True, can_add=True, can_write=True, existing=None, holder=None, registered=False,
+           upload=None):
+    """existing: the stored row for (space, review id), if any; holder: the space its
+    graph is bound to now (None: the graph is gone)."""
     calls = {}
 
     async def cap(_e, c):
@@ -128,8 +133,14 @@ def ingest(*, ingest_role=True, can_add=True, can_write=True, exists=False, regi
             calls[name] = (a, k)
         return f
 
-    async def exists_(_rid):
-        return exists
+    async def get_row(space, rid):
+        return existing
+
+    async def space_for_graph(g):
+        return holder if existing and g == existing["graph_iri"] else None
+
+    async def delete(space, rid):
+        calls["deleted"] = (space, rid)
 
     async def registered_(_g):
         return registered
@@ -149,9 +160,10 @@ def ingest(*, ingest_role=True, can_add=True, can_write=True, exists=False, regi
         return None
     with patch.object(router.rbac, "has_capability", cap), patch.object(router.sp, "get_space", get_space), \
             patch.object(router, "_can_add_graph", can_add_graph), patch.object(router.sp, "can_write_space", write), \
-            patch.object(router.reserved, "check_allowed", allowed), patch.object(router.ss, "review_exists", exists_), \
+            patch.object(router.reserved, "check_allowed", allowed), patch.object(router.ss, "get_row", get_row), \
+            patch.object(router.ss, "delete_review", delete), \
             patch.object(router, "check_named_graph_exists", registered_), \
-            patch.object(router.sp, "get_space_for_graph", none), patch.object(router.sp, "attach_graph", attach), \
+            patch.object(router.sp, "get_space_for_graph", space_for_graph), patch.object(router.sp, "attach_graph", attach), \
             patch.object(router, "insert_data_gdb_async", noop), patch.object(router.sp, "mirror_space_to_rdf", noop), \
             patch.object(router.ss, "save_review", save), patch.object(router.ss, "set_job", noop), \
             patch.object(router, "_start_ingest_job", start):
@@ -164,7 +176,7 @@ def ingest(*, ingest_role=True, can_add=True, can_write=True, exists=False, regi
 class IngestEndpointTests(unittest.TestCase):
     def test_ingests_into_the_review_s_own_graph_as_a_job(self):
         out, calls = ingest()
-        graph = "https://brainkb.org/synthscholar/reviews/review_local_20261015_neurokg/"
+        graph = "https://brainkb.org/synthscholar/lab/reviews/review_local_20261015_neurokg/"
         self.assertEqual(out["graph_iri"], graph)
         self.assertEqual(out["job_id"], "job123")
         self.assertEqual(calls["attach"], graph)
@@ -178,11 +190,21 @@ class IngestEndpointTests(unittest.TestCase):
                 ingest(**kwargs)
             self.assertEqual(e.exception.status_code, code)
 
-    def test_once_per_review(self):
-        for kwargs in ({"exists": True}, {"registered": True}):
+    def test_once_per_review_per_space(self):
+        row = {"space_slug": "lab", "review_id": "review_local_20261015_neurokg",
+               "graph_iri": "https://brainkb.org/synthscholar/lab/reviews/review_local_20261015_neurokg/"}
+        for kwargs in ({"existing": row, "holder": {"slug": "lab"}}, {"registered": True}):
             with self.subTest(**kwargs), self.assertRaises(HTTPException) as e:
                 ingest(**kwargs)
             self.assertEqual(e.exception.status_code, 409)
+
+    def test_a_leftover_record_whose_graph_is_gone_does_not_block(self):
+        # the space was deleted and made again: the old row's graph is bound nowhere
+        row = {"space_slug": "lab", "review_id": "review_local_20261015_neurokg",
+               "graph_iri": "https://brainkb.org/synthscholar/reviews/review_local_20261015_neurokg/"}
+        out, calls = ingest(existing=row, holder=None)
+        self.assertEqual(calls["deleted"], ("lab", "review_local_20261015_neurokg"))
+        self.assertEqual(out["job_id"], "job123")
 
     def test_not_an_output_directory(self):
         with self.assertRaises(HTTPException) as e:
@@ -256,6 +278,35 @@ class QueryTests(unittest.TestCase):
         with self.assertRaises(ss.ImportError_):
             ss.review_text(r, "nope")
 
+
+
+class LocateTests(unittest.TestCase):
+    def locate(self, space=None, readable=("a", "b")):
+        async def rows(rid):
+            return [{"review_id": rid, "space_slug": x} for x in ("a", "b", "private")]
+
+        async def get_space(slug):
+            return {"space_id": slug, "slug": slug, "visibility": "public" if slug in readable else "private"}
+
+        async def permitted(*_a):
+            return True
+        with patch.object(router.ss, "list_reviews", rows), patch.object(router.sp, "get_space", get_space), \
+                patch.object(router.sp, "space_action_permitted", permitted):
+            return run(router._locate("r1", None, space))
+
+    def test_one_readable_copy_needs_no_space(self):
+        self.assertEqual(self.locate(readable=("b",)), "b")
+
+    def test_several_copies_name_their_spaces(self):
+        with self.assertRaises(HTTPException) as e:
+            self.locate()
+        self.assertEqual((e.exception.status_code, e.exception.detail["spaces"]), (409, ["a", "b"]))
+        self.assertEqual(self.locate(space="a"), "a")
+
+    def test_unreadable_is_not_found(self):
+        with self.assertRaises(HTTPException) as e:
+            self.locate(space="private")
+        self.assertEqual(e.exception.status_code, 404)
 
 if __name__ == "__main__":
     unittest.main()

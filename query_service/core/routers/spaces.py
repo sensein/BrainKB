@@ -334,6 +334,13 @@ async def delete_space(
         logger.error("[spaces] deleting %s failed: %s", slug, e)
         raise HTTPException(502, f"space not deleted: {e}. Nothing was removed from the space "
                                  "registry; it is safe to retry.")
+    # The space's SynthScholar reviews (their kept files) go with it; their graphs
+    # were among the dropped ones.
+    from core import synthscholar as _ss
+    try:
+        result["synthscholar_reviews_removed"] = await _ss.delete_space_reviews(slug)
+    except Exception as e:      # the space is gone either way; a leftover row is skipped on re-ingest
+        logger.error("[spaces] removing %s's SynthScholar reviews failed: %s", slug, e)
     logger.info("[spaces] %s deleted space %s (%d graphs, %d delta graphs)", _agent(user), slug,
                 len(result["dropped_graphs"]), len(result["dropped_delta_graphs"]))
     return result

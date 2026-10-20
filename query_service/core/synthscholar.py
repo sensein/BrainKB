@@ -37,7 +37,6 @@ from rdflib.namespace import DCTERMS, PROV
 
 from core.database import get_db_connection
 
-GRAPH_BASE = "https://brainkb.org/synthscholar/reviews/"
 SCHEMA = Namespace("https://schema.org/")
 
 REQUIRED_FILES = ("review.json", "review.ttl")
@@ -64,8 +63,12 @@ class ImportError_(ValueError):
     """The upload is not an ingestible SynthScholar output directory."""
 
 
-def graph_iri_for(review_id: str) -> str:
-    return f"{GRAPH_BASE}{quote(review_id, safe='')}/"
+def graph_iri_for(review_id: str, space_slug: str) -> str:
+    """The review's graph in a space. A review is unique per space — the same run
+    can be ingested into several spaces, once each — so the space is part of the IRI.
+    (Reviews ingested before this was so keep the IRI stored with them,
+    https://brainkb.org/synthscholar/reviews/<review_id>/.)"""
+    return f"https://brainkb.org/synthscholar/{quote(space_slug, safe='')}/reviews/{quote(review_id, safe='')}/"
 
 
 def media_type(path: str) -> str:
@@ -346,18 +349,19 @@ def local_run_provenance(plan: ImportPlan) -> dict:
 
 # ── the import record (goes into the review's graph with review.ttl) ──────
 
-def file_iri(review_id: str, path: str) -> str:
-    return f"{graph_iri_for(review_id)}files/{quote(path, safe='/')}"
+def file_iri(graph_iri: str, path: str) -> str:
+    return f"{graph_iri}files/{quote(path, safe='/')}"
 
 
-def file_url(review_id: str, path: str) -> Optional[str]:
+def file_url(review_id: str, space_slug: str, path: str) -> Optional[str]:
     if not PUBLIC_API_BASE:
         return None
-    return f"{PUBLIC_API_BASE}/api/synthscholar/reviews/{quote(review_id, safe='')}/files/{quote(path, safe='/')}"
+    return (f"{PUBLIC_API_BASE}/api/synthscholar/reviews/{quote(review_id, safe='')}/files/{quote(path, safe='/')}"
+            f"?space={quote(space_slug, safe='')}")
 
 
 def import_record_ttl(review_id: str, plan: ImportPlan, *, agent: URIRef, imported_at: str,
-                      space_slug: str, summary: dict) -> str:
+                      space_slug: str, summary: dict, graph_iri: str) -> str:
     """PROV-O record of the import, linking every kept file: an import activity that
     used the output directory's files (each a prov:Entity / schema:MediaObject with
     its media type, size and sha256, and where to download it) and was associated
@@ -366,8 +370,7 @@ def import_record_ttl(review_id: str, plan: ImportPlan, *, agent: URIRef, import
     g = Graph()
     for prefix, ns in (("prov", PROV), ("dcterms", DCTERMS), ("schema", SCHEMA)):
         g.bind(prefix, ns)
-    base = graph_iri_for(review_id)
-    act = URIRef(f"{base}import")
+    act = URIRef(f"{graph_iri}import")
     g.add((act, RDF.type, PROV.Activity))
     g.add((act, RDFS.label, Literal("Import of a SynthScholar review output directory")))
     g.add((act, PROV.startedAtTime, Literal(imported_at, datatype=XSD.dateTime)))
@@ -379,7 +382,7 @@ def import_record_ttl(review_id: str, plan: ImportPlan, *, agent: URIRef, import
     if summary.get("run_completed_at"):
         g.add((act, DCTERMS.date, Literal(summary["run_completed_at"])))
     for f in plan.files:
-        e = URIRef(file_iri(review_id, f.path))
+        e = URIRef(file_iri(graph_iri, f.path))
         g.add((act, PROV.used, e))
         g.add((e, RDF.type, PROV.Entity))
         g.add((e, RDF.type, SCHEMA.MediaObject))
@@ -388,7 +391,7 @@ def import_record_ttl(review_id: str, plan: ImportPlan, *, agent: URIRef, import
         g.add((e, SCHEMA.encodingFormat, Literal(f.media_type)))
         g.add((e, SCHEMA.contentSize, Literal(f.size, datatype=XSD.integer)))
         g.add((e, SCHEMA.sha256, Literal(f.sha256)))
-        url = file_url(review_id, f.path)
+        url = file_url(review_id, space_slug, f.path)
         if url:
             g.add((e, SCHEMA.contentUrl, URIRef(url)))
     left = [s for s in plan.skipped]
@@ -400,30 +403,62 @@ def import_record_ttl(review_id: str, plan: ImportPlan, *, agent: URIRef, import
 
 
 # ── storage ──────────────────────────────────────────────────────────────
+# A review is keyed by (space, review id): the same run can be in several spaces.
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS synthscholar_reviews (
-    review_id     TEXT PRIMARY KEY,
-    graph_iri     TEXT NOT NULL UNIQUE,
     space_slug    TEXT NOT NULL,
+    review_id     TEXT NOT NULL,
+    graph_iri     TEXT NOT NULL UNIQUE,
     title         TEXT NOT NULL DEFAULT '',
     owner_email   TEXT NOT NULL,
     imported_at   TIMESTAMPTZ NOT NULL,
     job_id        TEXT,
     summary       JSONB NOT NULL,
     detail        JSONB NOT NULL,
-    manifest      JSONB NOT NULL
+    manifest      JSONB NOT NULL,
+    PRIMARY KEY (space_slug, review_id)
 );
 CREATE TABLE IF NOT EXISTS synthscholar_files (
-    review_id     TEXT NOT NULL REFERENCES synthscholar_reviews(review_id) ON DELETE CASCADE,
+    space_slug    TEXT NOT NULL,
+    review_id     TEXT NOT NULL,
     path          TEXT NOT NULL,
     kind          TEXT NOT NULL,
     media_type    TEXT NOT NULL,
     size_bytes    BIGINT NOT NULL,
     sha256        TEXT NOT NULL,
     content       BYTEA NOT NULL,
-    PRIMARY KEY (review_id, path)
+    PRIMARY KEY (space_slug, review_id, path),
+    FOREIGN KEY (space_slug, review_id) REFERENCES synthscholar_reviews(space_slug, review_id) ON DELETE CASCADE
 );
+"""
+# Tables created while a review id was unique across BrainKB (primary key review_id
+# alone): re-key them by (space, review id). Runs once; later starts find the
+# two-column key and skip it.
+_MIGRATE = """
+DO $$
+DECLARE c text;
+BEGIN
+  -- this table (as the search path resolves it) still keyed by review_id alone?
+  IF EXISTS (SELECT 1 FROM pg_constraint
+             WHERE conrelid = 'synthscholar_reviews'::regclass AND contype = 'p' AND array_length(conkey, 1) = 1) THEN
+    ALTER TABLE synthscholar_files ADD COLUMN IF NOT EXISTS space_slug TEXT;
+    UPDATE synthscholar_files f SET space_slug = r.space_slug
+      FROM synthscholar_reviews r WHERE r.review_id = f.review_id AND f.space_slug IS NULL;
+    DELETE FROM synthscholar_files WHERE space_slug IS NULL;          -- orphans; nothing could reach them
+    ALTER TABLE synthscholar_files ALTER COLUMN space_slug SET NOT NULL;
+    FOR c IN SELECT conname FROM pg_constraint
+             WHERE conrelid = 'synthscholar_files'::regclass AND contype IN ('f', 'p') LOOP
+      EXECUTE format('ALTER TABLE synthscholar_files DROP CONSTRAINT %I', c);
+    END LOOP;
+    SELECT conname INTO c FROM pg_constraint WHERE conrelid = 'synthscholar_reviews'::regclass AND contype = 'p';
+    EXECUTE format('ALTER TABLE synthscholar_reviews DROP CONSTRAINT %I', c);
+    ALTER TABLE synthscholar_reviews ADD PRIMARY KEY (space_slug, review_id);
+    ALTER TABLE synthscholar_files ADD PRIMARY KEY (space_slug, review_id, path);
+    ALTER TABLE synthscholar_files ADD FOREIGN KEY (space_slug, review_id)
+      REFERENCES synthscholar_reviews(space_slug, review_id) ON DELETE CASCADE;
+  END IF;
+END $$;
 """
 _tables_ready = False
 
@@ -433,41 +468,58 @@ async def ensure_tables() -> None:
     if _tables_ready:
         return
     async with get_db_connection() as conn:
-        await conn.execute(_TABLES)
+        async with conn.transaction():
+            # several workers start at once: one creates/migrates, the others wait
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext('synthscholar_tables'))")
+            await conn.execute(_TABLES)
+            await conn.execute(_MIGRATE)
     _tables_ready = True
 
 
-async def review_exists(review_id: str) -> bool:
+async def get_row(space_slug: str, review_id: str) -> Optional[dict]:
+    """The stored review's key facts, or None."""
     await ensure_tables()
     async with get_db_connection() as conn:
-        return bool(await conn.fetchval("SELECT 1 FROM synthscholar_reviews WHERE review_id = $1", review_id))
+        r = await conn.fetchrow("SELECT space_slug, review_id, graph_iri FROM synthscholar_reviews "
+                                "WHERE space_slug = $1 AND review_id = $2", space_slug, review_id)
+    return dict(r) if r else None
 
 
-async def save_review(*, review_id: str, space_slug: str, owner_email: str, imported_at: datetime,
+async def save_review(*, review_id: str, space_slug: str, graph_iri: str, owner_email: str, imported_at: datetime,
                       summary: dict, detail: dict, manifest: dict, plan: ImportPlan) -> None:
     await ensure_tables()
     async with get_db_connection() as conn:
         async with conn.transaction():
             await conn.execute(
                 """INSERT INTO synthscholar_reviews
-                   (review_id, graph_iri, space_slug, title, owner_email, imported_at, summary, detail, manifest)
+                   (space_slug, review_id, graph_iri, title, owner_email, imported_at, summary, detail, manifest)
                    VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb)""",
-                review_id, graph_iri_for(review_id), space_slug, summary.get("title") or review_id, owner_email,
+                space_slug, review_id, graph_iri, summary.get("title") or review_id, owner_email,
                 imported_at, json.dumps(summary), json.dumps(detail), json.dumps(manifest))
             await conn.executemany(
-                """INSERT INTO synthscholar_files (review_id, path, kind, media_type, size_bytes, sha256, content)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7)""",
-                [(review_id, f.path, f.kind, f.media_type, f.size, f.sha256, f.content) for f in plan.files])
+                """INSERT INTO synthscholar_files (space_slug, review_id, path, kind, media_type, size_bytes, sha256, content)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
+                [(space_slug, review_id, f.path, f.kind, f.media_type, f.size, f.sha256, f.content) for f in plan.files])
 
 
-async def set_job(review_id: str, job_id: str) -> None:
+async def set_job(space_slug: str, review_id: str, job_id: str) -> None:
     async with get_db_connection() as conn:
-        await conn.execute("UPDATE synthscholar_reviews SET job_id = $2 WHERE review_id = $1", review_id, job_id)
+        await conn.execute("UPDATE synthscholar_reviews SET job_id = $3 WHERE space_slug = $1 AND review_id = $2",
+                           space_slug, review_id, job_id)
 
 
-async def delete_review(review_id: str) -> None:
+async def delete_review(space_slug: str, review_id: str) -> None:
     async with get_db_connection() as conn:
-        await conn.execute("DELETE FROM synthscholar_reviews WHERE review_id = $1", review_id)
+        await conn.execute("DELETE FROM synthscholar_reviews WHERE space_slug = $1 AND review_id = $2",
+                           space_slug, review_id)
+
+
+async def delete_space_reviews(space_slug: str) -> int:
+    """A deleted space takes its reviews (and their files) with it."""
+    await ensure_tables()
+    async with get_db_connection() as conn:
+        rows = await conn.fetch("DELETE FROM synthscholar_reviews WHERE space_slug = $1 RETURNING review_id", space_slug)
+    return len(rows)
 
 
 def _row(r, *, with_detail: bool = False) -> dict:
@@ -483,33 +535,37 @@ def _row(r, *, with_detail: bool = False) -> dict:
     return out
 
 
-async def list_reviews() -> list[dict]:
+async def list_reviews(review_id: Optional[str] = None) -> list[dict]:
+    """Every stored review (or every space's copy of one review id)."""
     await ensure_tables()
     async with get_db_connection() as conn:
-        rows = await conn.fetch("""SELECT review_id, graph_iri, space_slug, title, owner_email, imported_at, job_id, summary
-                                   FROM synthscholar_reviews ORDER BY imported_at DESC""")
+        rows = await conn.fetch(
+            """SELECT review_id, graph_iri, space_slug, title, owner_email, imported_at, job_id, summary
+               FROM synthscholar_reviews WHERE ($1::text IS NULL OR review_id = $1) ORDER BY imported_at DESC""",
+            review_id)
     return [_row(r) for r in rows]
 
 
-async def get_review(review_id: str) -> Optional[dict]:
+async def get_review(space_slug: str, review_id: str) -> Optional[dict]:
     await ensure_tables()
     async with get_db_connection() as conn:
-        r = await conn.fetchrow("SELECT * FROM synthscholar_reviews WHERE review_id = $1", review_id)
+        r = await conn.fetchrow("SELECT * FROM synthscholar_reviews WHERE space_slug = $1 AND review_id = $2",
+                                space_slug, review_id)
         if r is None:
             return None
         files = await conn.fetch("""SELECT path, kind, media_type, size_bytes, sha256 FROM synthscholar_files
-                                    WHERE review_id = $1 ORDER BY path""", review_id)
+                                    WHERE space_slug = $1 AND review_id = $2 ORDER BY path""", space_slug, review_id)
     out = _row(r, with_detail=True)
     out["files"] = [dict(f) for f in files]
     return out
 
 
-async def get_file(review_id: str, path: str) -> Optional[dict]:
+async def get_file(space_slug: str, review_id: str, path: str) -> Optional[dict]:
     await ensure_tables()
     async with get_db_connection() as conn:
-        r = await conn.fetchrow("""SELECT r.space_slug, f.path, f.media_type, f.sha256, f.content
-                                   FROM synthscholar_files f JOIN synthscholar_reviews r USING (review_id)
-                                   WHERE f.review_id = $1 AND f.path = $2""", review_id, path)
+        r = await conn.fetchrow("""SELECT space_slug, path, media_type, sha256, content FROM synthscholar_files
+                                   WHERE space_slug = $1 AND review_id = $2 AND path = $3""",
+                                space_slug, review_id, path)
     return dict(r) if r else None
 
 
@@ -663,10 +719,10 @@ def study_in_review(review: dict, *, doi: str = "", pmid: str = "", title: str =
     return found
 
 
-async def load_review_json(review_id: str) -> Optional[dict]:
+async def load_review_json(space_slug: str, review_id: str) -> Optional[dict]:
     """The review's own review.json (kept with it), parsed — cached per worker by
     content hash, since one can run to tens of MB."""
-    f = await get_file(review_id, "review.json")
+    f = await get_file(space_slug, review_id, "review.json")
     if f is None:
         return None
     key = f["sha256"]
