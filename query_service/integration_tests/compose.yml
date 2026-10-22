@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16.4
+    environment:
+      POSTGRES_DB: brainkb_integration
+      POSTGRES_USER: brainkb_test
+      POSTGRES_PASSWORD: disposable-test-password
+    ports: ['127.0.0.1:55432:5432']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U brainkb_test -d brainkb_integration']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  oxigraph:
+    image: ghcr.io/oxigraph/oxigraph:0.4.0-rc.1
+    ports: ['127.0.0.1:17878:7878']
