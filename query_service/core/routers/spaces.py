@@ -11,11 +11,13 @@
 
 """REST endpoints for spaces — private/public containers of named graphs."""
 
+import asyncio
 import logging
 import re
+import time
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, HttpUrl
 
@@ -23,7 +25,8 @@ from core.models.user import LoginUserIn
 from core.security import get_current_user, get_current_user_optional, require_scopes
 from core.shared import named_graph_metadata
 from core.provenance import agent_ref, query_provenance_jsonld
-from core.graph_database_connection_manager import insert_data_gdb_async, check_named_graph_exists
+from core.graph_database_connection_manager import insert_data_gdb_async, check_named_graph_exists, fetch_data_gdb_async
+from core.stored_queries import STORED_QUERIES, MAX_IRI_LIST
 from core import spaces as sp
 from core import rbac
 from core import reserved_graphs as reserved
@@ -484,6 +487,18 @@ async def add_graph(slug: str, body: SpaceGraphIn, user: Annotated[LoginUserIn, 
     return space
 
 
+async def _require_read(space: dict, member: Optional[str]) -> None:
+    """Raise 403 unless ``member`` (None = anonymous) may read ``space``."""
+    if space["visibility"] != "public":
+        # Private: membership AND a role that grants read_private.
+        if await sp.member_role(space["space_id"], member) is None \
+                or not await rbac.has_capability(member, rbac.READ_PRIVATE):
+            raise HTTPException(403, "private space — membership and a role are required")
+    # Fine-grained per-space read rules (if any) further restrict who can read.
+    if not await sp.space_action_permitted(space, "read", member):
+        raise HTTPException(403, "restricted by a space access rule (read)")
+
+
 @router.get("/spaces/{slug}/data",
             summary="Read a space's data (public = anonymous)",
             description="Returns the RDF (JSON-LD) across all named graphs in the space. "
@@ -493,15 +508,7 @@ async def read_space_data(slug: str, user: Annotated[Optional[object], Depends(g
     space = await sp.get_space(slug)
     if not space:
         return JSONResponse({"error": "space not found"}, status_code=404)
-    member = _agent(user) if user else None
-    if space["visibility"] != "public":
-        # Private: membership AND a role that grants read_private.
-        if await sp.member_role(space["space_id"], member) is None \
-                or not await rbac.has_capability(member, rbac.READ_PRIVATE):
-            raise HTTPException(403, "private space — membership and a role are required")
-    # Fine-grained per-space read rules (if any) further restrict who can read.
-    if not await sp.space_action_permitted(space, "read", member):
-        raise HTTPException(403, "restricted by a space access rule (read)")
+    await _require_read(space, _agent(user) if user else None)
     if not space["graphs"]:
         return Response(content='{"@graph": []}', media_type="application/ld+json")
     jsonld = await query_provenance_jsonld(await sp.construct_space_graphs(space))
@@ -736,3 +743,100 @@ async def revoke_role_capability(body: RoleGrantIn, user: Annotated[LoginUserIn,
         raise HTTPException(403, "Admin/SuperAdmin role required to revoke capabilities")
     await rbac.revoke_role_capability(body.role, body.capability)
     return {"status": "revoked", "role": body.role, "capability": body.capability}
+
+
+# --------------------------------------------------------------------------- #
+# Stored queries: fixed SPARQL that any reader of a space may run on its graph
+# --------------------------------------------------------------------------- #
+# The arbitrary-SPARQL endpoint stays admin-only. These named queries
+# (core/stored_queries.py) give non-admins, including anonymous visitors of a
+# public space, the UI pages' data without copying the whole space through
+# /spaces/{slug}/data. Callers pick a query and pass only the graph and the
+# IRIs it declares; nothing else from the request reaches the SPARQL.
+
+_IRI_RE = re.compile(r'^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|\\^`]+$')
+_STORED_CACHE_S = 300          # results for anonymously readable spaces
+_STORED_CACHE_MAX = 2000
+_stored_cache: dict = {}
+_stored_slots = asyncio.Semaphore(4)   # at most 4 stored queries in Oxigraph at once
+
+
+def _iri(value: str, what: str) -> str:
+    if not value or len(value) > 2048 or not _IRI_RE.match(value):
+        raise HTTPException(400, f"{what} is not a valid IRI")
+    return value
+
+
+def _stored_sparql(name: str, args: dict) -> tuple:
+    """The filled-in query and its row cap; 404/400 on an unknown name or bad args."""
+    q = STORED_QUERIES.get(name)
+    if q is None:
+        raise HTTPException(404, f"no stored query named {name!r}")
+    graph = _iri(args.get("graph", ""), "graph")
+    extra = set(args) - {"graph"} - set(q["params"])
+    if extra:
+        raise HTTPException(400, f"unknown parameter(s) for {name}: {', '.join(sorted(extra))}")
+    values = {"graph": graph}
+    for p, kind in q["params"].items():
+        raw = args.get(p)
+        if not raw:
+            raise HTTPException(400, f"{name} needs the parameter {p!r}")
+        if kind == "iri":  # the query writes <{{p}}>
+            values[p] = _iri(raw, p)
+        elif kind == "iri_list":
+            items = [x for x in re.split(r"[\s,]+", raw) if x]
+            if not items or len(items) > MAX_IRI_LIST:
+                raise HTTPException(400, f"{p} must list 1 to {MAX_IRI_LIST} IRIs")
+            values[p] = " ".join("<" + _iri(x, p) + ">" for x in items)
+        else:  # a query declaring an unsupported kind is a bug, not a caller error
+            raise HTTPException(500, f"stored query {name} has an unsupported parameter kind")
+    # Single IRIs sit inside <...> in the query; an iri_list is a run of <...>.
+    sparql = re.sub(r"\{\{(\w+)\}\}", lambda m: values[m.group(1)], q["query"])
+    return graph, sparql, q["limit"]
+
+
+@router.get("/query/stored",
+            summary="List the stored queries",
+            description="Names, parameters and row caps of the queries /query/stored/{name} runs.")
+async def list_stored_queries():
+    return {"queries": [{"name": n, "params": q["params"], "limit": q["limit"]}
+                        for n, q in STORED_QUERIES.items()]}
+
+
+@router.get("/query/stored/{name}",
+            summary="Run a stored query on a space's graph (public = anonymous)",
+            description=(
+                "Runs one of the fixed queries in core/stored_queries.py against `graph`, "
+                "which must belong to a space the caller may read: public spaces need no "
+                "token, private ones membership. Only the graph and the IRIs the query "
+                "declares are accepted. Returns the SPARQL JSON results plus the query's "
+                "row cap (`limit`) and whether the result reached it (`capped`)."))
+async def run_stored_query(name: str, request: Request,
+                           user: Annotated[Optional[object], Depends(get_current_user_optional)]):
+    args = dict(request.query_params)
+    graph, sparql, limit = _stored_sparql(name, args)
+    space = await sp.get_space_for_graph(graph)
+    if space is None:
+        raise HTTPException(404, "graph is not part of any space")
+    await _require_read(space, _agent(user) if user else None)
+
+    # Results anyone may read are shared between callers for a few minutes.
+    shared = space["visibility"] == "public" and await sp.space_action_permitted(space, "read", None)
+    key = (name, tuple(sorted(args.items())))
+    if shared:
+        hit = _stored_cache.get(key)
+        if hit and time.monotonic() - hit[0] < _STORED_CACHE_S:
+            return hit[1]
+
+    async with _stored_slots:
+        result = await fetch_data_gdb_async(sparql)
+    if result.get("status") != "success":
+        logger.error("[stored-query] %s failed: %s", name, str(result.get("message"))[:300])
+        return JSONResponse({"error": "query failed"}, status_code=502)
+    rows = (result.get("message") or {}).get("results", {}).get("bindings", [])
+    body = {"status": "success", "message": result["message"], "limit": limit, "capped": len(rows) >= limit}
+    if shared:
+        if len(_stored_cache) >= _STORED_CACHE_MAX:
+            _stored_cache.clear()
+        _stored_cache[key] = (time.monotonic(), body)
+    return body
