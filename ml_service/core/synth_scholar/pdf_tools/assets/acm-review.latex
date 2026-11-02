@@ -1,0 +1,120 @@
+%% SynthScholar review manuscript in the ACM journals layout (acmart, acmsmall).
+%% The same class as the "ACM Journals Primary Article Template" on Overleaf;
+%% `nonacm` drops the ACM copyright block, DOI and "ACM Reference Format",
+%% which belong to papers ACM has accepted, not to a preprint of a review.
+%% Filled by generate_review_pdf.py (--layout acm); pandoc variables:
+%%   title, shorttitle, author[{name, affiliation, email}], abstract, keywords,
+%%   review-details (the review's front-matter block), numbersections.
+\documentclass[$if(acm-format)$$acm-format$$else$acmsmall$endif$,screen,nonacm$if(review)$,review$endif$]{acmart}
+
+\settopmatter{printacmref=false, printccs=false, printfolios=true}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\authorsaddresses{}   % no "Author's address" footnote: a review preprint has no ACM author block
+\pagestyle{plain}
+
+%% ── what pandoc's LaTeX writer emits ──────────────────────────────
+\usepackage{etoolbox}
+\usepackage{longtable,array,calc}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\newsavebox\pandoc@box
+\newcommand*\pandocbounded[1]{%
+  \sbox\pandoc@box{#1}%
+  \Gscale@div\@tempa{\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+  \Gscale@div\@tempb{\linewidth}{\wd\pandoc@box}%
+  \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi
+  \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+  \else\usebox{\pandoc@box}\fi}
+\def\fps@figure{htbp}
+\makeatother
+\newcounter{none}
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\providecommand{\passthrough}[1]{#1}
+$if(highlighting-macros)$
+$highlighting-macros$
+$endif$
+$if(csl-refs)$
+\newlength{\cslhangindent}\setlength{\cslhangindent}{1.5em}
+\newlength{\csllabelwidth}\setlength{\csllabelwidth}{3em}
+\newenvironment{CSLReferences}[2]{\par\begin{list}{}{\setlength{\itemindent}{0pt}
+  \setlength{\leftmargin}{\cslhangindent}\setlength{\itemindent}{-\cslhangindent}}}{\end{list}}
+\newcommand{\CSLBlock}[1]{#1\hfill\break}
+\newcommand{\CSLLeftMargin}[1]{\parbox[t]{\csllabelwidth}{#1}}
+\newcommand{\CSLRightInline}[1]{\parbox[t]{\linewidth - \csllabelwidth}{#1}\break}
+\newcommand{\CSLIndent}[1]{\hspace{\cslhangindent}#1}
+$endif$
+
+%% ── review layout ─────────────────────────────────────────────────
+% Tables: a size smaller than the text, flush left, rows that break across pages
+% without splitting a row, and a little air between them (booktabs is loaded by acmart).
+% (a table of 7+ columns is set one size smaller: generate_review_pdf.py redefines \reviewtablefont around it)
+\newcommand{\reviewtablefont}{\footnotesize}
+\AtBeginEnvironment{longtable}{\reviewtablefont\setlength{\tabcolsep}{4pt}\renewcommand{\arraystretch}{1.15}}
+\setlength{\LTleft}{0pt}\setlength{\LTright}{0pt plus 1fill}
+\setlength{\LTpre}{6pt}\setlength{\LTpost}{6pt}
+% Search strings and other code: wrapped at the margin instead of running off it.
+\usepackage{fvextra}
+\RecustomVerbatimEnvironment{verbatim}{Verbatim}{breaklines,breakanywhere,fontsize=\scriptsize}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{}
+% Figures: never wider than the column or taller than most of a page.
+\setkeys{Gin}{width=\linewidth,height=0.72\textheight,keepaspectratio}
+\setcounter{topnumber}{2}\setcounter{totalnumber}{3}
+\renewcommand{\topfraction}{0.9}\renewcommand{\textfraction}{0.08}\renewcommand{\floatpagefraction}{0.75}
+% Long words in narrow cells (identifiers, URLs) may break rather than overflow.
+\sloppy\emergencystretch=2em
+$if(numbersections)$
+$else$
+\setcounter{secnumdepth}{-\maxdimen}   % the review numbers its own sections
+$endif$
+$for(header-includes)$
+$header-includes$
+$endfor$
+
+%% ── front matter ──────────────────────────────────────────────────
+\title$if(shorttitle)$[$shorttitle$]$endif${$title$}
+$if(author)$
+$for(author)$
+\author{$author.name$}
+$if(author.email)$\email{$author.email$}$endif$
+$if(author.affiliation)$
+%% acmart refuses an affiliation without a country; \relax stands in when none is given
+\affiliation{\institution{$author.affiliation$}\country{$if(author.country)$$author.country$$else$\relax$endif$}}
+$endif$
+$endfor$
+$else$
+%% no authors recorded: the workflow is named, with no invented affiliation
+\author{SynthScholar automated review}
+$endif$
+$if(shortauthors)$
+\renewcommand{\shortauthors}{$shortauthors$}
+$endif$
+$if(abstract)$
+\begin{abstract}
+$abstract$
+\end{abstract}
+$endif$
+$if(keywords)$
+\keywords{$for(keywords)$$keywords$$sep$, $endfor$}
+$endif$
+
+\hypersetup{pdftitle={$title-meta$}, pdfcreator={SynthScholar via pandoc and acmart}}
+
+\begin{document}
+\maketitle
+$if(review-details)$
+{\small\setlength{\parskip}{1pt}
+$review-details$
+\par}
+\medskip
+$endif$
+$for(include-before)$
+$include-before$
+$endfor$
+
+$body$
+
+$for(include-after)$
+$include-after$
+$endfor$
+\end{document}

@@ -123,17 +123,65 @@ class DeletionOrderTests(unittest.TestCase):
             run(sp.delete_space(dict(LAB), "admin@x.org"))
         self.assertEqual(e.exception.slugs, ["lab-sub", "lab-release"])
 
-    def test_endpoint_reports_409_with_the_subspaces(self):
+    def test_deleting_a_space_deletes_its_subspaces_first(self):
+        order, reviews = [], []
+        tree = {"lab": dict(LAB, subspaces=[]), "lab-sub": dict(SUB), "lab-release": dict(RELEASE),
+                "lab-sub-deep": dict(SUB, space_id="s-deep", slug="lab-sub-deep")}
+
         async def yes(_e):
             return True
 
-        async def get_space(_slug):
-            return dict(LAB)
-        with patch.object(router.rbac, "is_superadmin", yes), patch.object(router.sp, "get_space", get_space):
+        async def get_space(slug):
+            return tree.get(slug) if slug not in order else None
+
+        async def descendants(_id):
+            return ["lab-sub-deep", "lab-release", "lab-sub"]     # deepest first
+
+        async def delete(space_, by):
+            order.append(space_["slug"])
+            return {"deleted": True, "slug": space_["slug"], "dropped_graphs": space_.get("graphs") or [],
+                    "dropped_delta_graphs": [], "members_removed": 1}
+
+        async def remove(slugs):
+            reviews.extend(slugs)
+            return len(slugs)
+        with patch.object(router.rbac, "is_superadmin", yes), patch.object(router.sp, "get_space", get_space), \
+                patch.object(sp, "get_space", get_space), patch.object(router.sp, "descendant_slugs", descendants), \
+                patch.object(router.sp, "delete_space", delete), patch.object(router, "_remove_synthscholar", remove):
+            out = run(router.delete_space("lab", {"email": "admin@x.org"}, "lab"))
+        self.assertEqual(order, ["lab-sub-deep", "lab-release", "lab-sub", "lab"])
+        self.assertEqual(out["subspaces_deleted"], ["lab-sub-deep", "lab-release", "lab-sub"])
+        self.assertEqual(sorted(reviews), sorted(order))
+        self.assertEqual(out["members_removed"], 4)
+
+    def test_a_failure_part_way_says_what_was_deleted(self):
+        done = []
+
+        async def yes(_e):
+            return True
+
+        async def get_space(slug):
+            return dict(SUB, slug=slug, space_id=slug) if slug not in done else None
+
+        async def descendants(_id):
+            return ["lab-a", "lab-b"]
+
+        async def delete(space_, by):
+            if space_["slug"] == "lab-b":
+                raise sp.SpaceDeletionError("SPARQL update failed (HTTP 500)")
+            done.append(space_["slug"])
+            return {"deleted": True, "slug": space_["slug"]}
+
+        async def remove(slugs):
+            return 0
+        with patch.object(router.rbac, "is_superadmin", yes), patch.object(router.sp, "get_space", get_space), \
+                patch.object(sp, "get_space", get_space), patch.object(router.sp, "descendant_slugs", descendants), \
+                patch.object(router.sp, "delete_space", delete), patch.object(router, "_remove_synthscholar", remove):
             with self.assertRaises(HTTPException) as e:
                 run(router.delete_space("lab", {"email": "admin@x.org"}, "lab"))
-        self.assertEqual(e.exception.status_code, 409)
-        self.assertIn("lab-sub", e.exception.detail)
+        self.assertEqual(e.exception.status_code, 502)
+        self.assertIn("Already deleted: lab-a", e.exception.detail)
+
 
 
 if __name__ == "__main__":

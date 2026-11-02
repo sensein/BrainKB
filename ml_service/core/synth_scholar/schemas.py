@@ -297,6 +297,10 @@ class VisibilityRequest(BaseModel):
     is_public: bool
 
 
+class OwnerRequest(BaseModel):
+    owner_email: str
+
+
 class CacheSharingRequest(BaseModel):
     share_to_cache: bool
 

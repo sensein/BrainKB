@@ -161,6 +161,42 @@ origins = sorted({
     *(o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()),
 })
 
+class _ErrorsInsideCORS:
+    """Turn an uncaught exception into a JSON 500 *inside* CORSMiddleware.
+
+    FastAPI's Exception handler runs in ServerErrorMiddleware, the outermost layer —
+    outside CORS — so its 500 has no Access-Control-Allow-Origin and the browser
+    reports "blocked by CORS policy" instead of the error. Raw ASGI (not
+    BaseHTTPMiddleware) so SSE and other streamed responses pass through untouched;
+    once a response has started it is left to fail as before."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        started = False
+
+        async def _send(message):
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+        try:
+            await self.app(scope, receive, _send)
+        except Exception as exc:
+            if started:
+                raise
+            logger.error("Unhandled exception: %s: %s [Path: %s, Method: %s]", type(exc).__name__, exc,
+                         scope.get("path"), scope.get("method"), exc_info=True)
+            from starlette.responses import JSONResponse as _JSON
+            await _JSON({"detail": "Internal server error"}, status_code=500)(scope, receive, send)
+
+
+# Added before CORS so it sits inside it (later add_middleware calls wrap earlier ones).
+app.add_middleware(_ErrorsInsideCORS)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,

@@ -94,10 +94,17 @@ async def create_space(slug: str, name: str, description: Optional[str], owner: 
 
 
 async def get_space(slug: str) -> Optional[Dict[str, Any]]:
+    """A space by its slug, or by an old slug it had before a rename (the result
+    then carries the current slug, and ``renamed_from`` the one asked for)."""
     async with get_db_connection() as conn:
         row = await conn.fetchrow("SELECT * FROM spaces WHERE slug = $1", slug)
+        renamed_from = None
         if not row:
-            return None
+            row = await conn.fetchrow(
+                "SELECT s.* FROM space_aliases a JOIN spaces s USING (space_id) WHERE a.old_slug = $1", slug)
+            if not row:
+                return None
+            renamed_from = slug
         members = await conn.fetch(
             "SELECT member, role FROM space_members WHERE space_id = $1 ORDER BY role, member",
             row["space_id"],
@@ -152,7 +159,25 @@ async def get_space(slug: str) -> Optional[Dict[str, Any]]:
                                   for m in inherited],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+            **({"renamed_from": renamed_from} if renamed_from else {}),
         }
+
+
+async def canonical_slug(slug: str) -> str:
+    """The current slug for ``slug``: itself, or what a renamed space is now called."""
+    async with get_db_connection() as conn:
+        now = await conn.fetchval(
+            "SELECT s.slug FROM space_aliases a JOIN spaces s USING (space_id) WHERE a.old_slug = $1", slug)
+    return now or slug
+
+
+async def renamed_graph(named_graph_iri: str) -> Optional[str]:
+    """The IRI a graph moved to when its space was renamed, or None. Accepts the IRI
+    with or without its trailing slash."""
+    variants = {named_graph_iri, named_graph_iri.rstrip("/"), named_graph_iri.rstrip("/") + "/"}
+    async with get_db_connection() as conn:
+        return await conn.fetchval(
+            "SELECT new_iri FROM graph_aliases WHERE old_iri = ANY($1::text[]) LIMIT 1", list(variants))
 
 
 def redact_people(space: Dict[str, Any]) -> Dict[str, Any]:
@@ -166,7 +191,9 @@ def redact_people(space: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def get_space_for_graph(named_graph_iri: str) -> Optional[Dict[str, Any]]:
-    """Return the space that owns a named graph, or None if the graph is unmapped."""
+    """Return the space that owns a named graph, or None if the graph is unmapped.
+    An old IRI of a graph that moved in a space rename belongs to that space too, so
+    it never falls back to the unmapped (legacy) rules."""
     async with get_db_connection() as conn:
         row = await conn.fetchrow(
             """
@@ -176,6 +203,11 @@ async def get_space_for_graph(named_graph_iri: str) -> Optional[Dict[str, Any]]:
             """,
             named_graph_iri,
         )
+        if not row:
+            row = await conn.fetchrow(
+                "SELECT s.* FROM graph_aliases a JOIN spaces s USING (space_id) WHERE a.old_iri = $1",
+                named_graph_iri,
+            )
         if not row:
             return None
         return {
@@ -368,14 +400,219 @@ async def remove_member(space_id: str, member: str) -> None:
         )
 
 
-async def set_visibility(slug: str, visibility: str) -> None:
+async def set_visibility(slug: str, visibility: str) -> List[str]:
+    """Set a space's visibility. A public space makes everything under it public:
+    making a space public also makes all its subspaces (any depth) public. Making one
+    private changes only that space — under a private space each subspace keeps its
+    own setting, so some can stay public. Returns the slugs that changed."""
     if visibility not in ("private", "public"):
         raise ValueError("visibility must be 'private' or 'public'")
     async with get_db_connection() as conn:
-        await conn.execute(
-            "UPDATE spaces SET visibility = $1, updated_at = $2 WHERE slug = $3",
-            visibility, time.time(), slug,
-        )
+        if visibility == "public":
+            rows = await conn.fetch(
+                """
+                WITH RECURSIVE down(space_id) AS (
+                    SELECT space_id FROM spaces WHERE slug = $1
+                    UNION SELECT s.space_id FROM spaces s JOIN down d ON s.parent_space_id = d.space_id
+                )
+                UPDATE spaces SET visibility = 'public', updated_at = $2
+                WHERE space_id IN (SELECT space_id FROM down) AND visibility <> 'public'
+                RETURNING slug
+                """,
+                slug, time.time(),
+            )
+        else:
+            rows = await conn.fetch(
+                "UPDATE spaces SET visibility = $1, updated_at = $2 WHERE slug = $3 AND visibility <> $1 RETURNING slug",
+                visibility, time.time(), slug,
+            )
+    return [r["slug"] for r in rows]
+
+
+async def update_details(slug: str, name: Optional[str] = None,
+                         description: Optional[str] = None) -> bool:
+    """Change a space's display name and/or description. The slug (and so the
+    space's IRI) never changes. An empty description clears it. Returns whether
+    anything changed."""
+    sets, args = [], []
+    if name is not None:
+        args.append(name)
+        sets.append(f"name = ${len(args)}")
+    if description is not None:
+        args.append(description or None)
+        sets.append(f"description = ${len(args)}")
+    if not sets:
+        return False
+    args.append(time.time())
+    sets.append(f"updated_at = ${len(args)}")
+    args.append(slug)
+    async with get_db_connection() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE spaces SET {', '.join(sets)} WHERE slug = ${len(args)} RETURNING slug", *args)
+    return row is not None
+
+
+# ---------------------------------------------------------------------------
+# Renaming a space's slug (and the graphs named after it)
+# ---------------------------------------------------------------------------
+
+# BrainKB IRIs that carry the space slug as a path segment. A graph bound to the
+# space whose IRI starts with one of these + the slug moves with a rename; graphs
+# with any other IRI (e.g. an external one bound to the space) keep it.
+SLUG_IRI_BASES = ("https://brainkb.org/graph/", "https://brainkb.org/synthscholar/", SPACE_BASE)
+
+
+class SpaceRenameError(Exception):
+    """A rename was refused (bad or taken slug, an occupied target graph) or the
+    triplestore part failed. Nothing was changed."""
+
+    def __init__(self, message: str, status: int = 409):
+        self.status = status
+        super().__init__(message)
+
+
+def renamed_iri(iri: str, old_slug: str, new_slug: str) -> Optional[str]:
+    """The IRI ``iri`` gets when its space's slug changes, or None if it doesn't
+    carry the slug (it then stays as it is)."""
+    o, n = quote(old_slug, safe=""), quote(new_slug, safe="")
+    for base in SLUG_IRI_BASES:
+        if iri == base + o:
+            return base + n
+        if iri.startswith(base + o + "/"):
+            return base + n + iri[len(base + o):]
+    return None
+
+
+async def _graph_has_triples(iri: str) -> bool:
+    from core.graph_database_connection_manager import fetch_data_gdb_async
+    res = await fetch_data_gdb_async(f"ASK {{ GRAPH <{_safe_iri(iri)}> {{ ?s ?p ?o }} }}")
+    if res.get("status") != "success":
+        raise SpaceRenameError(f"could not check whether {iri} is in use: {res.get('message')}", 502)
+    return bool((res.get("message") or {}).get("boolean"))
+
+
+async def rename_space(space: Dict[str, Any], new_slug: str, renamed_by: str,
+                       name: Optional[str] = None) -> Dict[str, Any]:
+    """Give a space a new slug, moving every graph whose IRI is built from the old
+    slug (``SLUG_IRI_BASES``) to the matching new IRI:
+
+    * Postgres, in one transaction: the space's slug, its graph bindings, the search
+      index, reserved graphs, SynthScholar reviews and files, and alias rows mapping
+      the old slug and IRIs to the space (so old links keep resolving, an old IRI
+      stays governed by this space, and nobody else can claim them);
+    * the triplestore, in one SPARQL Update run before that transaction commits: each
+      graph copied to its new IRI and the old one dropped, its registry entry moved,
+      its ingestion history (``brainkb:targetGraph``) pointed at the new IRI as well
+      (the old link is kept), and ``dcterms:replaces`` links from new to old;
+    * afterwards: the space's RDF manifest re-mirrored and the rename recorded in
+      the provenance graph.
+
+    If the triplestore update fails the transaction is rolled back and nothing has
+    changed. Raises SpaceRenameError when the rename is refused."""
+    from core.provenance import build_space_rename_provenance, write_provenance, _now_iso
+    old_slug = space["slug"]
+    if new_slug == old_slug:
+        return {"renamed": False, "slug": old_slug, "moved_graphs": []}
+    started = _now_iso()
+    moves = [(g, renamed_iri(g, old_slug, new_slug)) for g in space.get("graphs") or []]
+    moves = [(_safe_iri(o), _safe_iri(n)) for o, n in moves if n]
+    old_s_iri, new_s_iri = _safe_iri(space_iri(old_slug)), _safe_iri(space_iri(new_slug))
+
+    async with get_db_connection() as conn:
+        taken = await conn.fetchval("SELECT 1 FROM spaces WHERE slug = $1", new_slug)
+        alias_of = await conn.fetchval("SELECT space_id FROM space_aliases WHERE old_slug = $1", new_slug)
+        if taken or (alias_of and alias_of != space["space_id"]):
+            raise SpaceRenameError(f"the slug '{new_slug}' is already in use")
+        for _, n in moves:
+            bound = await conn.fetchval("SELECT 1 FROM space_graphs WHERE named_graph_iri = $1", n)
+            aliased = await conn.fetchval("SELECT space_id FROM graph_aliases WHERE old_iri = $1", n)
+            if bound or (aliased and aliased != space["space_id"]):
+                raise SpaceRenameError(f"the graph {n} already exists in BrainKB")
+    for _, n in moves:
+        if await _graph_has_triples(n):
+            raise SpaceRenameError(f"the graph {n} already holds data; the space can't take that name")
+
+    # one SPARQL Update: move each graph, its registry entry and its history links
+    from core.provenance import PROVENANCE_GRAPH as prov_g
+    reg = NAMED_GRAPH_REGISTRY
+    ops = []
+    for o, n in moves:
+        ops.append(f"INSERT {{ GRAPH <{n}> {{ ?s ?p ?o }} }} WHERE {{ GRAPH <{o}> {{ ?s ?p ?o }} }}")
+        ops.append(f"DROP SILENT GRAPH <{o}>")
+        ops.append(f"INSERT {{ GRAPH <{reg}> {{ <{n}> ?p ?v }} }} WHERE {{ GRAPH <{reg}> {{ <{o}> ?p ?v }} }}")
+        ops.append(f"DELETE WHERE {{ GRAPH <{reg}> {{ <{o}> ?p ?v }} }}")
+        ops.append(f"INSERT DATA {{ GRAPH <{reg}> {{ <{n}> <{DCTERMS.replaces}> <{o}> }} }}")
+        ops.append(f"INSERT {{ GRAPH <{prov_g}> {{ ?x <{BRAINKB.targetGraph}> <{n}> }} }} "
+                   f"WHERE {{ GRAPH <{prov_g}> {{ ?x <{BRAINKB.targetGraph}> <{o}> }} }}")
+    ops.append(f"DELETE WHERE {{ GRAPH <{SPACES_METADATA_GRAPH}> {{ <{old_s_iri}> ?p ?v }} }}")
+    ops.append(f"INSERT DATA {{ GRAPH <{SPACES_METADATA_GRAPH}> {{ <{new_s_iri}> <{DCTERMS.replaces}> <{old_s_iri}> }} }}")
+
+    now = time.time()
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            await conn.execute("UPDATE spaces SET slug = $1, updated_at = $2 WHERE space_id = $3",
+                               new_slug, now, space["space_id"])
+            # a slug the space had before (renaming back) is its own again, not an alias
+            await conn.execute("DELETE FROM space_aliases WHERE old_slug = $1", new_slug)
+            await conn.execute(
+                "INSERT INTO space_aliases (old_slug, space_id, renamed_at) VALUES ($1, $2, $3) "
+                "ON CONFLICT (old_slug) DO UPDATE SET space_id = EXCLUDED.space_id, renamed_at = EXCLUDED.renamed_at",
+                old_slug, space["space_id"], now)
+            for o, n in moves:
+                await conn.execute("UPDATE space_graphs SET named_graph_iri = $1 WHERE named_graph_iri = $2", n, o)
+                await conn.execute("UPDATE graph_search_index SET named_graph_iri = $1 WHERE named_graph_iri = $2", n, o)
+                await conn.execute("DELETE FROM graph_aliases WHERE old_iri = $1", n)
+                await conn.execute("UPDATE graph_aliases SET new_iri = $1 WHERE new_iri = $2", n, o)   # earlier renames
+                await conn.execute(
+                    "INSERT INTO graph_aliases (old_iri, new_iri, space_id, renamed_at) VALUES ($1, $2, $3, $4) "
+                    "ON CONFLICT (old_iri) DO UPDATE SET new_iri = EXCLUDED.new_iri, space_id = EXCLUDED.space_id, "
+                    "renamed_at = EXCLUDED.renamed_at", o, n, space["space_id"], now)
+            for row in await conn.fetch("SELECT id, iri FROM reserved_graphs WHERE space_id = $1", space["space_id"]):
+                if (n := renamed_iri(row["iri"], old_slug, new_slug)):
+                    await conn.execute("UPDATE reserved_graphs SET iri = $1 WHERE id = $2", n, row["id"])
+            if await conn.fetchval("SELECT to_regclass('synthscholar_reviews') IS NOT NULL"):
+                # rows are keyed by (space slug, review id) and the files reference them,
+                # so copy each review under the new key, move its files, drop the old row
+                for r in await conn.fetch("SELECT review_id, graph_iri FROM synthscholar_reviews WHERE space_slug = $1",
+                                          old_slug):
+                    new_g = renamed_iri(r["graph_iri"], old_slug, new_slug) or r["graph_iri"]
+                    await conn.execute(
+                        "UPDATE synthscholar_reviews SET graph_iri = graph_iri || ' (renaming)' "
+                        "WHERE space_slug = $1 AND review_id = $2", old_slug, r["review_id"])
+                    await conn.execute(
+                        "INSERT INTO synthscholar_reviews (space_slug, review_id, graph_iri, title, owner_email, "
+                        "imported_at, job_id, summary, detail, manifest) "
+                        "SELECT $1, review_id, $3, title, owner_email, imported_at, job_id, summary, detail, manifest "
+                        "FROM synthscholar_reviews WHERE space_slug = $2 AND review_id = $4",
+                        new_slug, old_slug, new_g, r["review_id"])
+                    await conn.execute("UPDATE synthscholar_files SET space_slug = $1 WHERE space_slug = $2 AND review_id = $3",
+                                       new_slug, old_slug, r["review_id"])
+                    await conn.execute("DELETE FROM synthscholar_reviews WHERE space_slug = $1 AND review_id = $2",
+                                       old_slug, r["review_id"])
+            if name is not None:
+                await conn.execute("UPDATE spaces SET name = $1 WHERE space_id = $2", name, space["space_id"])
+            try:
+                await _sparql_update(" ;\n".join(ops))
+            except SpaceDeletionError as e:      # _sparql_update's error type; roll back Postgres
+                raise SpaceRenameError(f"the triplestore update failed, nothing was renamed: {e}", 502) from e
+
+    renamed = await get_space(new_slug)
+    await mirror_space_to_rdf(renamed)
+    recorded = await write_provenance(build_space_rename_provenance(
+        old_iri=old_s_iri, new_iri=new_s_iri, old_slug=old_slug, new_slug=new_slug,
+        name=renamed["name"], agent_id=renamed_by, started_at=started, ended_at=_now_iso(), moved_graphs=moves))
+    if not recorded:
+        logger.warning("[spaces] space %s renamed to %s but the rename provenance was not written", old_slug, new_slug)
+    return {"renamed": True, "slug": new_slug, "renamed_from": old_slug,
+            "moved_graphs": [{"from": o, "to": n} for o, n in moves], "provenance_recorded": recorded}
+
+
+def public_ancestor(space: Dict[str, Any]) -> Optional[str]:
+    """The slug of the nearest public ancestor, if any (a space under it must be public)."""
+    for a in reversed(space.get("ancestors") or []):
+        if a.get("visibility") == "public":
+            return a.get("slug")
+    return None
 
 
 class GraphAlreadyBound(Exception):
@@ -404,6 +641,12 @@ async def attach_graph(space_id: str, named_graph_iri: str) -> bool:
     a success response.
     """
     async with get_db_connection() as conn:
+        # an old IRI of a graph that moved in a rename belongs to that space and can't be bound again
+        renamed = await conn.fetchrow(
+            "SELECT a.new_iri, s.slug FROM graph_aliases a JOIN spaces s USING (space_id) WHERE a.old_iri = $1",
+            named_graph_iri)
+        if renamed is not None:
+            raise GraphAlreadyBound(named_graph_iri, renamed["slug"])
         row = await conn.fetchrow(
             """
             INSERT INTO space_graphs (space_id, named_graph_iri, added_at)
@@ -656,6 +899,57 @@ async def construct_space_graphs(space: Dict[str, Any]) -> str:
 NAMED_GRAPH_REGISTRY = "https://brainkb.org/metadata/named-graph"
 
 
+async def descendant_slugs(space_id: str) -> List[str]:
+    """Every space below this one, deepest first (the order they can be deleted in)."""
+    async with get_db_connection() as conn:
+        rows = await conn.fetch(
+            """
+            WITH RECURSIVE down(space_id, depth) AS (
+                SELECT space_id, 1 FROM spaces WHERE parent_space_id = $1
+                UNION ALL SELECT s.space_id, d.depth + 1 FROM spaces s JOIN down d ON s.parent_space_id = d.space_id
+            )
+            SELECT s.slug FROM down d JOIN spaces s USING (space_id) ORDER BY d.depth DESC, s.slug
+            """,
+            space_id,
+        )
+    return [r["slug"] for r in rows]
+
+
+async def delete_space_tree(space: Dict[str, Any], deleted_by: str) -> Dict[str, Any]:
+    """Delete a space and every subspace below it, deepest first, each completely
+    (delete_space: its graphs and their ingestion history, registry entries, manifest,
+    search entries, members, bindings, access rules; each deletion recorded in
+    provenance). Stops at the first failure: what was deleted stays deleted and is
+    reported, the rest is untouched, and a retry continues from there."""
+    deleted: List[Dict[str, Any]] = []
+    for slug in await descendant_slugs(space["space_id"]) + [space["slug"]]:
+        current = await get_space(slug)
+        if current is None:          # already gone (a retry, or a concurrent delete)
+            continue
+        try:
+            deleted.append(await delete_space(current, deleted_by))
+        except SpaceDeletionError as e:
+            raise SpaceTreeDeletionError(slug, deleted, e) from e
+    root = next((d for d in deleted if d["slug"] == space["slug"]), None) or {"deleted": True, "slug": space["slug"]}
+    return {
+        **root,
+        "subspaces_deleted": [d["slug"] for d in deleted if d["slug"] != space["slug"]],
+        "dropped_graphs": [g for d in deleted for g in d.get("dropped_graphs", [])],
+        "dropped_delta_graphs": [g for d in deleted for g in d.get("dropped_delta_graphs", [])],
+        "search_index_rows_removed": sum(d.get("search_index_rows_removed", 0) for d in deleted),
+        "members_removed": sum(d.get("members_removed", 0) for d in deleted),
+        "spaces": deleted,
+    }
+
+
+class SpaceTreeDeletionError(Exception):
+    """Deleting one space of a tree failed; `deleted` lists those already removed."""
+
+    def __init__(self, slug: str, deleted: List[Dict[str, Any]], cause: Exception):
+        self.slug, self.deleted, self.cause = slug, deleted, cause
+        super().__init__(f"deleting '{slug}' failed: {cause}")
+
+
 class SpaceHasSubspaces(Exception):
     """A space with subspaces is not deleted: delete the subspaces first."""
 
@@ -718,7 +1012,7 @@ async def delete_space(space: Dict[str, Any], deleted_by: str) -> Dict[str, Any]
     A failure in step 1 raises SpaceDeletionError with nothing deleted in Postgres, so
     the space stays visible and the call can be retried (DROP SILENT is idempotent)."""
     from core.provenance import build_space_deletion_provenance, write_provenance, _now_iso
-    if space.get("subspaces"):
+    if space.get("subspaces"):       # delete_space_tree removes those first
         raise SpaceHasSubspaces([c["slug"] for c in space["subspaces"]])
     started = _now_iso()
     graphs = [_safe_iri(g) for g in space.get("graphs") or []]

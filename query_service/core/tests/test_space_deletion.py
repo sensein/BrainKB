@@ -137,9 +137,17 @@ class EndpointTests(unittest.TestCase):
         async def delete(space_, by):
             return {"deleted": True, "slug": space_["slug"], "deleted_by": by,
                     "dropped_graphs": space_["graphs"], "dropped_delta_graphs": []}
+
+        async def no_subspaces(_id):
+            return []
+
+        async def no_reviews(_slugs):
+            return 0
         with patch.object(router.rbac, "is_superadmin", is_superadmin), \
                 patch.object(router.sp, "get_space", get_space), \
-                patch.object(router.sp, "delete_space", delete):
+                patch.object(router.sp, "delete_space", delete), \
+                patch.object(router.sp, "descendant_slugs", no_subspaces), \
+                patch.object(router, "_remove_synthscholar", no_reviews):
             return run(router.delete_space(SPACE["slug"], self.USER, confirm))
 
     def test_only_superadmin(self):
@@ -170,9 +178,17 @@ class EndpointTests(unittest.TestCase):
 
         async def get_space(_slug):
             return dict(SPACE)
+
+        async def no_subspaces(_id):
+            return []
+
+        async def no_reviews(_slugs):
+            return 0
         with patch.object(router.rbac, "is_superadmin", yes), \
                 patch.object(router.sp, "get_space", get_space), \
-                patch.object(router.sp, "delete_space", failing):
+                patch.object(router.sp, "delete_space", failing), \
+                patch.object(router.sp, "descendant_slugs", no_subspaces), \
+                patch.object(router, "_remove_synthscholar", no_reviews):
             with self.assertRaises(HTTPException) as e:
                 run(router.delete_space(SPACE["slug"], self.USER, SPACE["slug"]))
         self.assertEqual(e.exception.status_code, 502)

@@ -200,6 +200,7 @@ See [PROVENANCE_MODEL.md](PROVENANCE_MODEL.md).
   **subspace** (any depth; needs manage rights on the parent)
 - `GET /spaces/{slug}/tree` — the space and its visible subspaces, nested
 - `GET /spaces/writable` — spaces the caller can ingest into (same checks as ingestion: membership incl. inherited roles, write rules, admin), with their graphs; drives the UI's ingest page
+- `PATCH /spaces/{slug}` — rename a space or change its description (owner); the slug stays the same
 - `PATCH /spaces/{slug}/visibility` — flip private/public (owner)
 - `POST/DELETE /spaces/{slug}/members[/{member}]` — membership (owner)
 - `GET/POST/DELETE /spaces/{slug}/access-rules[/{id}]` — who may read / write /
