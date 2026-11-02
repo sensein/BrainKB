@@ -763,6 +763,13 @@ class ReviewStore:
             await db.commit()
             return result.rowcount > 0
 
+    async def set_owner(self, review_id: str, owner_email: str) -> bool:
+        async with async_session() as db:
+            result = await db.execute(
+                sa_update(ReviewRow).where(ReviewRow.review_id == review_id).values(owner_email=owner_email))
+            await db.commit()
+        return result.rowcount > 0
+
     async def set_visibility(self, review_id: str, is_public: bool) -> bool:
         async with async_session() as db:
             result = await db.execute(

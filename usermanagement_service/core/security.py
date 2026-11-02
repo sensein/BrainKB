@@ -361,12 +361,23 @@ async def get_current_user_optional(
     checks for public pages, etc.). Banned users are silently demoted to
     anonymous here rather than 403'd — that way a public page they could
     have read while signed out is still readable, but they can't act as an
-    authenticated user."""
+    authenticated user.
+
+    A credential that is PRESENTED but invalid (expired, bad signature, wrong
+    audience) is a 401, not anonymous. Demoting it silently was the root cause of
+    the UI's "signed in, but every tool is disabled" state: /api/access/pages
+    answered 200 with every gated page denied, so the client never saw a 401 and
+    never renewed its session. Only a request with no Authorization header at
+    all is anonymous."""
     if credentials is None:
         return None
     user_data = get_current_user_from_token(credentials.credentials)
     if user_data is None:
-        return None
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     profile_id = user_data.get("profile_id")
     if profile_id is None:
         return user_data

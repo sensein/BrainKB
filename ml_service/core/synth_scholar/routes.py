@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from typing import Annotated, AsyncGenerator, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from synthscholar import __version__ as agent_version  # type: ignore[import-not-found]
 from synthscholar.models import (  # type: ignore[import-not-found]
@@ -45,7 +45,7 @@ from synthscholar.export import (  # type: ignore[import-not-found]
 )
 from synthscholar.agents import ROB_DOMAINS  # type: ignore[import-not-found]
 
-from core.security import decode_jwt, get_user, get_current_user
+from core.security import decode_token_with_kind, get_current_user, identity_from_token
 
 from .schemas import (
     RunReviewRequest, CompareRunRequest, CompareReviewSummaryResponse,
@@ -56,8 +56,9 @@ from .schemas import (
     LiteratureSearchRequest, LiteratureSearchResponse,
     ReviewSearchRequest, ReviewSearchResponse,
     SearchArticleResult, SearchReviewResult,
-    SearchSynthesisResponse, SearchSynthesisGroup,
+    SearchSynthesisResponse, SearchSynthesisGroup, OwnerRequest,
 )
+from .review_pdf import PDFUnavailable, render_markdown_to_pdf
 from .store import review_store, ReviewSession
 from .progress_events import classify
 
@@ -89,14 +90,13 @@ async def _get_user_for_sse(
             detail="Missing JWT (set Authorization header or ?token= query param).",
         )
     try:
-        payload = decode_jwt(raw)
+        payload, is_sso = decode_token_with_kind(raw)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token.")
-    email = payload.get("sub")
-    if not email:
+    if not payload.get("sub"):
         raise HTTPException(status_code=401, detail="Invalid token (missing sub claim).")
-    user = await get_user(email=email)
-    if user is None:
+    user = await identity_from_token(payload, is_sso)
+    if not user:
         raise HTTPException(status_code=401, detail="Token user not found.")
     return user
 
@@ -1250,7 +1250,7 @@ async def cancel_review(
 _EXPORT_FORMAT_PATTERN = (
     r"^(markdown|json|bibtex|ttl|jsonld|rubric_markdown|rubric_json|charting_markdown"
     r"|charting_json|appraisal_markdown|appraisal_json|narrative_summary_markdown"
-    r"|narrative_summary_json)$"
+    r"|narrative_summary_json|pdf)$"
 )
 
 
@@ -1279,6 +1279,8 @@ async def _export_session(session: ReviewSession, format: str, model: Optional[s
     result = session.result
     ts = datetime.now().strftime("%Y%m%d")
     is_compare = isinstance(result, CompareReviewResult)
+    if format == "pdf":
+        return await _pdf_response(result, ts)
 
     single_result = None
     single_model_slug = ""
@@ -1428,6 +1430,31 @@ async def _export_session(session: ReviewSession, format: str, model: Optional[s
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+async def _pdf_response(result, ts: str) -> Response:
+    """The review as PDF: its Markdown export rendered by the synthscholar skill's
+    PDF script (pandoc + Typst, plain layout; see review_pdf.py)."""
+    import asyncio
+    if isinstance(result, CompareReviewResult):
+        raise HTTPException(status_code=422, detail="PDF export is not available for compare-mode reviews")
+    try:
+        pdf = await asyncio.to_thread(render_markdown_to_pdf, to_markdown(result))
+    except PDFUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="prisma_review_{ts}.pdf"'})
+
+
+@router.patch("/synth-scholar/reviews/{review_id}/owner", tags=["SynthScholar — reviews"])
+async def set_review_owner(review_id: str, body: OwnerRequest, user: Annotated[dict, Depends(get_current_user)]):
+    """Admin only: assign a review to its owner. Reviews created while the caller's
+    identity was not resolved (owner_email empty) have no owner; this hands them back."""
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin role required")
+    if not await review_store.set_owner(review_id, body.owner_email.strip()):
+        raise HTTPException(status_code=404, detail=f"Review '{review_id}' not found")
+    return {"review_id": review_id, "owner_email": body.owner_email.strip()}
 
 
 @router.get("/synth-scholar/reviews/{review_id}/log", tags=["SynthScholar — reviews"])

@@ -30,14 +30,16 @@ the underlying operation (wrap calls in try/except).
 
 from __future__ import annotations
 
+import uuid
+
 import datetime
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import httpx
-from rdflib import Graph, Literal, Namespace, URIRef, RDF, XSD, DCTERMS
+from rdflib import Graph, Literal, Namespace, URIRef, RDF, RDFS, XSD, DCTERMS
 
 from core.shared import get_oxigraph_endpoint, get_oxigraph_auth
 from core.graph_database_connection_manager import _get_endpoint
@@ -203,6 +205,92 @@ def build_recovery_provenance(
 # ---------------------------------------------------------------------------
 # Persistence + retrieval
 # ---------------------------------------------------------------------------
+
+def build_space_deletion_provenance(
+    *,
+    space: Dict[str, Any],
+    agent_id: str,
+    started_at: str,
+    ended_at: str,
+    dropped_graphs: List[str],
+    dropped_delta_graphs: List[str],
+) -> Graph:
+    """PROV-O record of a space deletion. The space and its graphs are gone, so this
+    record keeps what they were: a ``brainkb:SpaceDeletionActivity`` that
+    ``prov:invalidated`` the space and every dropped graph (data and delta), with
+    the space's slug, name and owner, who deleted it and when."""
+    g = _new_graph()
+    slug = str(space["slug"])
+    activity = URIRef(PROV_BASE[f"activity/space-deletion/{quote(slug, safe='')}/{uuid.uuid4().hex[:12]}"])
+    agent = agent_ref(agent_id)
+    g.add((agent, RDF.type, PROV.Agent))
+    g.add((agent, RDF.type, PROV.Person))
+    g.add((activity, RDF.type, PROV.Activity))
+    g.add((activity, RDF.type, BRAINKB.SpaceDeletionActivity))
+    g.add((activity, PROV.startedAtTime, Literal(started_at, datatype=XSD.dateTime)))
+    g.add((activity, PROV.endedAtTime, Literal(ended_at, datatype=XSD.dateTime)))
+    g.add((activity, PROV.wasAssociatedWith, agent))
+    space_node = URIRef(space["iri"])
+    g.add((space_node, RDF.type, PROV.Entity))
+    g.add((space_node, RDF.type, BRAINKB.Space))
+    g.add((space_node, BRAINKB.slug, Literal(slug)))
+    if space.get("name"):
+        g.add((space_node, DCTERMS.title, Literal(space["name"])))
+    if space.get("owner"):
+        g.add((space_node, BRAINKB.owner, agent_ref(space["owner"])))
+    g.add((space_node, BRAINKB.visibility, Literal(space.get("visibility") or "")))
+    for node, kind in ([(space_node, None)] + [(URIRef(x), "data") for x in dropped_graphs]
+                       + [(URIRef(x), "delta") for x in dropped_delta_graphs]):
+        g.add((activity, PROV.invalidated, node))
+        g.add((node, PROV.wasInvalidatedBy, activity))
+        g.add((node, PROV.invalidatedAtTime, Literal(ended_at, datatype=XSD.dateTime)))
+        if kind == "data":
+            g.add((space_node, BRAINKB.containsGraph, node))
+        elif kind == "delta":
+            g.add((activity, BRAINKB.droppedDeltaGraph, node))
+    return g
+
+
+def build_space_rename_provenance(
+    *,
+    old_iri: str,
+    new_iri: str,
+    old_slug: str,
+    new_slug: str,
+    name: str,
+    agent_id: str,
+    started_at: str,
+    ended_at: str,
+    moved_graphs: List[Tuple[str, str]],
+) -> Graph:
+    """PROV-O record of a space rename: a ``brainkb:SpaceRenameActivity`` that
+    ``prov:used`` the space and graphs under their old IRIs and ``prov:generated``
+    them under the new ones; each new IRI ``prov:wasRevisionOf`` and
+    ``dcterms:replaces`` its old IRI, so the old IRIs stay traceable."""
+    g = _new_graph()
+    activity = URIRef(PROV_BASE[f"activity/space-rename/{quote(new_slug, safe='')}/{uuid.uuid4().hex[:12]}"])
+    agent = agent_ref(agent_id)
+    g.add((agent, RDF.type, PROV.Agent))
+    g.add((agent, RDF.type, PROV.Person))
+    g.add((activity, RDF.type, PROV.Activity))
+    g.add((activity, RDF.type, BRAINKB.SpaceRenameActivity))
+    g.add((activity, PROV.startedAtTime, Literal(started_at, datatype=XSD.dateTime)))
+    g.add((activity, PROV.endedAtTime, Literal(ended_at, datatype=XSD.dateTime)))
+    g.add((activity, PROV.wasAssociatedWith, agent))
+    g.add((activity, RDFS.comment, Literal(f"Space '{old_slug}' renamed to '{new_slug}' ({name})")))
+    for old, new in [(old_iri, new_iri)] + list(moved_graphs):
+        o, n = URIRef(old), URIRef(new)
+        g.add((o, RDF.type, PROV.Entity))
+        g.add((n, RDF.type, PROV.Entity))
+        g.add((activity, PROV.used, o))
+        g.add((activity, PROV.generated, n))
+        g.add((n, PROV.wasGeneratedBy, activity))
+        g.add((n, PROV.wasRevisionOf, o))
+        g.add((n, DCTERMS.replaces, o))
+    g.add((URIRef(new_iri), BRAINKB.slug, Literal(new_slug)))
+    g.add((URIRef(old_iri), BRAINKB.slug, Literal(old_slug)))
+    return g
+
 
 async def write_provenance(graph: Graph) -> bool:
     """

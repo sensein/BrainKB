@@ -187,12 +187,23 @@ async def sso_exchange(
         auth_source=auth_source,
         jwt_user_id=jwt_user.id,
     )
-    return {
+    out = {
         "access_token": access,
         "token_type": "bearer",
         "aud": body.audience,
         "expires_in": tokens_rs256.access_token_ttl_seconds(),
     }
+    # Sliding browser session: an in-use web refresh token past half its life is
+    # replaced (fresh roles/scopes, full web TTL), so the UI stays signed in until
+    # the user logs out or is idle for the whole TTL. Banned / deactivated accounts
+    # never get here (checked above), so they can't extend a session.
+    if tokens_rs256.should_renew_web_refresh(payload):
+        out["refresh_token"] = tokens_rs256.create_refresh_token(
+            email=email, profile_id=profile_id, roles=roles, scopes=scopes,
+            auth_source=auth_source, expires_minutes=config.web_refresh_ttl_min, web=True,
+        )
+        out["refresh_expires_in"] = config.web_refresh_ttl_min * 60
+    return out
 
 
 @router.post("/auth/session-exchange", tags=["SSO"])

@@ -11,11 +11,13 @@
 
 """REST endpoints for spaces — private/public containers of named graphs."""
 
+import asyncio
 import logging
 import re
+import time
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, HttpUrl
 
@@ -23,14 +25,18 @@ from core.models.user import LoginUserIn
 from core.security import get_current_user, get_current_user_optional, require_scopes
 from core.shared import named_graph_metadata
 from core.provenance import agent_ref, query_provenance_jsonld
-from core.graph_database_connection_manager import insert_data_gdb_async, check_named_graph_exists
+from core.graph_database_connection_manager import insert_data_gdb_async, check_named_graph_exists, fetch_data_gdb_async
+from core.stored_queries import STORED_QUERIES, MAX_IRI_LIST
 from core import spaces as sp
 from core import rbac
+from core import reserved_graphs as reserved
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
+# path segments under /spaces/ that are routes, not spaces
+_RESERVED_SLUGS = {"writable"}
 
 
 def _agent(user) -> str:
@@ -70,7 +76,8 @@ class SpaceCreate(BaseModel):
     name: str
     description: Optional[str] = None
     visibility: str = "private"
-    space_type: str = "individual"   # 'individual' | 'team'
+    space_type: str = "individual"   # 'individual' | 'team'; a subspace takes its parent's
+    parent_slug: Optional[str] = None  # create as a subspace of this space
 
 
 class MemberIn(BaseModel):
@@ -80,6 +87,12 @@ class MemberIn(BaseModel):
 
 class VisibilityIn(BaseModel):
     visibility: str
+
+
+class SpaceUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    slug: Optional[str] = None   # a new slug: the graphs named after the old one move with it
 
 
 class SpaceGraphIn(BaseModel):
@@ -96,6 +109,8 @@ class SpaceGraphIn(BaseModel):
 async def create_space(body: SpaceCreate, user: Annotated[LoginUserIn, Depends(get_current_user)]):
     if not _SLUG_RE.match(body.slug):
         raise HTTPException(400, "slug must be lowercase alphanumeric/hyphen, 3-64 chars")
+    if body.slug in _RESERVED_SLUGS:
+        raise HTTPException(400, f"'{body.slug}' is reserved; choose another slug")
     if body.visibility not in ("private", "public"):
         raise HTTPException(400, "visibility must be 'private' or 'public'")
     if body.space_type not in ("individual", "team"):
@@ -105,7 +120,19 @@ async def create_space(body: SpaceCreate, user: Annotated[LoginUserIn, Depends(g
     # SuperAdmin, or a user an admin has granted it); individual/private spaces
     # require create_private_space (any write-capable role).
     email = _agent(user)
-    if body.space_type == "team":
+    parent = None
+    if body.parent_slug:
+        # A subspace: whoever can manage the parent may create one (the parent's
+        # members get the same roles in it). It takes the parent's space type, so
+        # no separate team-space capability is needed.
+        parent = await sp.get_space(body.parent_slug)
+        if not parent:
+            raise HTTPException(404, f"parent space '{body.parent_slug}' not found")
+        if not await _can_manage(parent, email):
+            raise HTTPException(403, f"only someone who can manage '{body.parent_slug}' can create a subspace in it")
+        if not await rbac.has_capability(email, rbac.CREATE_PRIVATE_SPACE):
+            raise HTTPException(403, "not authorized to create a space (needs a write-capable role)")
+    elif body.space_type == "team":
         if not await rbac.has_capability(email, rbac.CREATE_TEAM_SPACE):
             raise HTTPException(403, "not authorized to create a team space (needs Admin/SuperAdmin "
                                      "or a granted create_team_space capability)")
@@ -113,10 +140,15 @@ async def create_space(body: SpaceCreate, user: Annotated[LoginUserIn, Depends(g
         if not await rbac.has_capability(email, rbac.CREATE_PRIVATE_SPACE):
             raise HTTPException(403, "not authorized to create a space (needs a write-capable role)")
 
-    if await sp.get_space(body.slug):
+    if await sp.get_space(body.slug):      # also finds a slug a renamed space had before
         raise HTTPException(409, f"space '{body.slug}' already exists")
+    # Under a public space everything is public: a subspace there is created public.
+    visibility = body.visibility
+    if parent and (parent["visibility"] == "public" or sp.public_ancestor(parent)):
+        visibility = "public"
     space = await sp.create_space(body.slug, body.name, body.description, email,
-                                  body.visibility, body.space_type)
+                                  visibility, parent["space_type"] if parent else body.space_type,
+                                  parent["space_id"] if parent else None)
     await sp.mirror_space_to_rdf(space)
     return space
 
@@ -131,6 +163,47 @@ async def list_spaces(user: Annotated[Optional[object], Depends(get_current_user
     return {"spaces": await sp.list_visible_spaces(member)}
 
 
+@router.get("/spaces/writable",
+            summary="Spaces (and graphs) the caller may ingest into",
+            description="Every space the caller may write to — owner/editor membership, a "
+                        "role inherited from a parent space, a space write access rule, or "
+                        "Admin/SuperAdmin — with its graphs and their descriptions, plus "
+                        "parent_slug to show subspaces as a tree. `can_ingest` is false "
+                        "without a write-capable role (then nothing can be ingested anywhere). "
+                        "`unmapped_graphs` are registered graphs in no space, which any caller "
+                        "with `can_ingest` may still write to. Uses the same checks as ingestion.")
+async def writable_spaces(user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    email = _agent(user)
+    can_ingest = await rbac.has_capability(email, rbac.INGEST)
+    if not can_ingest:
+        return {"can_ingest": False, "spaces": [], "unmapped_graphs": [],
+                "reason": "ingesting needs a write-capable role; ask an admin"}
+    slugs = (await sp.all_space_slugs() if await rbac.is_admin(email)
+             else [x["slug"] for x in await sp.list_visible_spaces(email)])
+    descriptions = await sp.graph_descriptions() or {}
+    spaces = []
+    for slug in slugs:
+        space = await sp.get_space(slug)
+        if not space:
+            continue
+        allowed, how = await sp.can_write_space(space, email)
+        if not allowed:
+            continue
+        spaces.append({
+            "slug": space["slug"], "name": space["name"], "visibility": space["visibility"],
+            "parent_slug": space["ancestors"][-1]["slug"] if space.get("ancestors") else None,
+            "access": how,
+            "graphs": [{"iri": g, "description": descriptions.get(g, "")} for g in space["graphs"]],
+        })
+    writable = {s["slug"] for s in spaces}
+    for s in spaces:   # a parent the caller can't write to is not shown; the subspace becomes a root
+        if s["parent_slug"] not in writable:
+            s["parent_slug"] = None
+    bound = await sp.bound_graphs()
+    unmapped = [{"iri": g, "description": d} for g, d in sorted(descriptions.items()) if g not in bound]
+    return {"can_ingest": True, "spaces": spaces, "unmapped_graphs": unmapped}
+
+
 @router.get("/spaces/{slug}",
             summary="Get a space",
             description="Returns a space's manifest (members, graphs, visibility) if the "
@@ -140,15 +213,120 @@ async def get_space(slug: str, user: Annotated[Optional[object], Depends(get_cur
     if not space:
         return JSONResponse({"error": "space not found"}, status_code=404)
     member = _agent(user) if user else None
+    role = await sp.member_role(space["space_id"], member)
     if space["visibility"] != "public":
         # Private: needs membership AND a role that grants read_private
         # (a JWT user with no role gets public content only).
-        role = await sp.member_role(space["space_id"], member)
         if role is None or not await rbac.has_capability(member, rbac.READ_PRIVATE):
             raise HTTPException(403, "private space — membership and a role are required")
     # Fine-grained per-space read rules (if any) further restrict who can read.
     if not await sp.space_action_permitted(space, "read", member):
         raise HTTPException(403, "restricted by a space access rule (read)")
+    space = await _with_visible_hierarchy(space, member)
+    detail = await sp.member_role_detail(space["space_id"], member)
+    space["your_role"], space["role_inherited"] = (detail if detail else (None, False))
+    # Owner/member emails are for members and admins only, not public readers.
+    if role is None and not await rbac.is_admin(member):
+        return sp.redact_people(space)
+    return space
+
+
+async def _visible_slugs(member: Optional[str]) -> Optional[set]:
+    """Slugs the caller may see; None means every space (Admin/SuperAdmin)."""
+    if member and await rbac.is_admin(member):
+        return None
+    return {x["slug"] for x in await sp.list_visible_spaces(member)}
+
+
+async def _with_visible_hierarchy(space: dict, member: Optional[str]) -> dict:
+    """Keep only the ancestors and subspaces the caller may see: a private parent's
+    name is not shown to someone who can only see its public subspace."""
+    visible = await _visible_slugs(member)
+    keep = (lambda x: True) if visible is None else (lambda x: x["slug"] in visible)
+    out = dict(space)
+    out["ancestors"] = [a for a in space.get("ancestors", []) if keep(a)]
+    out["subspaces"] = [c for c in space.get("subspaces", []) if keep(c)]
+    out["parent_slug"] = (space["ancestors"][-1]["slug"]
+                          if space.get("ancestors") and keep(space["ancestors"][-1]) else None)
+    out.pop("parent_space_id", None)
+    return out
+
+
+@router.get("/spaces/{slug}/tree",
+            summary="A space and all its subspaces, nested",
+            description="The space and every subspace below it (any depth) that the caller "
+                        "may see, each with visibility, the caller's role (and whether it is "
+                        "inherited from a parent) and its graph count.")
+async def space_tree(slug: str, user: Annotated[Optional[object], Depends(get_current_user_optional)]):
+    member = _agent(user) if user else None
+    root = await sp.get_space(slug)
+    if not root:
+        return JSONResponse({"error": "space not found"}, status_code=404)
+    visible = await _visible_slugs(member)
+    if visible is not None and root["slug"] not in visible:
+        raise HTTPException(403, "private space — membership and a role are required")
+
+    async def node(sp_: dict, depth: int) -> dict:
+        detail = await sp.member_role_detail(sp_["space_id"], member)
+        children = []
+        if depth < 64:
+            for c in sp_.get("subspaces", []):
+                if visible is None or c["slug"] in visible:
+                    full = await sp.get_space(c["slug"])
+                    if full:
+                        children.append(await node(full, depth + 1))
+        return {"slug": sp_["slug"], "name": sp_["name"], "visibility": sp_["visibility"],
+                "your_role": detail[0] if detail else None,
+                "role_inherited": detail[1] if detail else False,
+                "graphs": len(sp_.get("graphs") or []), "subspaces": children}
+    return await node(root, 0)
+
+
+@router.patch("/spaces/{slug}",
+              dependencies=[Depends(require_scopes(["write"]))],
+              summary="Rename a space, change its slug or its description (owner/manager)",
+              description="Change the display name, description and/or slug of a space. Send only "
+                          "the fields to change; an empty description clears it. A new slug moves the "
+                          "space's IRI and every graph whose IRI is built from the old slug "
+                          "(https://brainkb.org/graph/<slug>/…, …/synthscholar/<slug>/…) to the new one, "
+                          "with their registry entries, search entries, ingestion history and SynthScholar "
+                          "reviews; graphs with other IRIs keep theirs. The old slug and IRIs stay as "
+                          "aliases, so existing links keep resolving and nobody else can take them. "
+                          "409 if the slug or a target graph is taken.")
+async def update_space(slug: str, body: SpaceUpdate, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    space = await sp.get_space(slug)
+    if not space:
+        return JSONResponse({"error": "space not found"}, status_code=404)
+    if not await _can_manage(space, _agent(user)):
+        raise HTTPException(403, "not authorized to rename this space")
+    name = body.name.strip() if body.name is not None else None
+    description = body.description.strip() if body.description is not None else None
+    new_slug = body.slug.strip() if body.slug is not None else None
+    if name is None and description is None and new_slug is None:
+        raise HTTPException(400, "send a name, a description, a slug, or a combination")
+    if name is not None and not 1 <= len(name) <= 200:
+        raise HTTPException(400, "name must be 1-200 characters")
+    if description is not None and len(description) > 2000:
+        raise HTTPException(400, "description must be at most 2000 characters")
+    if new_slug is not None and new_slug != space["slug"]:
+        if not _SLUG_RE.match(new_slug):
+            raise HTTPException(400, "slug must be lowercase alphanumeric/hyphen, 3-64 chars")
+        if new_slug in _RESERVED_SLUGS:
+            raise HTTPException(400, f"'{new_slug}' is reserved; choose another slug")
+        try:
+            result = await sp.rename_space(space, new_slug, _agent(user), name=name)
+        except sp.SpaceRenameError as e:
+            raise HTTPException(e.status, str(e))
+        except sp.SpaceDeletionError as e:      # an IRI that can't go into SPARQL
+            raise HTTPException(400, str(e))
+        if description is not None:
+            await sp.update_details(new_slug, None, description)
+        space = await sp.get_space(new_slug)
+        await sp.mirror_space_to_rdf(space)
+        return {**space, "rename": result}
+    await sp.update_details(space["slug"], name, description)
+    space = await sp.get_space(space["slug"])
+    await sp.mirror_space_to_rdf(space)
     return space
 
 
@@ -156,7 +334,10 @@ async def get_space(slug: str, user: Annotated[Optional[object], Depends(get_cur
               dependencies=[Depends(require_scopes(["write"]))],
               summary="Set space visibility (owner only)",
               description="Flip a space between 'private' and 'public'. Public spaces are "
-                          "readable by anyone, including unauthenticated clients.")
+                          "readable by anyone, including unauthenticated clients. Making a space "
+                          "public makes all its subspaces public; a subspace of a public space "
+                          "cannot be made private (409). Under a private space each subspace "
+                          "can be public or private on its own.")
 async def set_visibility(slug: str, body: VisibilityIn, user: Annotated[LoginUserIn, Depends(get_current_user)]):
     space = await sp.get_space(slug)
     if not space:
@@ -165,10 +346,71 @@ async def set_visibility(slug: str, body: VisibilityIn, user: Annotated[LoginUse
         raise HTTPException(403, "not authorized to change this space's visibility")
     if body.visibility not in ("private", "public"):
         raise HTTPException(400, "visibility must be 'private' or 'public'")
-    await sp.set_visibility(slug, body.visibility)
+    # A public space makes all its subspaces public, so a subspace of a public space
+    # cannot be private on its own; under a private space each subspace chooses.
+    above = sp.public_ancestor(space)
+    if body.visibility == "private" and above:
+        raise HTTPException(409, f"'{slug}' is inside the public space '{above}', and everything in a public "
+                                 f"space is public — make '{above}' private first")
+    changed = await sp.set_visibility(space["slug"], body.visibility)
+    for s_ in changed:          # this space and, when made public, its subspaces
+        changed_space = await sp.get_space(s_)
+        if changed_space:
+            await sp.mirror_space_to_rdf(changed_space)
     space = await sp.get_space(slug)
-    await sp.mirror_space_to_rdf(space)
+    space["visibility_changed"] = changed
     return space
+
+
+async def _remove_synthscholar(slugs: list) -> int:
+    """Deleted spaces take their SynthScholar reviews (and kept files) with them;
+    the reviews' graphs were among the dropped ones."""
+    from core import synthscholar as _ss
+    n = 0
+    for s_ in slugs:
+        try:
+            n += await _ss.delete_space_reviews(s_)
+        except Exception as e:   # the space is gone either way; a leftover row is skipped on re-ingest
+            logger.error("[spaces] removing %s's SynthScholar reviews failed: %s", s_, e)
+    return n
+
+
+@router.delete("/spaces/{slug}",
+               dependencies=[Depends(require_scopes(["admin"]))],
+               summary="Delete a space and everything in it (SuperAdmin only)",
+               description="Irreversible. Drops the space's named graphs and their ingestion "
+                           "delta graphs, removes the graphs' registry entries and the space's "
+                           "RDF manifest, then deletes the space with its members, graph "
+                           "bindings, access rules, search-index entries and SynthScholar reviews. "
+                           "Every subspace below it (any depth) is deleted the same way, deepest "
+                           "first. Each deletion is recorded in the provenance graph "
+                           "(prov:invalidated). Requires the SuperAdmin role and `confirm` equal "
+                           "to the slug.")
+async def delete_space(
+    slug: str,
+    user: Annotated[LoginUserIn, Depends(get_current_user)],
+    confirm: Annotated[str, Query(..., description="Must equal the space's slug")],
+):
+    if not await rbac.is_superadmin(_agent(user)):
+        raise HTTPException(403, "only a SuperAdmin can delete a space")
+    if confirm != slug:
+        raise HTTPException(400, "confirm must equal the space's slug")
+    space = await sp.get_space(slug)
+    if not space:
+        return JSONResponse({"error": "space not found"}, status_code=404)
+    try:
+        result = await sp.delete_space_tree(space, _agent(user))
+    except sp.SpaceTreeDeletionError as e:
+        logger.error("[spaces] deleting %s failed at %s: %s", slug, e.slug, e.cause)
+        await _remove_synthscholar([d["slug"] for d in e.deleted])
+        done = ", ".join(d["slug"] for d in e.deleted) or "nothing"
+        raise HTTPException(502, f"deleting '{e.slug}' failed: {e.cause}. Already deleted: {done}. "
+                                 "The rest is untouched; it is safe to retry.")
+    result["synthscholar_reviews_removed"] = await _remove_synthscholar(
+        [slug, *result["subspaces_deleted"]])
+    logger.info("[spaces] %s deleted space %s with %d subspace(s) (%d graphs, %d delta graphs)", _agent(user), slug,
+                len(result["subspaces_deleted"]), len(result["dropped_graphs"]), len(result["dropped_delta_graphs"]))
+    return result
 
 
 @router.post("/spaces/{slug}/members",
@@ -221,6 +463,10 @@ async def add_graph(slug: str, body: SpaceGraphIn, user: Annotated[LoginUserIn, 
     if not named_graph_url.endswith("/"):
         named_graph_url += "/"
 
+    allowed, why = await reserved.check_allowed(named_graph_url, _agent(user), space["space_id"])
+    if not allowed:
+        raise HTTPException(403, why)
+
     # Bind first: a graph is globally unique to one space, so if another space
     # already holds it this must fail with a conflict rather than register registry
     # metadata for a graph we cannot attach.
@@ -241,6 +487,18 @@ async def add_graph(slug: str, body: SpaceGraphIn, user: Annotated[LoginUserIn, 
     return space
 
 
+async def _require_read(space: dict, member: Optional[str]) -> None:
+    """Raise 403 unless ``member`` (None = anonymous) may read ``space``."""
+    if space["visibility"] != "public":
+        # Private: membership AND a role that grants read_private.
+        if await sp.member_role(space["space_id"], member) is None \
+                or not await rbac.has_capability(member, rbac.READ_PRIVATE):
+            raise HTTPException(403, "private space — membership and a role are required")
+    # Fine-grained per-space read rules (if any) further restrict who can read.
+    if not await sp.space_action_permitted(space, "read", member):
+        raise HTTPException(403, "restricted by a space access rule (read)")
+
+
 @router.get("/spaces/{slug}/data",
             summary="Read a space's data (public = anonymous)",
             description="Returns the RDF (JSON-LD) across all named graphs in the space. "
@@ -250,15 +508,7 @@ async def read_space_data(slug: str, user: Annotated[Optional[object], Depends(g
     space = await sp.get_space(slug)
     if not space:
         return JSONResponse({"error": "space not found"}, status_code=404)
-    member = _agent(user) if user else None
-    if space["visibility"] != "public":
-        # Private: membership AND a role that grants read_private.
-        if await sp.member_role(space["space_id"], member) is None \
-                or not await rbac.has_capability(member, rbac.READ_PRIVATE):
-            raise HTTPException(403, "private space — membership and a role are required")
-    # Fine-grained per-space read rules (if any) further restrict who can read.
-    if not await sp.space_action_permitted(space, "read", member):
-        raise HTTPException(403, "restricted by a space access rule (read)")
+    await _require_read(space, _agent(user) if user else None)
     if not space["graphs"]:
         return Response(content='{"@graph": []}', media_type="application/ld+json")
     jsonld = await query_provenance_jsonld(await sp.construct_space_graphs(space))
@@ -333,6 +583,60 @@ async def delete_access_rule(slug: str, rule_id: int, user: Annotated[LoginUserI
         raise HTTPException(403, "not authorized to manage this space's access rules")
     await sp.remove_access_rule(space["space_id"], rule_id)
     return {"slug": slug, "rules": await sp.list_access_rules(space["space_id"])}
+
+
+class ReservedGraphIn(BaseModel):
+    iri: HttpUrl
+    match_type: str = "exact"
+    reason: Optional[str] = None
+    space_slug: Optional[str] = None
+
+
+@router.get("/admin/reserved-graphs",
+            dependencies=[Depends(require_scopes(["admin"]))],
+            summary="List reserved named graphs (Admin/SuperAdmin)",
+            description="System reservations (BrainKB's own metadata/provenance graphs, "
+                        "always reserved) and admin-managed ones: an exact IRI or every IRI "
+                        "under a prefix that only an Admin/SuperAdmin — or, when reserved "
+                        "for a space, that space's managers — may register or bind.")
+async def list_reserved_graphs(user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required")
+    return {"reserved": await reserved.list_all()}
+
+
+@router.post("/admin/reserved-graphs", status_code=201,
+             dependencies=[Depends(require_scopes(["admin"]))],
+             summary="Reserve a named graph IRI or prefix (Admin/SuperAdmin)",
+             description="match_type 'exact' reserves one graph IRI; 'prefix' reserves every "
+                         "IRI that starts with it. Optional space_slug reserves it for that "
+                         "space. Graphs already bound stay bound; the response lists them.")
+async def add_reserved_graph(body: ReservedGraphIn, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required")
+    space_id = None
+    if body.space_slug:
+        space = await sp.get_space(body.space_slug)
+        if not space:
+            raise HTTPException(404, f"space '{body.space_slug}' not found")
+        space_id = space["space_id"]
+    try:
+        return await reserved.add(str(body.iri), body.match_type, body.reason, _agent(user), space_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except reserved.ReservationConflict as e:
+        raise HTTPException(409, str(e))
+
+
+@router.delete("/admin/reserved-graphs/{reservation_id}",
+               dependencies=[Depends(require_scopes(["admin"]))],
+               summary="Remove a graph reservation (Admin/SuperAdmin)")
+async def remove_reserved_graph(reservation_id: int, user: Annotated[LoginUserIn, Depends(get_current_user)]):
+    if not await rbac.is_admin(_agent(user)):
+        raise HTTPException(403, "Admin/SuperAdmin role required")
+    if not await reserved.remove(reservation_id):
+        raise HTTPException(404, "reservation not found (system reservations cannot be removed)")
+    return {"removed": reservation_id}
 
 
 @router.get("/admin/capabilities",
@@ -439,3 +743,100 @@ async def revoke_role_capability(body: RoleGrantIn, user: Annotated[LoginUserIn,
         raise HTTPException(403, "Admin/SuperAdmin role required to revoke capabilities")
     await rbac.revoke_role_capability(body.role, body.capability)
     return {"status": "revoked", "role": body.role, "capability": body.capability}
+
+
+# --------------------------------------------------------------------------- #
+# Stored queries: fixed SPARQL that any reader of a space may run on its graph
+# --------------------------------------------------------------------------- #
+# The arbitrary-SPARQL endpoint stays admin-only. These named queries
+# (core/stored_queries.py) give non-admins, including anonymous visitors of a
+# public space, the UI pages' data without copying the whole space through
+# /spaces/{slug}/data. Callers pick a query and pass only the graph and the
+# IRIs it declares; nothing else from the request reaches the SPARQL.
+
+_IRI_RE = re.compile(r'^[A-Za-z][A-Za-z0-9+.-]*:[^\s<>"{}|\\^`]+$')
+_STORED_CACHE_S = 300          # results for anonymously readable spaces
+_STORED_CACHE_MAX = 2000
+_stored_cache: dict = {}
+_stored_slots = asyncio.Semaphore(4)   # at most 4 stored queries in Oxigraph at once
+
+
+def _iri(value: str, what: str) -> str:
+    if not value or len(value) > 2048 or not _IRI_RE.match(value):
+        raise HTTPException(400, f"{what} is not a valid IRI")
+    return value
+
+
+def _stored_sparql(name: str, args: dict) -> tuple:
+    """The filled-in query and its row cap; 404/400 on an unknown name or bad args."""
+    q = STORED_QUERIES.get(name)
+    if q is None:
+        raise HTTPException(404, f"no stored query named {name!r}")
+    graph = _iri(args.get("graph", ""), "graph")
+    extra = set(args) - {"graph"} - set(q["params"])
+    if extra:
+        raise HTTPException(400, f"unknown parameter(s) for {name}: {', '.join(sorted(extra))}")
+    values = {"graph": graph}
+    for p, kind in q["params"].items():
+        raw = args.get(p)
+        if not raw:
+            raise HTTPException(400, f"{name} needs the parameter {p!r}")
+        if kind == "iri":  # the query writes <{{p}}>
+            values[p] = _iri(raw, p)
+        elif kind == "iri_list":
+            items = [x for x in re.split(r"[\s,]+", raw) if x]
+            if not items or len(items) > MAX_IRI_LIST:
+                raise HTTPException(400, f"{p} must list 1 to {MAX_IRI_LIST} IRIs")
+            values[p] = " ".join("<" + _iri(x, p) + ">" for x in items)
+        else:  # a query declaring an unsupported kind is a bug, not a caller error
+            raise HTTPException(500, f"stored query {name} has an unsupported parameter kind")
+    # Single IRIs sit inside <...> in the query; an iri_list is a run of <...>.
+    sparql = re.sub(r"\{\{(\w+)\}\}", lambda m: values[m.group(1)], q["query"])
+    return graph, sparql, q["limit"]
+
+
+@router.get("/query/stored",
+            summary="List the stored queries",
+            description="Names, parameters and row caps of the queries /query/stored/{name} runs.")
+async def list_stored_queries():
+    return {"queries": [{"name": n, "params": q["params"], "limit": q["limit"]}
+                        for n, q in STORED_QUERIES.items()]}
+
+
+@router.get("/query/stored/{name}",
+            summary="Run a stored query on a space's graph (public = anonymous)",
+            description=(
+                "Runs one of the fixed queries in core/stored_queries.py against `graph`, "
+                "which must belong to a space the caller may read: public spaces need no "
+                "token, private ones membership. Only the graph and the IRIs the query "
+                "declares are accepted. Returns the SPARQL JSON results plus the query's "
+                "row cap (`limit`) and whether the result reached it (`capped`)."))
+async def run_stored_query(name: str, request: Request,
+                           user: Annotated[Optional[object], Depends(get_current_user_optional)]):
+    args = dict(request.query_params)
+    graph, sparql, limit = _stored_sparql(name, args)
+    space = await sp.get_space_for_graph(graph)
+    if space is None:
+        raise HTTPException(404, "graph is not part of any space")
+    await _require_read(space, _agent(user) if user else None)
+
+    # Results anyone may read are shared between callers for a few minutes.
+    shared = space["visibility"] == "public" and await sp.space_action_permitted(space, "read", None)
+    key = (name, tuple(sorted(args.items())))
+    if shared:
+        hit = _stored_cache.get(key)
+        if hit and time.monotonic() - hit[0] < _STORED_CACHE_S:
+            return hit[1]
+
+    async with _stored_slots:
+        result = await fetch_data_gdb_async(sparql)
+    if result.get("status") != "success":
+        logger.error("[stored-query] %s failed: %s", name, str(result.get("message"))[:300])
+        return JSONResponse({"error": "query failed"}, status_code=502)
+    rows = (result.get("message") or {}).get("results", {}).get("bindings", [])
+    body = {"status": "success", "message": result["message"], "limit": limit, "capped": len(rows) >= limit}
+    if shared:
+        if len(_stored_cache) >= _STORED_CACHE_MAX:
+            _stored_cache.clear()
+        _stored_cache[key] = (time.monotonic(), body)
+    return body

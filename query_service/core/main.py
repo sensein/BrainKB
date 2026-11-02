@@ -15,6 +15,7 @@ from core.routers.rapid_release import router as rapid_release
 from core.routers.insert import router as insert_router
 from core.routers.spaces import router as spaces_router
 from core.routers.search import router as search_router
+from core.routers.synthscholar import router as synthscholar_router
 from core.configuration import load_environment
 from core.database import init_db_pool
 from core.graph_database_connection_manager import initialize_metadata_graph
@@ -63,6 +64,7 @@ app.include_router(query_router, prefix="/api")
 app.include_router(insert_router,prefix="/api")
 app.include_router(spaces_router, prefix="/api", tags=["Spaces"])
 app.include_router(search_router, prefix="/api", tags=["Search"])
+app.include_router(synthscholar_router, prefix="/api", tags=["SynthScholar ingest"])
 
 # rapid-release
 app.include_router(rapid_release, prefix="/api/rapid-release", tags=["Rapid release"])
@@ -217,6 +219,33 @@ async def startup_event():
                         await conn.execute("ALTER TABLE spaces ADD COLUMN IF NOT EXISTS space_type TEXT NOT NULL DEFAULT 'individual'")
                     except Exception:
                         pass
+                    # Subspaces: a space may sit inside a parent space, to any depth.
+                    # RESTRICT: a space with subspaces cannot be deleted (delete them
+                    # first). The parent is fixed at creation, so the tree has no cycles.
+                    await conn.execute(
+                        "ALTER TABLE spaces ADD COLUMN IF NOT EXISTS parent_space_id TEXT "
+                        "REFERENCES spaces(space_id) ON DELETE RESTRICT")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_spaces_parent ON spaces(parent_space_id)")
+                    # Effective membership: a member of a space has the same role in
+                    # every subspace below it. One row per (space, member, holding
+                    # ancestor); `direct` marks membership of the space itself. Every
+                    # set-based access check (listing, hidden graphs, search) reads this.
+                    await conn.execute(
+                        """
+                        CREATE OR REPLACE VIEW space_effective_members AS
+                        WITH RECURSIVE tree(space_id, holder_id, depth) AS (
+                            SELECT space_id, space_id, 0 FROM spaces
+                            UNION ALL
+                            SELECT t.space_id, s.parent_space_id, t.depth + 1
+                            FROM tree t JOIN spaces s ON s.space_id = t.holder_id
+                            WHERE s.parent_space_id IS NOT NULL AND t.depth < 64
+                        )
+                        SELECT t.space_id, m.member, m.role, t.holder_id, t.depth,
+                               (t.depth = 0) AS direct,
+                               CASE m.role WHEN 'owner' THEN 3 WHEN 'editor' THEN 2 ELSE 1 END AS rank
+                        FROM tree t JOIN space_members m ON m.space_id = t.holder_id
+                        """
+                    )
                     logger.info("Spaces tables initialized")
 
                     # RBAC: capabilities granted directly to a user (delegated
@@ -281,6 +310,48 @@ async def startup_event():
                     except Exception:
                         pass
                     logger.info("Space access-rules table initialized")
+
+                    # Reserved named graphs (core/reserved_graphs.py): IRIs or prefixes
+                    # only an Admin/SuperAdmin (or, if reserved for a space, that
+                    # space's managers) may register or bind.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS reserved_graphs (
+                            id SERIAL PRIMARY KEY,
+                            iri TEXT NOT NULL,
+                            match_type TEXT NOT NULL CHECK (match_type IN ('exact', 'prefix')),
+                            reason TEXT,
+                            space_id TEXT REFERENCES spaces(space_id) ON DELETE SET NULL,
+                            created_by TEXT,
+                            created_at DOUBLE PRECISION,
+                            UNIQUE (iri, match_type)
+                        )
+                        """
+                    )
+                    logger.info("Reserved-graphs table initialized")
+                    # Space renames (spaces.rename_space): the slugs a space had before and
+                    # the IRIs its graphs had before, so old links keep resolving, an old IRI
+                    # stays governed by the space, and nobody else can claim them.
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS space_aliases (
+                            old_slug TEXT PRIMARY KEY,
+                            space_id TEXT NOT NULL REFERENCES spaces(space_id) ON DELETE CASCADE,
+                            renamed_at DOUBLE PRECISION
+                        )
+                        """
+                    )
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS graph_aliases (
+                            old_iri TEXT PRIMARY KEY,
+                            new_iri TEXT NOT NULL,
+                            space_id TEXT NOT NULL REFERENCES spaces(space_id) ON DELETE CASCADE,
+                            renamed_at DOUBLE PRECISION
+                        )
+                        """
+                    )
+                    logger.info("Space-rename alias tables initialized")
 
                     # Search locator index (hybrid search): Postgres full-text index that
                     # locates subjects/subgraphs (carrying graph + workspace/space), then the

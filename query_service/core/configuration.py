@@ -65,7 +65,6 @@ def load_environment(env_name="production"):
     # Always use os.getenv() which reads from environment (set by docker-compose or .env file)
     return {
         "ENV_STATE": os.getenv("ENV_STATE", "dev"),
-        "LOGTAIL_API_KEY": os.getenv("LOGTAIL_API_KEY"),
         "JWT_POSTGRES_DATABASE_HOST_URL": os.getenv("JWT_POSTGRES_DATABASE_HOST_URL"),
         "JWT_POSTGRES_DATABASE_PORT": os.getenv("JWT_POSTGRES_DATABASE_PORT"),
         "JWT_POSTGRES_DATABASE_USER": os.getenv("JWT_POSTGRES_DATABASE_USER"),

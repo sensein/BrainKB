@@ -149,11 +149,14 @@ def create_refresh_token(
     scopes: List[str],
     auth_source: str = "password",
     expires_minutes: Optional[int] = None,
+    web: bool = False,
 ) -> str:
     """Mint the login/refresh token (aud=brainkb-auth). Not accepted by services;
     only exchangeable at /api/auth/exchange for a per-service access token.
     expires_minutes overrides the default refresh TTL (the web flow passes a longer
-    one so the browser session can silently refresh over several days)."""
+    one so the browser session can silently refresh over several days). web=True
+    marks a browser-session token, which /api/auth/exchange renews (slides) while
+    it is in use; CLI/MCP refresh tokens keep a fixed lifetime."""
     _load_or_generate()
     now = _now()
     ttl = expires_minutes if (expires_minutes and expires_minutes > 0) else config.refresh_token_ttl_min
@@ -169,7 +172,22 @@ def create_refresh_token(
         "iat": now,
         "exp": now + timedelta(minutes=ttl),
     }
+    if web:
+        claims["web"] = True
     return jwt.encode(claims, _private_pem, algorithm=ALGORITHM, headers={"kid": _kid})
+
+
+def should_renew_web_refresh(payload: Dict[str, Any], now_ts: Optional[float] = None) -> bool:
+    """A browser-session refresh token past half its life gets a successor, so an
+    active session never hits a fixed expiry; an idle one still ends at `exp`.
+    Tokens minted before the `web` marker existed are recognised by their web TTL."""
+    iat, exp = payload.get("iat"), payload.get("exp")
+    if not isinstance(iat, (int, float)) or not isinstance(exp, (int, float)) or exp <= iat:
+        return False
+    life = exp - iat
+    is_web = bool(payload.get("web")) or life >= config.web_refresh_ttl_min * 60 - 60
+    now_ts = now_ts if now_ts is not None else _now().timestamp()
+    return is_web and (exp - now_ts) < life / 2
 
 
 def create_access_token(
